@@ -1,0 +1,16 @@
+{
+  "api_url": "https://api.example.com",
+  "token": "PASTE token FROM `node keygen` (same as api.json)",
+  "sync_interval_seconds": 30,
+  "log_level": "warning",
+  "listen": "0.0.0.0",
+  "vision_port": 443,
+  "xhttp_path": "/PASTE-A-RANDOM-PATH (same as api.json)",
+  "xhttp_internal": "127.0.0.1:2001",
+  "reality": {
+    "private_key": "PASTE private_key FROM `node keygen`",
+    "short_ids": ["PASTE short_id FROM `node keygen`"],
+    "target": "www.yahoo.com:443",
+    "server_names": ["www.yahoo.com"]
+  }
+}

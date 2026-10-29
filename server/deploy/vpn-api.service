@@ -1,0 +1,22 @@
+[Unit]
+Description=VPN control-plane API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=vpn
+Group=vpn
+# Secret kept out of the JSON config. Generate with: openssl rand -base64 48
+EnvironmentFile=/etc/vpn/api.env
+ExecStart=/usr/local/bin/vpn-api -config /etc/vpn/api.json
+Restart=always
+RestartSec=3
+StateDirectory=vpn
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/vpn
+
+[Install]
+WantedBy=multi-user.target

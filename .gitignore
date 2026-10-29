@@ -1,0 +1,15 @@
+# server
+server/bin/
+server/data/
+server/api.json
+server/node.json
+*.db
+*.db-wal
+*.db-shm
+
+# generated mobile core (rebuild with mobile/build.sh)
+app/android/app/libs/vpncore*.aar
+app/android/app/libs/vpncore*.jar
+app/ios/Frameworks/Vpncore.xcframework/
+
+.DS_Store

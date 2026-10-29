@@ -1,0 +1,25 @@
+{
+  "listen": "127.0.0.1:8080",
+  "database": "/var/lib/vpn/vpn.db",
+  "jwt_secret": "",
+  "token_ttl_hours": 720,
+  "allow_register": true,
+  "trust_proxy_header": true,
+  "nodes": [
+    {
+      "id": "hk1",
+      "name": "香港 01",
+      "region": "HK",
+      "address": "203.0.113.10",
+      "token": "PASTE token FROM `node keygen`",
+      "vision_port": 443,
+      "xhttp_path": "/PASTE-A-RANDOM-PATH",
+      "reality": {
+        "public_key": "PASTE public_key FROM `node keygen`",
+        "short_id": "PASTE short_id FROM `node keygen`",
+        "server_name": "www.yahoo.com",
+        "fingerprint": "chrome"
+      }
+    }
+  ]
+}
