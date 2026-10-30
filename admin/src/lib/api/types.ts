@@ -103,7 +103,7 @@ export interface User {
   email: string // "" for device accounts
   recharge_code: string // e.g. VP-00010
   device_id: string
-  platform: string // ios | android | ""
+  platform: string // ios | android | windows | ""
   disabled: boolean
   note: string
   ref_code: string
@@ -285,7 +285,7 @@ export interface Contact {
 
 export interface Release {
   id: number
-  platform: 'android' | 'ios'
+  platform: 'android' | 'ios' | 'windows'
   version: string
   build: number
   notes: string
@@ -309,6 +309,32 @@ export interface BackupInfo {
   orders: number
   nodes: number
   public_url: string
+}
+
+export interface ServerInfo {
+  hostname: string
+  os: string
+  kernel: string
+  arch: string
+  cpus: number
+  load?: number[]
+  uptime_seconds: number
+  process_uptime: number
+  go_version: string
+  binary_sha256: string
+  public_ip: string
+  local_ips?: string[]
+  domain: string
+  resolved?: string[]
+  points_here: boolean
+  tls_mode: 'tls' | 'tls_shared' | 'behind_proxy' | 'plain'
+  passthrough: string
+  nodes_here?: { id: string; name: string; port: number; disabled: boolean }[]
+  db_driver: string
+  time: string
+  memory?: { total: number; available: number }
+  disk?: { total: number; free: number }
+  cert?: { issuer?: string; not_after?: string; days_left?: number; remote?: string; error?: string }
 }
 
 export interface CloneRequest extends ProvisionRequest {

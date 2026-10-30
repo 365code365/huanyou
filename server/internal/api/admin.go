@@ -86,6 +86,7 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	a("POST /admin/api/backup", s.adminBackup)
 	a("POST /admin/api/backup/restore", s.adminRestore)
 	a("POST /admin/api/clone", s.adminClone)
+	a("GET /admin/api/server/info", s.adminServerInfo)
 
 	s.registerAdminRisk(a)
 	a("GET /admin/api/analytics", s.adminAnalytics)

@@ -24,6 +24,7 @@ import type {
   LangPack,
   CloneEvent,
   CloneRequest,
+  ServerInfo,
   Release,
   Contact,
   GeoIP,
@@ -118,6 +119,7 @@ export const api = {
 
   system: {
     backupInfo: () => http.get<BackupInfo>('/backup/info'),
+    serverInfo: () => http.get<ServerInfo>('/server/info'),
     backup: (password: string, include_packages: boolean) => download('/backup', { password, include_packages }, 'huanyou-backup.hybk'),
     restore: (form: FormData, onProgress?: (p: number) => void) => upload<{ ok: boolean; message: string }>('/backup/restore', form, onProgress),
     clone: (body: CloneRequest, onEvent: (e: CloneEvent) => void) => stream('/clone', body, onEvent),

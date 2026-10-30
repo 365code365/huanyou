@@ -1,5 +1,5 @@
 'use client'
-import { AndroidFilled, AppleFilled, CloudUploadOutlined, InboxOutlined, LinkOutlined, ReloadOutlined } from '@ant-design/icons'
+import { AndroidFilled, AppleFilled, CloudUploadOutlined, InboxOutlined, LinkOutlined, ReloadOutlined, WindowsFilled } from '@ant-design/icons'
 import { Alert, App, Button, Form, Input, InputNumber, Modal, Progress, Segmented, Select, Space, Switch, Table, Tag, Upload } from 'antd'
 import type { UploadFile } from 'antd'
 import { useMemo, useState } from 'react'
@@ -8,7 +8,15 @@ import { useAction, useAsync } from '@/hooks/useAsync'
 import { api, type Release } from '@/lib/api'
 import { bytes, date, errMsg } from '@/lib/format'
 
-type Platform = 'android' | 'ios'
+type Platform = 'android' | 'ios' | 'windows'
+
+const platformLabel: Record<Platform, string> = { android: 'Android', ios: 'iOS', windows: 'Windows' }
+/** Package each platform uploads; Windows is the zip from app/scripts/build_windows.ps1. */
+const packageExt: Record<Platform, string> = { android: '.apk', ios: '.ipa', windows: '.zip' }
+const platformIcon = (p: Platform) =>
+  p === 'ios' ? <AppleFilled style={{ fontSize: 18 }} />
+    : p === 'windows' ? <WindowsFilled style={{ fontSize: 18, color: '#0078d4' }} />
+      : <AndroidFilled style={{ fontSize: 18, color: '#3ddc84' }} />
 
 const abiOptions = [
   { value: 'arm64-v8a', label: '64 位（arm64-v8a，绝大多数手机）' },
@@ -46,7 +54,7 @@ export default function ReleasesPage() {
   const openCreate = (p: Platform) => {
     const l = latest(p)
     setPlatform(p)
-    setSource(p === 'android' ? 'file' : 'url')
+    setSource(p === 'ios' ? 'url' : 'file')
     setFile([])
     setProgress(undefined)
     form.resetFields()
@@ -97,7 +105,7 @@ export default function ReleasesPage() {
   const remove = (r: Release) =>
     modal.confirm({
       title: '删除版本',
-      content: `删除 ${r.platform === 'ios' ? 'iOS' : 'Android'} ${r.version} (${r.build})？安装包文件也会删除。`,
+      content: `删除 ${platformLabel[r.platform]} ${r.version} (${r.build})？安装包文件也会删除。`,
       okButtonProps: { danger: true },
       onOk: async () => {
         if (await run(() => api.releases.remove(r.id), '已删除')) reload()
@@ -106,7 +114,7 @@ export default function ReleasesPage() {
 
   const uploading = progress !== undefined
   const fileName = file[0]?.name
-  const wantExt = platform === 'android' ? '.apk' : '.ipa'
+  const wantExt = packageExt[platform]
 
   return (
     <div className="page">
@@ -115,6 +123,7 @@ export default function ReleasesPage() {
           <span className="muted">App 启动和「我的 → 检查更新」读取每个平台最新的已发布版本；标记「强制更新」后，旧版本必须升级才能继续使用</span>
           <div className="spacer" />
           <Button icon={<ReloadOutlined />} onClick={() => reload()}>刷新</Button>
+          <Button icon={<WindowsFilled />} onClick={() => openCreate('windows')}>发布 Windows 版本</Button>
           <Button icon={<AppleFilled />} onClick={() => openCreate('ios')}>发布 iOS 版本</Button>
           <Button type="primary" icon={<AndroidFilled />} onClick={() => openCreate('android')}>发布 Android 版本</Button>
         </div>
@@ -129,7 +138,7 @@ export default function ReleasesPage() {
               title: '版本',
               render: (_, r) => (
                 <Space>
-                  {r.platform === 'ios' ? <AppleFilled style={{ fontSize: 18 }} /> : <AndroidFilled style={{ fontSize: 18, color: '#3ddc84' }} />}
+                  {platformIcon(r.platform)}
                   <div>
                     <div style={{ fontWeight: 600 }}>
                       {r.version} <span className="muted">build {r.build}</span>
@@ -173,7 +182,7 @@ export default function ReleasesPage() {
 
       <Modal
         open={open}
-        title={platform === 'ios' ? '发布 iOS 版本' : '发布 Android 版本'}
+        title={`发布 ${platformLabel[platform]} 版本`}
         onCancel={() => !uploading && setOpen(false)}
         maskClosable={!uploading}
         closable={!uploading}
@@ -213,7 +222,7 @@ export default function ReleasesPage() {
               value={source}
               onChange={(v) => setSource(v as 'file' | 'url')}
               options={[
-                { label: platform === 'ios' ? '上传 IPA' : '上传 APK', value: 'file' },
+                { label: `上传 ${wantExt.slice(1).toUpperCase()}`, value: 'file' },
                 { label: platform === 'ios' ? 'TestFlight / App Store 链接' : '外部链接', value: 'url' },
               ]}
             />
@@ -245,6 +254,14 @@ export default function ReleasesPage() {
                   <p className="ant-upload-hint">最大 600 MB，服务器会计算 SHA-256 供 App 校验</p>
                 </Upload.Dragger>
               </Form.Item>
+              {platform === 'windows' && (
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{ marginBottom: 16 }}
+                  message="在 Windows 上运行 app/scripts/build_windows.ps1 打出的 zip（含 Huanyou.exe、huanyou-core.exe 和运行库）。用户在下载页下载后解压运行。"
+                />
+              )}
               {platform === 'ios' && (
                 <>
                   <Form.Item name="bundle_id" label="Bundle ID" rules={[{ required: true, message: '必填' }]}>

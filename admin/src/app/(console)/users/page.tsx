@@ -11,7 +11,7 @@ import { bytes, date } from '@/lib/format'
 import { segmentMeta } from '@/lib/segments'
 import { UserDrawer } from './UserDrawer'
 
-const platformName = (p: string) => (p === 'ios' ? 'iPhone' : p === 'android' ? 'Android' : '未知')
+const platformName = (p: string) => ({ ios: 'iPhone', android: 'Android', windows: 'Windows' })[p] ?? '未知'
 /** How to refer to a user in dialogs: recharge ID, plus email if bound. */
 export const who = (u: User) => (u.email ? `${u.recharge_code}（${u.email}）` : u.recharge_code)
 

@@ -1,17 +1,21 @@
 'use client'
-import { CheckCircleFilled, CloudDownloadOutlined, CloudServerOutlined, CloseCircleFilled, InboxOutlined, LoadingOutlined, RollbackOutlined } from '@ant-design/icons'
-import { Alert, App, Button, Checkbox, Col, Descriptions, Form, Input, InputNumber, Progress, Row, Segmented, Space, Switch, Upload } from 'antd'
+import { CheckCircleFilled, CloudDownloadOutlined, CloudServerOutlined, CloseCircleFilled, InboxOutlined, LoadingOutlined, ReloadOutlined, RollbackOutlined } from '@ant-design/icons'
+import { Alert, App, Button, Checkbox, Col, Descriptions, Form, Input, InputNumber, Progress, Row, Segmented, Space, Switch, Tag, Upload } from 'antd'
 import type { UploadFile } from 'antd'
 import { useEffect, useRef, useState } from 'react'
 import { PageCard } from '@/components/PageCard'
 import { useAsync } from '@/hooks/useAsync'
-import { api } from '@/lib/api'
+import { api, type ServerInfo } from '@/lib/api'
 import { bytes, errMsg } from '@/lib/format'
 
 export default function SystemPage() {
   return (
     <div className="page">
       <Row gutter={16}>
+        <Col xs={24}>
+          <ServerCard />
+          <div style={{ height: 16 }} />
+        </Col>
         <Col xs={24} xl={12}>
           <BackupCard />
           <div style={{ height: 16 }} />
@@ -22,6 +26,65 @@ export default function SystemPage() {
         </Col>
       </Row>
     </div>
+  )
+}
+
+const tlsModes: Record<ServerInfo['tls_mode'], string> = {
+  tls: 'vpn-api 直接提供 HTTPS（独占 443）',
+  tls_shared: 'vpn-api 提供 HTTPS，与本机节点按域名共用 443',
+  behind_proxy: '由 nginx 等反向代理提供 HTTPS',
+  plain: 'HTTP（未启用 HTTPS）',
+}
+
+function uptime(sec: number) {
+  const d = Math.floor(sec / 86400)
+  const h = Math.floor((sec % 86400) / 3600)
+  const m = Math.floor((sec % 3600) / 60)
+  return d ? `${d} 天 ${h} 小时` : h ? `${h} 小时 ${m} 分` : `${m} 分钟`
+}
+
+function ServerCard() {
+  const { data: s, loading, reload } = useAsync(api.system.serverInfo)
+  const memUsed = s?.memory ? 1 - s.memory.available / s.memory.total : undefined
+  const diskUsed = s?.disk ? 1 - s.disk.free / s.disk.total : undefined
+  const pct = (v?: number) => (v === undefined ? '—' : `${Math.round(v * 100)}%`)
+  return (
+    <PageCard title="当前服务器" extra={<Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={() => reload()}>刷新</Button>}>
+      {!s ? (
+        <div className="muted">{loading ? '读取中…' : '读取失败'}</div>
+      ) : (
+        <>
+          {s.domain && !s.points_here && (
+            <Alert type="warning" showIcon style={{ marginBottom: 12 }}
+              message={`域名 ${s.domain} 当前解析到 ${(s.resolved ?? []).join('、') || '（未解析）'}，不是这台服务器（${s.public_ip || '本机'}）`}
+              description="用户访问的是另一台服务器上的系统。如果刚做完服务迁移，这是旧服务器，新数据不会再写到这里。" />
+          )}
+          <Descriptions size="small" column={{ xs: 1, md: 2, xl: 3 }} bordered>
+            <Descriptions.Item label="公网 IP"><b>{s.public_ip || '—'}</b></Descriptions.Item>
+            <Descriptions.Item label="域名解析">
+              {s.domain ? <>{s.domain} → {(s.resolved ?? []).join('、') || '未解析'} {s.points_here ? <Tag color="green" bordered={false}>指向本机</Tag> : <Tag color="orange" bordered={false}>不是本机</Tag>}</> : '—'}
+            </Descriptions.Item>
+            <Descriptions.Item label="HTTPS 证书">
+              {s.cert?.error ? <span className="muted">{s.cert.error}</span> : s.cert?.not_after
+                ? <>{s.cert.issuer} · 剩 <b style={{ color: (s.cert.days_left ?? 0) < 15 ? '#D64545' : undefined }}>{s.cert.days_left}</b> 天到期</>
+                : '—'}
+            </Descriptions.Item>
+            <Descriptions.Item label="接入方式">{tlsModes[s.tls_mode]}</Descriptions.Item>
+            <Descriptions.Item label="本机节点">
+              {s.nodes_here?.length ? s.nodes_here.map((n) => <Tag key={n.id} bordered={false} color={n.disabled ? 'default' : 'blue'}>{n.name}{n.disabled ? '（停用）' : ''}</Tag>) : <span className="muted">无</span>}
+              {s.passthrough && <span className="muted">（节点在 {s.passthrough}）</span>}
+            </Descriptions.Item>
+            <Descriptions.Item label="主机名">{s.hostname}</Descriptions.Item>
+            <Descriptions.Item label="系统">{s.os} · {s.arch}{s.kernel ? ` · 内核 ${s.kernel}` : ''}</Descriptions.Item>
+            <Descriptions.Item label="CPU / 负载">{s.cpus} 核 · {(s.load ?? []).map((v) => v.toFixed(2)).join(' / ') || '—'}</Descriptions.Item>
+            <Descriptions.Item label="内存">{s.memory ? `${bytes(s.memory.total - s.memory.available)} / ${bytes(s.memory.total)}（${pct(memUsed)}）` : '—'}</Descriptions.Item>
+            <Descriptions.Item label="磁盘">{s.disk ? `剩余 ${bytes(s.disk.free)} / ${bytes(s.disk.total)}（已用 ${pct(diskUsed)}）` : '—'}</Descriptions.Item>
+            <Descriptions.Item label="运行时间">服务器 {uptime(s.uptime_seconds)} · 后台服务 {uptime(s.process_uptime)}</Descriptions.Item>
+            <Descriptions.Item label="数据库 / 程序">{s.db_driver} · {s.binary_sha256 || '—'}</Descriptions.Item>
+          </Descriptions>
+        </>
+      )}
+    </PageCard>
   )
 }
 
