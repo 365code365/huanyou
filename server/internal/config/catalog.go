@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // Catalog is the part of the API configuration that operators edit at runtime
@@ -35,6 +36,73 @@ type Catalog struct {
 	Risk RiskConfig `json:"risk"`
 	// Segments: thresholds for the user segmentation report.
 	Segments SegmentConfig `json:"segments"`
+	// Payment: purchase switch and the link-mode payment gateway.
+	Payment PaymentConfig `json:"payment"`
+	// Ads: home banner and launch popup.
+	Ads AdsConfig `json:"ads"`
+	// Guard: automatic blocking of abusive clients.
+	Guard GuardConfig `json:"guard"`
+}
+
+// PaymentConfig. Purchases are on unless Disabled (so existing catalogs keep
+// selling). With Disabled the app greys out the buy buttons and the API
+// refuses to create orders; notifications for existing orders still work.
+type PaymentConfig struct {
+	Disabled       bool          `json:"disabled"`
+	DisabledNotice string        `json:"disabled_notice"` // shown in the app, default 暂不支持购买
+	Gateway        GatewayConfig `json:"gateway"`
+}
+
+// GatewayConfig is the "下单链接" integration (docs in the admin panel): the
+// app opens PayLink with signed order parameters; the payment center calls
+// our fixed notify and query endpoints with encrypted, signed envelopes.
+type GatewayConfig struct {
+	Enabled    bool   `json:"enabled"`
+	Name       string `json:"name"`        // method name shown in the app, default 在线支付
+	PayLink    string `json:"pay_link"`    // https URL of the payment center's checkout page
+	MerchantID string `json:"merchant_id"` // generated in the admin panel
+	SignKey    string `json:"sign_key"`    // hex, HMAC-SHA256
+	EncKey     string `json:"enc_key"`     // hex, 32 bytes, AES-256-GCM
+	// AllowIPs optionally restricts who may call notify / query (empty = any).
+	AllowIPs []string `json:"allow_ips"`
+}
+
+// AdsConfig: both slots are off until enabled.
+type AdsConfig struct {
+	HomeEnabled    bool   `json:"home_enabled"`
+	HomeInterval   int    `json:"home_interval"` // carousel seconds, default 5
+	PopupEnabled   bool   `json:"popup_enabled"`
+	PopupFrequency string `json:"popup_frequency"` // every_launch | daily | once (default daily)
+	Items          []Ad   `json:"items"`
+}
+
+// Ad is one banner / popup.
+type Ad struct {
+	ID      string     `json:"id"`
+	Slot    string     `json:"slot"` // home | popup
+	Title   string     `json:"title"`
+	Text    string     `json:"text"`  // popup body (notice without image)
+	Image   string     `json:"image"` // https URL or /dl/ads/... upload
+	Link    string     `json:"link"`  // opened in the browser on tap ("" = not clickable)
+	Enabled bool       `json:"enabled"`
+	Sort    int        `json:"sort"`
+	StartAt *time.Time `json:"start_at,omitempty"`
+	EndAt   *time.Time `json:"end_at,omitempty"`
+}
+
+// Live reports whether the ad is shown at now.
+func (a *Ad) Live(now time.Time) bool {
+	return a.Enabled && (a.StartAt == nil || !now.Before(*a.StartAt)) && (a.EndAt == nil || now.Before(*a.EndAt))
+}
+
+// GuardConfig: request-rate and abuse thresholds for automatic blocking.
+type GuardConfig struct {
+	Disabled      bool `json:"disabled"`
+	RatePerMinute int  `json:"rate_per_minute"` // app API requests per IP per minute (default 240)
+	ErrorsPer10m  int  `json:"errors_per_10m"`  // 4xx (auth / not found / bad request) per IP before a ban (default 60)
+	BanMinutes    int  `json:"ban_minutes"`     // automatic ban length (default 30)
+	// AllowIPs are never blocked (office, payment center, monitoring).
+	AllowIPs []string `json:"allow_ips"`
 }
 
 // RiskConfig controls IP recording and the suspicious-behaviour lists.
@@ -109,6 +177,12 @@ type Node struct {
 	// BandwidthMbps is the node's usable uplink. When set, the agent shares it
 	// fairly between active users under load (see node.FairShare). 0 = off.
 	BandwidthMbps int `json:"bandwidth_mbps"`
+	// ExpiresAt is when the server rental ends (admin only, never sent to
+	// apps). Nodes expiring within 7 days are flagged on the dashboard and alerted.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	// Vendor / VendorURL: hosting provider and its console, for renewals.
+	Vendor    string `json:"vendor"`
+	VendorURL string `json:"vendor_url"`
 	// Weight biases cluster-mode ordering (higher first, default 1).
 	Weight int `json:"weight"`
 	// Sort orders the node list in the app (ascending).
@@ -144,6 +218,8 @@ type Plan struct {
 	OverQuotaKbps int  `json:"over_quota_kbps"`
 	Hidden        bool `json:"hidden"` // not offered for sale (existing subscribers keep it)
 	Sort          int  `json:"sort"`
+	// Hot marks a best seller: the app shows a 🔥 HOT badge.
+	Hot bool `json:"hot"`
 }
 
 func (p *Plan) QuotaBytes() int64 { return int64(p.TrafficGB * (1 << 30)) }
@@ -360,6 +436,9 @@ func (c *Catalog) Normalize() error {
 	if err := c.validateContacts(); err != nil {
 		return err
 	}
+	if err := c.normalizeExtras(); err != nil {
+		return err
+	}
 	for _, u := range []string{c.Share.AndroidURL, c.Share.IOSURL} {
 		if u != "" && !strings.HasPrefix(u, "http") {
 			return errors.New("下载链接必须是 http(s) 地址")
@@ -430,6 +509,8 @@ func (c *Catalog) validateNodes() error {
 			return fmt.Errorf("节点 ID %q 只能包含小写字母、数字、- 和 _", n.ID)
 		case seen[n.ID]:
 			return fmt.Errorf("节点 ID %q 重复", n.ID)
+		case n.VendorURL != "" && !strings.HasPrefix(n.VendorURL, "http"):
+			return fmt.Errorf("节点「%s」的厂商地址必须是 http(s) 链接", n.Name)
 		case strings.TrimSpace(n.Name) == "" || strings.TrimSpace(n.Address) == "":
 			return fmt.Errorf("节点 %s 缺少名称或地址", n.ID)
 		case n.VisionPort < 1 || n.VisionPort > 65535:
@@ -602,4 +683,96 @@ func (c *Catalog) NodeByToken(tok string, eq func(a, b string) bool) *Node {
 		}
 	}
 	return found
+}
+
+// normalizeExtras fills defaults and validates payment, ads and guard settings.
+func (c *Catalog) normalizeExtras() error {
+	p := &c.Payment
+	p.DisabledNotice = strings.TrimSpace(p.DisabledNotice)
+	if p.DisabledNotice == "" {
+		p.DisabledNotice = "暂不支持购买"
+	}
+	g := &p.Gateway
+	g.PayLink, g.Name = strings.TrimSpace(g.PayLink), strings.TrimSpace(g.Name)
+	if g.Name == "" {
+		g.Name = "在线支付"
+	}
+	if g.PayLink != "" && !strings.HasPrefix(g.PayLink, "https://") && !strings.HasPrefix(g.PayLink, "http://127.0.0.1") {
+		return errors.New("下单链接必须是 https 地址")
+	}
+	if g.Enabled {
+		if g.PayLink == "" || g.MerchantID == "" || len(g.SignKey) < 32 || len(g.EncKey) != 64 {
+			return errors.New("启用支付网关前请填写下单链接并生成商户号和密钥")
+		}
+	}
+	for i, ip := range g.AllowIPs {
+		g.AllowIPs[i] = strings.TrimSpace(ip)
+	}
+
+	a := &c.Ads
+	if a.HomeInterval <= 0 {
+		a.HomeInterval = 5
+	}
+	a.HomeInterval = min(max(a.HomeInterval, 2), 60)
+	switch a.PopupFrequency {
+	case "every_launch", "daily", "once":
+	default:
+		a.PopupFrequency = "daily"
+	}
+	if a.Items == nil {
+		a.Items = []Ad{}
+	}
+	seen := map[string]bool{}
+	for i := range a.Items {
+		ad := &a.Items[i]
+		ad.ID, ad.Title, ad.Link, ad.Image = strings.TrimSpace(ad.ID), strings.TrimSpace(ad.Title), strings.TrimSpace(ad.Link), strings.TrimSpace(ad.Image)
+		if ad.ID == "" || seen[ad.ID] {
+			return fmt.Errorf("广告 ID 重复或为空：%q", ad.ID)
+		}
+		seen[ad.ID] = true
+		if ad.Slot != "home" && ad.Slot != "popup" {
+			return fmt.Errorf("广告「%s」位置只能是首页横幅或开屏弹窗", ad.Title)
+		}
+		if ad.Slot == "home" && ad.Image == "" {
+			return fmt.Errorf("首页横幅「%s」需要图片", ad.Title)
+		}
+		if ad.Slot == "popup" && ad.Image == "" && strings.TrimSpace(ad.Text) == "" {
+			return fmt.Errorf("弹窗「%s」需要图片或文字", ad.Title)
+		}
+		for _, u := range []string{ad.Image, ad.Link} {
+			if u != "" && !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "/dl/ads/") {
+				return fmt.Errorf("广告「%s」的图片和链接必须是 http(s) 地址", ad.Title)
+			}
+		}
+		if ad.StartAt != nil && ad.EndAt != nil && !ad.EndAt.After(*ad.StartAt) {
+			return fmt.Errorf("广告「%s」结束时间必须晚于开始时间", ad.Title)
+		}
+	}
+
+	gd := &c.Guard
+	if gd.RatePerMinute <= 0 {
+		gd.RatePerMinute = 240
+	}
+	gd.RatePerMinute = max(gd.RatePerMinute, 30)
+	if gd.ErrorsPer10m <= 0 {
+		gd.ErrorsPer10m = 60
+	}
+	gd.ErrorsPer10m = max(gd.ErrorsPer10m, 10)
+	if gd.BanMinutes <= 0 {
+		gd.BanMinutes = 30
+	}
+	gd.BanMinutes = min(gd.BanMinutes, 7*24*60)
+	return nil
+}
+
+// ExpiringNodes returns nodes whose rental ends before now+within, soonest first.
+func (c *Catalog) ExpiringNodes(now time.Time, within time.Duration) []Node {
+	var out []Node
+	for _, n := range c.Nodes {
+		if n.ExpiresAt != nil && n.ExpiresAt.Before(now.Add(within)) {
+			out = append(out, n)
+		}
+	}
+	sortSlice(out, func(a, b Node) bool { return a.ExpiresAt.Before(*b.ExpiresAt) })
+	return out
 }

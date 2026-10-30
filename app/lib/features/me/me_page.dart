@@ -12,11 +12,9 @@ import '../devices/devices_page.dart';
 import '../plans/plans_page.dart';
 import '../referral/referral_page.dart';
 import '../../core/updater.dart';
-import '../update/update_dialog.dart';
 import 'contacts_section.dart';
 import 'orders_page.dart';
-import 'preferences_sheets.dart';
-import '../../theme/appearance.dart';
+import 'settings_page.dart';
 import '../../i18n/i18n.dart';
 
 /// "我的" tab: membership card (recharge ID, plan, traffic), usage, links.
@@ -31,24 +29,6 @@ class _MePageState extends State<MePage> {
   List<DailyUsage> _usage = [];
   List<Contact> _contacts = [];
   String _version = '';
-  bool _checking = false;
-
-  Future<void> _checkUpdate() async {
-    setState(() => _checking = true);
-    try {
-      final u = await Updater.check(AppScope.read(context).api);
-      if (!mounted) return;
-      if (u != null && u.hasUpdate) {
-        await showUpdateDialog(context, u);
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('已是最新版本'))));
-      }
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('检查失败：{0}', [e]))));
-    } finally {
-      if (mounted) setState(() => _checking = false);
-    }
-  }
 
   @override
   void initState() {
@@ -138,28 +118,11 @@ class _MePageState extends State<MePage> {
                 ),
                 const Divider(indent: 66),
                 MenuRow(
-                  key: const Key('menu-language'),
-                  icon: Icons.translate_rounded,
-                  title: tr('语言'),
-                  value: languageLabel(),
-                  onTap: () => showLanguageSheet(context),
-                ),
-                const Divider(indent: 66),
-                MenuRow(
-                  key: const Key('menu-appearance'),
-                  icon: Icons.contrast_rounded,
-                  title: tr('外观'),
-                  value: tr(Appearance.instance.mode.label),
-                  onTap: () => showAppearanceSheet(context),
-                ),
-                const Divider(indent: 66),
-                MenuRow(
-                  key: const Key('menu-update'),
-                  icon: Icons.system_update_rounded,
-                  color: AppColors.signal,
-                  title: tr('检查更新'),
-                  value: _checking ? tr('检查中…') : (_version.isEmpty ? null : 'v$_version'),
-                  onTap: _checking ? null : _checkUpdate,
+                  key: const Key('menu-settings'),
+                  icon: Icons.settings_outlined,
+                  title: tr('设置'),
+                  value: _version.isEmpty ? null : 'v$_version',
+                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsPage())),
                 ),
               ]),
             ),
@@ -169,7 +132,7 @@ class _MePageState extends State<MePage> {
               padding: EdgeInsets.symmetric(horizontal: 6),
               child: Text(
                 tr('本机已自动开通账号，卸载重装后会自动找回。需要充值时，把上方的充值 ID 发给客服即可。'),
-                style: TextStyle(fontSize: 12.5, color: AppColors.sub, height: 1.5),
+                style: TextStyle(fontSize: 13, color: AppColors.sub, height: 1.5),
               ),
             ),
             if (u != null && u.hasAccount) ...[
@@ -204,7 +167,7 @@ class _MemberCard extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(20, 18, 14, 20),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          Text(tr('充值 ID'), style: TextStyle(color: dim, fontSize: 12.5)),
+          Text(tr('充值 ID'), style: TextStyle(color: dim, fontSize: 13)),
           const Spacer(),
           if (user.hasAccount)
             Text(user.email, style: const TextStyle(color: dim, fontSize: 12), overflow: TextOverflow.ellipsis),
@@ -239,13 +202,13 @@ class _MemberCard extends StatelessWidget {
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(e.planName.isEmpty ? tr('无套餐') : e.planName,
                   key: const Key('me-plan'),
-                  style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
+                  style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
               const SizedBox(height: 2),
               Text(
                 user.linked
                     ? tr('共享 {0} 的订阅{1}', [user.ownerCode, e.paid && e.expiresAt != null ? tr(' · {0} 到期', [formatDate(e.expiresAt!)]) : ''])
                     : e.paid && e.expiresAt != null ? tr('{0} 到期', [formatDate(e.expiresAt!)]) : tr('免费体验中'),
-                style: const TextStyle(color: dim, fontSize: 12.5),
+                style: const TextStyle(color: dim, fontSize: 13),
               ),
             ]),
           ),

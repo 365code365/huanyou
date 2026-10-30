@@ -92,7 +92,7 @@ func ValidateDSN(driver, dsn string) error {
 	return nil
 }
 
-var mysqlDSNRe = regexp.MustCompile(`^[^:@/]+(:[^@]*)?@tcp\([^)]+\)/[A-Za-z0-9_$-]+(\?.*)?$`)
+var mysqlDSNRe = regexp.MustCompile(`^[^:@/]+(:.*)?@tcp\([^)]+\)/[A-Za-z0-9_$-]+(\?.*)?$`)
 
 // MaskDSN hides the password in a DSN for display.
 func MaskDSN(driver, dsn string) string {

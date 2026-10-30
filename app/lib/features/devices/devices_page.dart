@@ -10,6 +10,7 @@ import '../../state/app_scope.dart';
 import '../../theme/app_theme.dart';
 import '../plans/plans_page.dart';
 import '../../i18n/i18n.dart';
+import '../../core/analytics.dart';
 
 /// Extracts a link code from scanned / pasted text: a bare code ("ABCD-EFGH")
 /// or a link ".../l/ABCDEFGH". Returns the 8 code characters or null.
@@ -40,6 +41,7 @@ class _DevicesPageState extends State<DevicesPage> {
   @override
   void initState() {
     super.initState();
+    Analytics.track('devices_view');
     _load();
     _tick = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted && _code != null) setState(() {});
@@ -202,7 +204,7 @@ class _DevicesPageState extends State<DevicesPage> {
                       padding: EdgeInsets.fromLTRB(6, 16, 6, 0),
                       child: Text(
                         tr('同一订阅的设备共用套餐时长和流量。令牌 10 分钟内有效，只能由会员本人生成；不用的设备可以随时移除。'),
-                        style: TextStyle(color: AppColors.sub, fontSize: 12.5, height: 1.6),
+                        style: TextStyle(color: AppColors.sub, fontSize: 13, height: 1.6),
                       ),
                     ),
                   ]),
@@ -255,11 +257,11 @@ class _DevicesPageState extends State<DevicesPage> {
         const SizedBox(height: 14),
         Text(c.display,
             key: const Key('link-code'),
-            style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800, letterSpacing: 4,
+            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800, letterSpacing: 4,
                 fontFeatures: [FontFeature.tabularFigures()])),
         const SizedBox(height: 4),
         Text(tr('{0}:{1} 后失效', [left.inMinutes, (left.inSeconds % 60).toString().padLeft(2, '0')]),
-            style: TextStyle(fontSize: 12.5, color: AppColors.sub, fontFeatures: [FontFeature.tabularFigures()])),
+            style: TextStyle(fontSize: 13, color: AppColors.sub, fontFeatures: [FontFeature.tabularFigures()])),
         const SizedBox(height: 12),
         Row(mainAxisAlignment: MainAxisAlignment.center, children: [
           TextButton.icon(
@@ -283,7 +285,7 @@ class _DevicesPageState extends State<DevicesPage> {
   Widget _memberCard(DeviceShare s) => _Panel(children: [
         const Icon(Icons.link_rounded, size: 34, color: AppColors.signal),
         const SizedBox(height: 10),
-        Text(tr('本机正在使用 {0} 的订阅', [s.ownerCode]), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        Text(tr('本机正在使用 {0} 的订阅', [s.ownerCode]), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
         const SizedBox(height: 6),
         Text(tr('续费请在该订阅的主设备上操作'), style: TextStyle(color: AppColors.sub, fontSize: 13)),
         const SizedBox(height: 14),
@@ -318,7 +320,7 @@ class _DevicesPageState extends State<DevicesPage> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(tr('本机使用别人的订阅'), style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
             const SizedBox(height: 4),
-            Text(tr('扫描会员设备上的二维码，或输入它的令牌'), style: TextStyle(fontSize: 12.5, color: AppColors.sub)),
+            Text(tr('扫描会员设备上的二维码，或输入它的令牌'), style: TextStyle(fontSize: 13, color: AppColors.sub)),
             const SizedBox(height: 12),
             Row(children: [
               Expanded(

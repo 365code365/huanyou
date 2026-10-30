@@ -1,4 +1,5 @@
 'use client'
+import { RentalFields } from '@/components/ExpiryField'
 import { CheckCircleFilled, CloseCircleFilled, EnvironmentOutlined, LoadingOutlined, WarningFilled } from '@ant-design/icons'
 import { Alert, App, Button, Form, Input, InputNumber, Modal, Segmented, Space, Tag } from 'antd'
 import { useEffect, useRef, useState } from 'react'
@@ -71,6 +72,9 @@ export function ProvisionModal({ open, onClose, onDone }: { open: boolean; onClo
     node_port: v.node_port as number,
     name: (v.name as string)?.trim(),
     region: (v.region as string)?.trim(),
+    expires_at: (v.expires_at as string) ?? undefined,
+    vendor: (v.vendor as string)?.trim(),
+    vendor_url: (v.vendor_url as string)?.trim(),
     server_name: (v.server_name as string)?.trim(),
   })
 
@@ -221,6 +225,7 @@ export function ProvisionModal({ open, onClose, onDone }: { open: boolean; onClo
           <Form.Item name="server_name" label="伪装域名" extra="一般不用改。需要境外、TLS1.3、经典 X25519 的站点。">
             <Input />
           </Form.Item>
+          <RentalFields />
 
           {phase === 'checking' && <Alert type="info" showIcon icon={<LoadingOutlined />} message="正在通过 SSH 检测服务器环境…" />}
           {report && <ReportPanel report={report} onApplyPort={applySuggestedPort} />}

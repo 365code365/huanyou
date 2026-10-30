@@ -7,6 +7,7 @@ import '../../state/app_scope.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/region_flag.dart';
 import '../../i18n/i18n.dart';
+import '../../core/analytics.dart';
 
 /// What the user picked on the node page.
 sealed class NodeChoice {
@@ -41,6 +42,7 @@ class _NodeListPageState extends State<NodeListPage> {
   @override
   void initState() {
     super.initState();
+    Analytics.track('node_list');
     WidgetsBinding.instance.addPostFrameCallback((_) => AppScope.read(context).probeNodes());
   }
 
@@ -200,7 +202,7 @@ class _BestBanner extends StatelessWidget {
                   TextSpan(text: '${flagEmoji(score.node.region)} ${score.node.name}', style: const TextStyle(fontWeight: FontWeight.w700)),
                   TextSpan(text: '  ${score.quality!.latencyMs}ms'),
                 ]),
-                style: TextStyle(fontSize: 13.5, color: AppColors.ink),
+                style: TextStyle(fontSize: 14, color: AppColors.ink),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -238,7 +240,7 @@ class _SortChips extends StatelessWidget {
               ),
               child: Text(e.value,
                   style: TextStyle(
-                    fontSize: 12.5,
+                    fontSize: 13,
                     fontWeight: value == e.key ? FontWeight.w700 : FontWeight.w500,
                     color: value == e.key ? AppColors.ink : AppColors.sub,
                   )),
@@ -333,7 +335,7 @@ class _NodeTile extends StatelessWidget {
                         child: Text(title,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
                       ),
                       if (badge != null) ...[
                         const SizedBox(width: 6),
@@ -341,7 +343,7 @@ class _NodeTile extends StatelessWidget {
                           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
                           decoration: BoxDecoration(color: AppColors.signal, borderRadius: BorderRadius.circular(6)),
                           child: Text(badge!,
-                              style: const TextStyle(fontSize: 10.5, color: Colors.white, fontWeight: FontWeight.w700)),
+                              style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w700)),
                         ),
                       ],
                     ]),
@@ -391,6 +393,7 @@ Future<ConnectResult?> pickNodeAndConnect(BuildContext context) async {
 /// Kept for callers that only need a label for the current selection.
 String nodeLabel(AppController app) {
   if (app.mode == ConnectMode.cluster) return tr('智能选择');
+  if (app.mode == ConnectMode.ai) return tr('AI 稳定线路');
   final Node? n = app.selectedNode;
   if (n != null) return n.name;
   return app.loadFailed ? tr('加载失败，点击重试') : (app.user == null ? tr('加载中…') : tr('暂无节点'));

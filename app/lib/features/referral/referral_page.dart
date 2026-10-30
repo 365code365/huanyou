@@ -12,6 +12,7 @@ import '../../state/app_scope.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/brand_mark.dart';
 import '../../i18n/i18n.dart';
+import '../../core/analytics.dart';
 
 /// Invite page: share poster (QR + code) that can be saved to the album,
 /// copyable download link, invite stats, and entering a friend's code.
@@ -33,6 +34,7 @@ class _ReferralPageState extends State<ReferralPage> {
   @override
   void initState() {
     super.initState();
+    Analytics.track('referral_view');
     _load();
   }
 
@@ -148,7 +150,7 @@ class _ReferralPageState extends State<ReferralPage> {
                             subtitle: Text(r.code,
                                 key: const Key('ref-code'),
                                 style: TextStyle(
-                                    fontSize: 18, fontWeight: FontWeight.w800, letterSpacing: 3, color: AppColors.ink)),
+                                    fontSize: 17, fontWeight: FontWeight.w800, letterSpacing: 3, color: AppColors.ink)),
                             trailing: TextButton.icon(
                               onPressed: () => _copy(r.code, tr('邀请码')),
                               icon: const Icon(Icons.copy_rounded, size: 17),
@@ -159,7 +161,7 @@ class _ReferralPageState extends State<ReferralPage> {
                           ListTile(
                             title: Text(tr('已成功邀请')),
                             trailing: Text(tr('{0} 人', [r.invitedCount]),
-                                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
                           ),
                         ]),
                       ),
@@ -203,7 +205,7 @@ class _ReferralPageState extends State<ReferralPage> {
                         padding: EdgeInsets.fromLTRB(6, 16, 6, 0),
                         child: Text(
                           tr('好友扫码或打开链接下载，首次打开会自动识别你的邀请码，奖励即时到账。'),
-                          style: TextStyle(color: AppColors.sub, fontSize: 12.5, height: 1.6),
+                          style: TextStyle(color: AppColors.sub, fontSize: 13, height: 1.6),
                         ),
                       ),
                     ]),
@@ -226,7 +228,7 @@ class _RewardBanner extends StatelessWidget {
             Text(tr('邀请好友，双方得会员'), style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700)),
             const SizedBox(height: 4),
             Text(ref.maxInvites > 0 ? tr('最多奖励 {0} 位好友', [ref.maxInvites]) : tr('邀请越多，时长越多'),
-                style: const TextStyle(color: Color(0xFF9A9CA3), fontSize: 12.5)),
+                style: const TextStyle(color: Color(0xFF9A9CA3), fontSize: 13)),
           ]),
         ),
         _Reward(days: ref.inviterDays, label: tr('你得')),
@@ -278,9 +280,9 @@ class _Poster extends StatelessWidget {
           const SizedBox(width: 10),
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text(AppConfig.appName,
-                style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800, letterSpacing: 2)),
+                style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w800, letterSpacing: 2)),
             Text(ref.slogan.isEmpty ? tr(AppConfig.slogan) : tr(ref.slogan),
-                style: const TextStyle(color: Color(0xFF9C9B97), fontSize: 11.5)),
+                style: const TextStyle(color: Color(0xFF9C9B97), fontSize: 12)),
           ]),
         ]),
         const SizedBox(height: 20),
@@ -301,14 +303,14 @@ class _Poster extends StatelessWidget {
                 ),
         ),
         const SizedBox(height: 16),
-        Text(tr('邀请码'), style: TextStyle(color: Color(0xFF9C9B97), fontSize: 11.5)),
+        Text(tr('邀请码'), style: TextStyle(color: Color(0xFF9C9B97), fontSize: 12)),
         const SizedBox(height: 2),
         Text(ref.code,
             style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800, letterSpacing: 5)),
         const SizedBox(height: 8),
         Text(
           ref.inviteeDays > 0 ? tr('扫码下载 · 自动领取 {0} 天会员', [ref.inviteeDays]) : tr('扫码下载 · 无需注册'),
-          style: const TextStyle(color: Color(0xFF7FD8A4), fontSize: 12.5, fontWeight: FontWeight.w600),
+          style: const TextStyle(color: Color(0xFF7FD8A4), fontSize: 13, fontWeight: FontWeight.w600),
         ),
       ]),
     );
@@ -341,7 +343,7 @@ class _ActionButton extends StatelessWidget {
             child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
               Icon(icon, size: 19, color: fg),
               const SizedBox(width: 6),
-              Text(label, style: TextStyle(color: fg, fontSize: 14.5, fontWeight: FontWeight.w600)),
+              Text(label, style: TextStyle(color: fg, fontSize: 14, fontWeight: FontWeight.w600)),
             ]),
           ),
         ),

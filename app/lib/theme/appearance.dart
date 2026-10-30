@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import '../core/prefs.dart';
 
 import 'app_theme.dart';
+import '../core/analytics.dart';
 
 /// Light / dark preference. "system" follows the OS setting live.
 class Appearance extends ChangeNotifier {
@@ -17,6 +18,7 @@ class Appearance extends ChangeNotifier {
   void load() => mode = AppearanceMode.parse(Prefs.get(_kMode));
 
   Future<void> set(AppearanceMode m) async {
+    Analytics.track('appearance_change');
     mode = m;
     notifyListeners();
     await Prefs.set(_kMode, m.id);

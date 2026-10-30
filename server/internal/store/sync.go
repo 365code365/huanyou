@@ -80,6 +80,15 @@ var syncTables = []tableSpec{
 		c("file", kText), c("url", kText), c("size", kInt), c("sha256", kText), c("bundle_id", kText),
 		c("force_update", kInt), c("published", kInt), c("abi", kText), c("created_at", kInt), c("updated_at", kInt),
 	}},
+	{name: "app_events", keys: []string{"day", "event", "vkey"}, updated: "updated_at", big: true, cols: []col{
+		c("day", kText), c("event", kText), c("vkey", kText), c("platform", kText), c("version", kText),
+		c("cnt", kInt), c("updated_at", kInt),
+	}},
+	{name: "crash_reports", keys: []string{"id"}, updated: "updated_at", cols: []col{
+		c("id", kText), c("user_id", kInt), c("platform", kText), c("app_version", kText), c("device", kText),
+		c("os_version", kText), c("kind", kText), c("message", kText), c("stack", kText), c("cnt", kInt),
+		c("users", kInt), c("first_at", kInt), c("last_at", kInt), c("resolved", kInt), c("updated_at", kInt),
+	}},
 	{name: "lang_packs", keys: []string{"code"}, updated: "updated_at", cols: []col{
 		c("code", kText), c("name", kText), c("native_name", kText), c("rtl", kInt), c("enabled", kInt),
 		c("version", kInt), c("strings", kText), c("updated_at", kInt), c("sort", kInt),

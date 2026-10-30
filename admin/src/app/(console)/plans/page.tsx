@@ -9,7 +9,7 @@ import { speed, traffic, yuan } from '@/lib/format'
 
 const blank = (): Plan => ({
   id: '', name: '', description: '', price_cents: 2500, duration_days: 30, traffic_gb: 200,
-  speed_mbps: 0, over_quota_kbps: 0, hidden: false, sort: 0,
+  speed_mbps: 0, over_quota_kbps: 0, hidden: false, sort: 0, hot: false,
 })
 /** Same order as the app: price ascending, then duration, then the manual sort value. */
 const byPrice = (list: Plan[]) =>
@@ -68,6 +68,7 @@ export default function PlansPage() {
             { title: '超额后', width: 130, render: (_, p) => (!p.traffic_gb ? '—' : p.over_quota_kbps ? '限速 ' + speed(p.over_quota_kbps) : '停止服务') },
             { title: '同价排序', dataIndex: 'sort', width: 90 },
             { title: '在售', width: 80, render: (_, p) => <Switch checked={!p.hidden} onChange={(v) => c.patch(p, { hidden: !v }, strip)} /> },
+            { title: '🔥 HOT', width: 80, render: (_, p) => (p.free ? '—' : <Switch checked={!!p.hot} onChange={(v) => c.patch(p, { hot: v }, strip)} />) },
             {
               title: '操作',
               width: 120,
@@ -118,6 +119,9 @@ export default function PlansPage() {
           </Form.Item>
           <Space size={24}>
             <Form.Item name="sort" label="同价排序" tooltip="套餐按价格从低到高展示；价格和时长都相同时，按此值排序"><InputNumber /></Form.Item>
+            <Form.Item name="hot" label="🔥 HOT 标签" valuePropName="checked" tooltip="App 套餐卡片显示火热标签，建议只给 1 个主推套餐">
+              <Switch />
+            </Form.Item>
             <Form.Item name="hidden" label="在售" getValueFromEvent={(v: boolean) => !v} getValueProps={(v: boolean) => ({ checked: !v })}>
               <Switch />
             </Form.Item>

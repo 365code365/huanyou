@@ -235,10 +235,12 @@ func (s *Server) Run(ctx context.Context) {
 		case <-ctx.Done():
 			done, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			s.flushIPs(done)
+			s.flushEvents(done)
 			cancel()
 			return
 		case <-flush.C:
 			s.flushIPs(ctx)
+			s.flushEvents(ctx)
 		case <-clean.C:
 			s.cleanup(ctx)
 		}
@@ -256,6 +258,8 @@ func (s *Server) cleanup(ctx context.Context) {
 	} else if n > 0 {
 		slog.Info("purged old ip records", "rows", n, "older_than_days", days)
 	}
+	_ = s.store.PurgeEvents(ctx, time.Now().AddDate(0, 0, -180).Format("2006-01-02"))
+	_ = s.store.PurgeCrashes(ctx, time.Now().AddDate(0, 0, -90).Unix())
 	// Keep expired rules for a week so the admin can see what lapsed.
 	_ = s.store.PurgeExpiredRiskRules(ctx, time.Now().AddDate(0, 0, -7).Unix())
 }

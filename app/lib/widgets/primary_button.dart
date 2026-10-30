@@ -29,7 +29,7 @@ class PrimaryButton extends StatelessWidget {
             ? SizedBox.square(dimension: 20, child: CircularProgressIndicator(strokeWidth: 2.2, color: AppColors.onInk))
             : Row(mainAxisSize: MainAxisSize.min, children: [
                 if (icon != null) ...[Icon(icon, size: 19), const SizedBox(width: 8)],
-                Text(label, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                Text(label, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
               ]),
       ),
     );

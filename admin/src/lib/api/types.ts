@@ -17,6 +17,7 @@ export interface Plan {
   over_quota_kbps: number
   hidden: boolean
   sort: number
+  hot: boolean // 🔥 HOT badge in the app
   free?: boolean // response only
 }
 
@@ -66,6 +67,9 @@ export interface VpnNode {
   bandwidth_mbps: number // fair-share capacity, 0 = off
   weight: number
   sort: number
+  expires_at?: string | null // server rental expiry (admin only)
+  vendor: string
+  vendor_url: string
   status?: NodeStatus // response only
 }
 
@@ -210,6 +214,7 @@ export interface Dashboard {
   nodes: VpnNode[]
   nodes_online: number
   events: MonitorEvent[]
+  expiring_nodes: ExpiringNode[]
 }
 
 export interface GeoIP {
@@ -231,6 +236,9 @@ export interface ProvisionRequest {
   name?: string
   region?: string
   server_name?: string
+  expires_at?: string
+  vendor?: string
+  vendor_url?: string
 }
 
 export interface ProvisionReport {
@@ -512,3 +520,109 @@ export type DBSyncEvent =
   | { type: 'progress'; table: string; rows: number }
   | { type: 'done'; result: { started_at: number; tables: TableResult[]; seconds: number } }
   | { type: 'error'; message: string }
+
+// ---- settings sections ----
+
+export interface GatewaySettings {
+  enabled: boolean
+  name: string
+  pay_link: string
+  merchant_id: string
+  sign_key: string
+  enc_key: string
+  allow_ips: string[]
+}
+
+export interface PaymentSettings {
+  disabled: boolean
+  disabled_notice: string
+  gateway: GatewaySettings
+}
+
+export interface Ad {
+  id: string
+  slot: 'home' | 'popup'
+  title: string
+  text: string
+  image: string
+  link: string
+  enabled: boolean
+  sort: number
+  start_at?: string | null
+  end_at?: string | null
+}
+
+export interface AdsSettings {
+  home_enabled: boolean
+  home_interval: number
+  popup_enabled: boolean
+  popup_frequency: 'every_launch' | 'daily' | 'once'
+  items: Ad[]
+}
+
+export interface GuardSettings {
+  disabled: boolean
+  rate_per_minute: number
+  errors_per_10m: number
+  ban_minutes: number
+  allow_ips: string[]
+}
+
+export interface AutoBan {
+  ip: string
+  until: string
+  reason: string
+  path: string
+  bad: number
+}
+
+export interface ExpiringNode {
+  id: string
+  name: string
+  address: string
+  expires_at: string
+  vendor: string
+  vendor_url: string
+  expired: boolean
+  hours_left: number
+}
+
+// ---- analytics ----
+
+export interface DayStat {
+  day: string
+  uv: number
+  opens: number
+  new_users: number
+  connects: number
+  purchases: number
+}
+
+export interface Analytics {
+  daily: DayStat[]
+  today_uv: number
+  uv_7: number
+  uv_30: number
+  events: { event: string; count: number; users: number }[]
+  platforms: { key: string; users: number }[]
+  versions: { key: string; users: number }[]
+  crash_groups_7: number
+  crash_reports_7: number
+}
+
+export interface Crash {
+  id: string
+  user_id: number
+  platform: string
+  app_version: string
+  device: string
+  os_version: string
+  kind: string
+  message: string
+  stack?: string
+  count: number
+  users: number
+  first_at: string
+  last_at: string
+  resolved: boolean
+}

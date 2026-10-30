@@ -218,6 +218,45 @@ function Settings() {
   )
 }
 
+function AutoBans() {
+  const { data, loading, reload } = useAsync(api.risk.autoBans)
+  const { run } = useAction()
+  const block = useBlockDialog(() => reload(true))
+  return (
+    <>
+      <div className="toolbar">
+        <span className="muted">系统自动识别并临时封禁的 IP（频率异常、认证反复失败、扫描漏洞路径）。阈值在「系统设置 → 安全防护」。</span>
+        <div className="spacer" />
+        <Button icon={<ReloadOutlined />} onClick={() => reload()}>刷新</Button>
+      </div>
+      <Table
+        rowKey="ip"
+        size="small"
+        loading={loading}
+        dataSource={data?.items ?? []}
+        pagination={{ pageSize: 20, hideOnSinglePage: true }}
+        locale={{ emptyText: '当前没有自动封禁的 IP' }}
+        columns={[
+          { title: 'IP', render: (_, b) => <IPCell ip={b.ip} /> },
+          { title: '原因', dataIndex: 'reason' },
+          { title: '最后路径', render: (_, b) => <span className="mono" style={{ fontSize: 12 }}>{b.path}</span> },
+          { title: '解封时间', width: 150, render: (_, b) => dateTime(b.until) },
+          {
+            title: '',
+            width: 160,
+            render: (_, b) => (
+              <Space size={0}>
+                <Button type="link" size="small" onClick={async () => { if (await run(() => api.risk.liftAutoBan(b.ip), '已解封')) reload(true) }}>解封</Button>
+                <Button type="link" size="small" danger onClick={() => block({ kind: 'ip', value: b.ip, reason: b.reason })}>永久封禁</Button>
+              </Space>
+            ),
+          },
+        ]}
+      />
+    </>
+  )
+}
+
 export default function RiskPage() {
   // Deep links from other pages: /admin/risk/?tab=ips&user=VP-00010
   const [params] = useState(() => (typeof window === 'undefined' ? new URLSearchParams() : new URLSearchParams(window.location.search)))
@@ -232,6 +271,7 @@ export default function RiskPage() {
             { key: 'suspicious', label: <span><SafetyOutlined /> 可疑行为</span>, children: <Suspicious /> },
             { key: 'ips', label: 'IP 记录', children: <IPRecords initial={{ user: params.get('user') ?? undefined, ip: params.get('ip') ?? undefined }} /> },
             { key: 'rules', label: '封禁规则', children: <Rules /> },
+            { key: 'autobans', label: '自动封禁', children: <AutoBans /> },
             { key: 'settings', label: '设置', children: <Settings /> },
           ]}
         />

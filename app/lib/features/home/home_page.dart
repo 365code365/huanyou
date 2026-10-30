@@ -9,6 +9,7 @@ import '../../core/vpn.dart';
 import '../../state/app_controller.dart';
 import '../../state/app_scope.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/ad_banner.dart';
 import '../../widgets/brand_mark.dart';
 import '../../widgets/connect_button.dart';
 import '../../widgets/region_flag.dart';
@@ -70,6 +71,9 @@ class _HomePageState extends State<HomePage> {
                   ),
                   const SizedBox(height: 12),
                   _ModeSegments(app: app, onChanged: (m) => _handle(app.setMode(m))),
+                  // Admin-configured banner fills the space under the controls (off by default).
+                  const SizedBox(height: 18),
+                  const AdBanner(),
                 ]),
               ),
             ),
@@ -124,7 +128,7 @@ class _TopBar extends StatelessWidget {
               Text(chip,
                   key: const Key('plan-name'),
                   style: TextStyle(
-                      fontSize: 12.5, fontWeight: FontWeight.w600, color: warn ? AppColors.danger : AppColors.ink)),
+                      fontSize: 13, fontWeight: FontWeight.w600, color: warn ? AppColors.danger : AppColors.ink)),
               const SizedBox(width: 2),
               Icon(Icons.chevron_right_rounded, size: 16, color: warn ? AppColors.danger : AppColors.sub),
             ]),
@@ -241,7 +245,9 @@ class _NodeRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cluster = app.mode == ConnectMode.cluster;
+    // Cluster and AI 优先: the server picks the nodes.
+    final auto = app.mode == ConnectMode.cluster || app.mode == ConnectMode.ai;
+    final cluster = auto;
     final n = app.selectedNode;
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -256,7 +262,7 @@ class _NodeRow extends StatelessWidget {
                 width: 40,
                 height: 40,
                 decoration: BoxDecoration(color: AppColors.sunken, shape: BoxShape.circle),
-                child: Icon(Icons.hub_rounded, color: AppColors.ink, size: 20),
+                child: Icon(app.mode == ConnectMode.ai ? Icons.auto_awesome_rounded : Icons.hub_rounded, color: AppColors.ink, size: 20),
               )
             else
               RegionFlag(n?.region ?? '', size: 40),
@@ -267,10 +273,15 @@ class _NodeRow extends StatelessWidget {
                     key: const Key('node-card-name'),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 2),
-                Text(cluster ? tr('{0} 个节点自动切换', [app.nodes.where((x) => x.online).length]) : tr('轻点切换节点'),
-                    style: TextStyle(fontSize: 12.5, color: AppColors.sub)),
+                Text(
+                    app.mode == ConnectMode.ai
+                        ? tr('自动选择最稳定的节点，断线自动切换')
+                        : cluster
+                            ? tr('{0} 个节点自动切换', [app.nodes.where((x) => x.online).length])
+                            : tr('轻点切换节点'),
+                    style: TextStyle(fontSize: 13, color: AppColors.sub)),
               ]),
             ),
             if (!cluster && n != null) _QualityBadge(score: app.scoreOf(n)),
@@ -368,7 +379,7 @@ class _ModeSegments extends StatelessWidget {
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 180),
           child: Text(app.mode.hint,
-              key: ValueKey(app.mode), style: TextStyle(fontSize: 12.5, color: AppColors.sub)),
+              key: ValueKey(app.mode), style: TextStyle(fontSize: 13, color: AppColors.sub)),
         ),
       ),
     ]);

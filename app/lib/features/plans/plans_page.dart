@@ -9,6 +9,7 @@ import '../../state/app_scope.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/primary_button.dart';
 import '../../i18n/i18n.dart';
+import '../../core/analytics.dart';
 
 /// Opens the plans page; refreshes the user if a purchase completed.
 Future<void> openPlans(BuildContext context) async {
@@ -31,6 +32,7 @@ class _PlansPageState extends State<PlansPage> {
   String? _selected;
   String? _error;
   bool _buying = false;
+  PurchaseState _purchase = const PurchaseState(enabled: true, notice: '');
 
   @override
   void initState() {
@@ -40,12 +42,14 @@ class _PlansPageState extends State<PlansPage> {
 
   Future<void> _load() async {
     try {
-      final (plans, methods) = await AppScope.read(context).api.plans();
+      final (plans, methods, purchase) = await AppScope.read(context).api.plansFull();
+      Analytics.track('plans_view');
       final paid = plans.where((p) => !p.free).toList();
       final current = AppScope.read(context).user?.entitlement;
       setState(() {
         _plans = paid;
         _methods = methods;
+        _purchase = purchase;
         _selected = paid.any((p) => p.id == current?.planId) ? current!.planId : (paid.isEmpty ? null : paid.first.id);
       });
     } on ApiException catch (e) {
@@ -57,8 +61,9 @@ class _PlansPageState extends State<PlansPage> {
 
   Future<void> _buy() async {
     final plan = _plan;
-    if (plan == null) return;
+    if (plan == null || !_purchase.enabled) return;
     if (_methods.isEmpty) return _snack(tr('暂无可用的支付方式'));
+    Analytics.track('purchase_start');
     final method = _methods.length == 1 ? _methods.first : await _pickMethod(plan);
     if (method == null || !mounted) return;
 
@@ -181,9 +186,14 @@ class _PlansPageState extends State<PlansPage> {
                   Expanded(
                     child: PrimaryButton(
                       key: const Key('buy-button'),
-                      label: cur?.paid == true && cur?.planId == _plan!.id ? tr('立即续费') : tr('立即购买'),
+                      // Purchases closed in the admin panel: greyed out with the notice.
+                      label: !_purchase.enabled
+                          ? (_purchase.notice.isEmpty ? tr('暂不支持购买') : tr(_purchase.notice))
+                          : cur?.paid == true && cur?.planId == _plan!.id
+                              ? tr('立即续费')
+                              : tr('立即购买'),
                       loading: _buying,
-                      onPressed: _buy,
+                      onPressed: _purchase.enabled ? _buy : null,
                     ),
                   ),
                 ]),
@@ -231,7 +241,14 @@ class _PlanCard extends StatelessWidget {
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Row(children: [
-                      Text(plan.name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                      Flexible(
+                        child: Text(plan.name,
+                            maxLines: 1, overflow: TextOverflow.ellipsis, style: AppText.title),
+                      ),
+                      if (plan.hot) ...[
+                        const SizedBox(width: 8),
+                        const _HotBadge(),
+                      ],
                       if (current) ...[
                         const SizedBox(width: 8),
                         Container(
@@ -339,6 +356,23 @@ class _PaymentDialogState extends State<_PaymentDialog> {
         TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('取消'))),
         FilledButton(onPressed: () => _check(manual: true), child: Text(tr('我已完成支付'))),
       ],
+    );
+  }
+}
+
+/// 🔥 HOT: warm gradient pill on best-selling plans.
+class _HotBadge extends StatelessWidget {
+  const _HotBadge();
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(colors: [Color(0xFFFF6A3D), Color(0xFFFF2D55)]),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: const Text('🔥 HOT',
+          style: TextStyle(fontSize: 11, height: 1.3, fontWeight: FontWeight.w800, color: Colors.white, letterSpacing: 0.4)),
     );
   }
 }

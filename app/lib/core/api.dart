@@ -81,7 +81,8 @@ class Plan {
         trafficGb = (j['traffic_gb'] as num).toDouble(),
         speedMbps = (j['speed_mbps'] as num).toInt(),
         overQuotaKbps = (j['over_quota_kbps'] as num).toInt(),
-        free = j['free'] as bool? ?? false;
+        free = j['free'] as bool? ?? false,
+        hot = j['hot'] as bool? ?? false;
   final String id;
   final String name;
   final String description;
@@ -91,6 +92,42 @@ class Plan {
   final int speedMbps;
   final int overQuotaKbps;
   final bool free;
+  final bool hot; // 🔥 HOT badge
+}
+
+/// Whether purchases are open (admin switch); notice is shown when not.
+class PurchaseState {
+  const PurchaseState({required this.enabled, required this.notice});
+  final bool enabled;
+  final String notice;
+}
+
+/// One home banner / launch popup from GET /api/v1/ads.
+class AdItem {
+  AdItem.fromJson(Map<String, dynamic> j)
+      : id = j['id'] as String? ?? '',
+        title = j['title'] as String? ?? '',
+        text = j['text'] as String? ?? '',
+        image = j['image'] as String? ?? '',
+        link = j['link'] as String? ?? '';
+  final String id, title, text, image, link;
+}
+
+class Ads {
+  Ads.fromJson(Map<String, dynamic> j)
+      : interval = ((j['home'] as Map?)?['interval'] as num?)?.toInt() ?? 5,
+        home = [
+          for (final e in ((j['home'] as Map?)?['items'] as List?) ?? const [])
+            AdItem.fromJson(e as Map<String, dynamic>)
+        ],
+        popupFrequency = ((j['popup'] as Map?)?['frequency'] as String?) ?? 'daily',
+        popup = ((j['popup'] as Map?)?['item'] is Map<String, dynamic>)
+            ? AdItem.fromJson((j['popup'] as Map)['item'] as Map<String, dynamic>)
+            : null;
+  final int interval;
+  final List<AdItem> home;
+  final String popupFrequency;
+  final AdItem? popup;
 }
 
 class PayMethod {
@@ -392,12 +429,25 @@ class ApiClient {
   }
 
   Future<(List<Plan>, List<PayMethod>)> plans() async {
+    final r = await plansFull();
+    return (r.$1, r.$2);
+  }
+
+  /// Plans, payment methods and whether purchases are open.
+  Future<(List<Plan>, List<PayMethod>, PurchaseState)> plansFull() async {
     final j = await _send('GET', '/api/v1/plans');
+    final p = j['purchase'] as Map<String, dynamic>?;
     return (
       (j['plans'] as List).map((e) => Plan.fromJson(e as Map<String, dynamic>)).toList(),
       (j['methods'] as List).map((e) => PayMethod.fromJson(e as Map<String, dynamic>)).toList(),
+      PurchaseState(enabled: p?['enabled'] as bool? ?? true, notice: p?['notice'] as String? ?? ''),
     );
   }
+
+  Future<Ads> ads() async => Ads.fromJson(await _send('GET', '/api/v1/ads'));
+
+  /// Fire-and-forget POST (analytics / crash reports); errors are swallowed by the caller.
+  Future<void> post(String path, Map<String, dynamic> body) => _send('POST', path, body: body);
 
   /// Creates an order and returns it with the URL the user opens to pay.
   Future<(Order, Uri)> createOrder(String planId, String method) async {

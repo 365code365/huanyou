@@ -100,11 +100,39 @@ class AppColors {
   );
 }
 
+/// Type scale. Use these instead of ad-hoc sizes so screens stay consistent:
+/// 34 / 24 / 20 / 17 / 15 / 14 / 13 / 12 / 11, regular → bold weights, and a
+/// line height that suits CJK (Chinese glyphs need more leading than Latin).
+class AppText {
+  static const display = TextStyle(fontSize: 34, height: 1.15, fontWeight: FontWeight.w800, letterSpacing: -0.4);
+  static const headline = TextStyle(fontSize: 24, height: 1.25, fontWeight: FontWeight.w700, letterSpacing: -0.2);
+  static const title = TextStyle(fontSize: 17, height: 1.3, fontWeight: FontWeight.w700);
+  static const subtitle = TextStyle(fontSize: 15, height: 1.4, fontWeight: FontWeight.w600);
+  static const body = TextStyle(fontSize: 15, height: 1.5, fontWeight: FontWeight.w400);
+  static const bodySmall = TextStyle(fontSize: 13, height: 1.5, fontWeight: FontWeight.w400);
+  static const caption = TextStyle(fontSize: 12, height: 1.4, fontWeight: FontWeight.w400);
+  static const tiny = TextStyle(fontSize: 11, height: 1.3, fontWeight: FontWeight.w500);
+}
+
 class AppRadius {
   static const card = 18.0;
   static const field = 12.0;
   static const button = 14.0;
 }
+
+TextTheme _textTheme(TextTheme t) => t.copyWith(
+      displaySmall: AppText.display,
+      headlineSmall: AppText.headline,
+      titleLarge: AppText.headline.copyWith(fontSize: 20),
+      titleMedium: AppText.subtitle,
+      titleSmall: AppText.subtitle.copyWith(fontSize: 14),
+      bodyLarge: AppText.body,
+      bodyMedium: AppText.body.copyWith(fontSize: 14),
+      bodySmall: AppText.bodySmall,
+      labelLarge: AppText.subtitle.copyWith(fontSize: 15),
+      labelMedium: AppText.caption.copyWith(fontWeight: FontWeight.w500),
+      labelSmall: AppText.tiny,
+    );
 
 class AppTheme {
   /// Theme for the active palette (see [AppColors.dark]).
@@ -129,7 +157,7 @@ class AppTheme {
     final base = ThemeData(useMaterial3: true, colorScheme: scheme, splashFactory: InkSparkle.splashFactory);
     return base.copyWith(
       scaffoldBackgroundColor: AppColors.canvas,
-      textTheme: base.textTheme.apply(bodyColor: AppColors.ink, displayColor: AppColors.ink),
+      textTheme: _textTheme(base.textTheme).apply(bodyColor: AppColors.ink, displayColor: AppColors.ink),
       appBarTheme: AppBarTheme(
         backgroundColor: AppColors.canvas,
         surfaceTintColor: Colors.transparent,
@@ -182,7 +210,7 @@ class AppTheme {
         height: 62,
         labelTextStyle: WidgetStateProperty.resolveWith(
           (s) => TextStyle(
-            fontSize: 11.5,
+            fontSize: 12,
             fontWeight: s.contains(WidgetState.selected) ? FontWeight.w600 : FontWeight.w400,
             color: s.contains(WidgetState.selected) ? AppColors.ink : AppColors.faint,
           ),

@@ -1,6 +1,6 @@
 'use client'
 import { ApiOutlined, CheckCircleFilled, DatabaseOutlined, SwapOutlined, SyncOutlined } from '@ant-design/icons'
-import { Alert, App, Button, Col, Descriptions, Form, Input, Progress, Row, Segmented, Space, Table, Tag } from 'antd'
+import { Alert, App, Button, Checkbox, Col, Descriptions, Form, Input, InputNumber, Progress, Row, Segmented, Space, Table, Tag } from 'antd'
 import { useState } from 'react'
 import { PageCard } from '@/components/PageCard'
 import { useAsync } from '@/hooks/useAsync'
@@ -12,10 +12,14 @@ const tableName: Record<string, string> = {
   users: '用户', orders: '订单', traffic_daily: '每日流量', user_ips: 'IP 记录', link_codes: '设备令牌',
   risk_rules: '封禁规则', settings: '设置', releases: '版本', lang_packs: '语言包',
 }
-const placeholder: Record<DBDriver, string> = {
-  sqlite: '',
-  mysql: 'vpn:密码@tcp(10.0.0.5:3306)/vpn',
-  postgres: 'postgres://vpn:密码@10.0.0.5:5432/vpn?sslmode=disable',
+type Conn = { host: string; port: number; user: string; password: string; database: string; tls: boolean }
+
+/** Builds the driver DSN from the simple form (values escaped where the format needs it). */
+function buildDSN(driver: DBDriver, c: Conn): string {
+  if (driver === 'sqlite') return ''
+  const host = c.host.includes(':') && !c.host.startsWith('[') ? `[${c.host}]` : c.host // IPv6
+  if (driver === 'mysql') return `${c.user}:${c.password}@tcp(${host}:${c.port})/${c.database}${c.tls ? '?tls=true' : ''}`
+  return `postgres://${encodeURIComponent(c.user)}:${encodeURIComponent(c.password)}@${host}:${c.port}/${encodeURIComponent(c.database)}?sslmode=${c.tls ? 'require' : 'disable'}`
 }
 
 function ResultTable({ rows }: { rows: TableResult[] }) {
@@ -38,7 +42,14 @@ export default function DatabasePage() {
   const { message, modal } = App.useApp()
   const { data: info, loading, reload } = useAsync(api.database.info)
   const [driver, setDriver] = useState<DBDriver>('mysql')
-  const [dsn, setDsn] = useState('')
+  // Simple form: host / port / user / password / database; the DSN is built here.
+  const [conn, setConn] = useState({ host: '', port: 0, user: '', password: '', database: 'vpn', tls: false })
+  const setC = (p: Partial<typeof conn>) => {
+    setConn((c) => ({ ...c, ...p }))
+    reset()
+  }
+  const defaultPort = driver === 'mysql' ? 3306 : 5432
+  const dsn = buildDSN(driver, { ...conn, port: conn.port || defaultPort })
   const [testing, setTesting] = useState(false)
   const [tested, setTested] = useState<{ empty: boolean; counts: Record<string, number>; ms: number }>()
   const [syncing, setSyncing] = useState(false)
@@ -47,7 +58,7 @@ export default function DatabasePage() {
   const [switching, setSwitching] = useState(false)
 
   const current = info?.driver
-  const targetReady = driver === 'sqlite' || dsn.trim() !== ''
+  const targetReady = driver === 'sqlite' || (!!conn.host.trim() && !!conn.user.trim() && !!conn.database.trim())
   const reset = () => {
     setTested(undefined)
     setResult(undefined)
@@ -196,18 +207,21 @@ export default function DatabasePage() {
                 />
               </Form.Item>
               {driver !== 'sqlite' ? (
-                <Form.Item label="连接串" extra={driver === 'mysql' ? '格式：用户名:密码@tcp(主机:端口)/数据库名，需要 TLS 时加 ?tls=true' : '格式：postgres://用户名:密码@主机:端口/数据库名?sslmode=disable（云数据库用 sslmode=require）'}>
-                  <Input.Password
-                    visibilityToggle
-                    className="mono"
-                    value={dsn}
-                    placeholder={placeholder[driver]}
-                    onChange={(e) => {
-                      setDsn(e.target.value)
-                      reset()
-                    }}
-                  />
-                </Form.Item>
+                <>
+                  <Space.Compact block style={{ marginBottom: 12 }}>
+                    <Input addonBefore="主机 IP" placeholder="10.0.0.5 或 db.example.com" value={conn.host} onChange={(e) => setC({ host: e.target.value.trim() })} />
+                    <InputNumber addonBefore="端口" min={1} max={65535} placeholder={String(defaultPort)} value={conn.port || null} onChange={(v) => setC({ port: Number(v) || 0 })} style={{ width: 180 }} />
+                  </Space.Compact>
+                  <Space.Compact block style={{ marginBottom: 12 }}>
+                    <Input addonBefore="用户名" value={conn.user} onChange={(e) => setC({ user: e.target.value.trim() })} autoComplete="off" />
+                    <Input.Password addonBefore="密码" value={conn.password} onChange={(e) => setC({ password: e.target.value })} autoComplete="new-password" />
+                  </Space.Compact>
+                  <Space style={{ marginBottom: 8 }} wrap>
+                    <Input addonBefore="数据库名" value={conn.database} onChange={(e) => setC({ database: e.target.value.trim() })} style={{ width: 260 }} />
+                    <Checkbox checked={conn.tls} onChange={(e) => setC({ tls: e.target.checked })}>使用 TLS 加密连接（云数据库建议开启）</Checkbox>
+                  </Space>
+                  <div className="muted" style={{ marginBottom: 16 }}>目标库要先建好（空库即可），账号需要建表权限。</div>
+                </>
               ) : (
                 <Alert type="info" showIcon style={{ marginBottom: 16 }} message={`切回本机 SQLite 文件：${info?.sqlite_path ?? ''}`} />
               )}

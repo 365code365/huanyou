@@ -252,6 +252,10 @@ func nodeResource() catalogResource[config.Node] {
 				}
 				return nil
 			}
+			// Create: the rental expiry is mandatory for new nodes.
+			if n.ExpiresAt == nil {
+				return config.Invalid("请选择服务器到期时间（精确到分钟）")
+			}
 			// Create: generate the agent token, REALITY keys and the XHTTP path.
 			tok, err := keys.RandomToken(32)
 			if err != nil {

@@ -38,7 +38,7 @@ Future<void> showLanguageSheet(BuildContext context) async {
             child: ListView(shrinkWrap: true, padding: const EdgeInsets.only(bottom: 12), children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(22, 0, 22, 8),
-                child: Text(tr('语言'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                child: Text(tr('语言'), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
               ),
               for (final (code, title, sub) in options)
                 ListTile(
@@ -83,7 +83,7 @@ Future<void> showAppearanceSheet(BuildContext context) async {
         child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(22, 0, 22, 8),
-            child: Text(tr('外观'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+            child: Text(tr('外观'), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
           ),
           for (final m in AppearanceMode.values)
             ListTile(

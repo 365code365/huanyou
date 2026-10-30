@@ -15,7 +15,12 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
   const [ready, setReady] = useState(false)
-  const [collapsed, setCollapsed] = useState(false)
+  // Remembered across reloads; the sider also collapses itself on narrow screens.
+  const [collapsed, setCollapsedState] = useState(() => typeof window !== 'undefined' && localStorage.getItem('admin_sider_collapsed') === '1')
+  const setCollapsed = (v: boolean) => {
+    setCollapsedState(v)
+    localStorage.setItem('admin_sider_collapsed', v ? '1' : '0')
+  }
 
   useEffect(() => {
     const toLogin = () => router.replace(`/login?redirect=${encodeURIComponent(pathname)}`)
@@ -34,8 +39,18 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
   const selected = nav.find((n) => (n.path === '/' ? pathname === '/' : pathname.startsWith(n.path)))?.path ?? '/'
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
-      <Sider width={216} collapsedWidth={64} collapsed={collapsed} style={{ position: 'sticky', top: 0, height: '100vh' }}>
+    // Sidebar and content scroll independently: the outer shell is exactly one
+    // viewport tall and each column has its own scroll area.
+    <Layout style={{ height: '100vh', overflow: 'hidden' }}>
+      <Sider
+        width={216}
+        collapsedWidth={64}
+        collapsed={collapsed}
+        breakpoint="lg"
+        onBreakpoint={(narrow) => narrow && setCollapsedState(true)}
+        style={{ height: '100vh', overflowY: 'auto', overflowX: 'hidden' }}
+        className="console-sider"
+      >
         <div style={{ height: 60, display: 'flex', alignItems: 'center', gap: 10, padding: '0 18px', color: '#fff', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden' }}>
           <BrandMark size={28} inverted />
           {!collapsed && <span>环游 · 后台</span>}
@@ -47,8 +62,8 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
           items={nav.map((n) => ({ key: n.path, icon: n.icon, label: <Link href={n.path}>{n.title}</Link> }))}
         />
       </Sider>
-      <Layout>
-        <Header style={{ display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid #e8ebf3', position: 'sticky', top: 0, zIndex: 10 }}>
+      <Layout style={{ height: '100vh', overflow: 'hidden' }}>
+        <Header style={{ display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid #e8ebf3', flex: 'none', zIndex: 10 }}>
           <Button type="text" icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />} onClick={() => setCollapsed(!collapsed)} />
           <span style={{ fontSize: 16, fontWeight: 600 }}>{titleOf(pathname)}</span>
           <div style={{ flex: 1 }} />
@@ -63,7 +78,7 @@ export default function ConsoleLayout({ children }: { children: ReactNode }) {
             </span>
           </Dropdown>
         </Header>
-        <Content>{children}</Content>
+        <Content id="console-content" style={{ overflowY: 'auto', flex: 1, minHeight: 0 }}>{children}</Content>
       </Layout>
     </Layout>
   )

@@ -62,3 +62,19 @@ export function flag(code: string): string {
 
 /** Error → user message (ApiError carries the server's Chinese message). */
 export const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e))
+
+/** "3 天后到期" / "已过期 2 天" for a node rental expiry. */
+export function expiryText(iso: string | null | undefined): string {
+  if (!iso) return '未设置'
+  const ms = new Date(iso).getTime() - Date.now()
+  const abs = Math.abs(ms) / 3600000
+  const span = abs >= 48 ? `${Math.floor(abs / 24)} 天` : abs >= 1 ? `${Math.floor(abs)} 小时` : `${Math.max(1, Math.round(abs * 60))} 分钟`
+  return ms <= 0 ? `已过期 ${span}` : `${span}后到期`
+}
+
+/** Severity of a node expiry: expired | soon (≤ 7 days) | ok | none. */
+export function expiryLevel(iso: string | null | undefined): 'expired' | 'soon' | 'ok' | 'none' {
+  if (!iso) return 'none'
+  const ms = new Date(iso).getTime() - Date.now()
+  return ms <= 0 ? 'expired' : ms <= 7 * 86400000 ? 'soon' : 'ok'
+}

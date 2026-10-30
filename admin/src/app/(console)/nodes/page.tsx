@@ -8,13 +8,14 @@ import { PageCard } from '@/components/PageCard'
 import { useAction, useAsync } from '@/hooks/useAsync'
 import { useCatalog } from '@/hooks/useCatalog'
 import { api, type VpnNode } from '@/lib/api'
-import { bytes, errMsg, flag } from '@/lib/format'
+import { bytes, dateTime, errMsg, expiryLevel, expiryText, flag } from '@/lib/format'
 import { ProvisionModal } from './ProvisionModal'
+import { RentalFields } from '@/components/ExpiryField'
 
 const blank = (): VpnNode => ({
   id: '', name: '', region: 'US', address: '', token: '', reality_target: '', vision_port: 443, xhttp_path: '',
   disabled: false, frozen: false, frozen_reason: '', note: '', tags: [], rate: 1, plans: [], bandwidth_mbps: 0,
-  weight: 1, sort: 0,
+  weight: 1, sort: 0, expires_at: null, vendor: '', vendor_url: '',
   reality: { public_key: '', short_id: '', server_name: 'www.apple.com', fingerprint: 'chrome' },
 })
 // Status is response-only; the target follows the SNI.
@@ -198,7 +199,7 @@ export default function NodesPage() {
           loading={c.loading}
           dataSource={shown}
           pagination={false}
-          scroll={{ x: 1300 }}
+          scroll={{ x: 1470 }}
           rowSelection={{ selectedRowKeys: selected, onChange: (k) => setSelected(k as string[]) }}
           rowClassName={(n) => (n.frozen ? 'row-frozen' : '')}
           columns={[
@@ -221,6 +222,28 @@ export default function NodesPage() {
             },
             { title: '状态（近 1 小时）', width: 280, render: (_, n) => <NodeHealth status={n.status} disabled={n.disabled} history /> },
             { title: '可用率', width: 80, render: (_, n) => (n.status ? Math.round(n.status.uptime * 100) + '%' : '—') },
+            {
+              title: '到期 / 厂商',
+              width: 170,
+              sorter: (a, b) => (a.expires_at ? Date.parse(a.expires_at) : Infinity) - (b.expires_at ? Date.parse(b.expires_at) : Infinity),
+              render: (_, n) => {
+                const lv = expiryLevel(n.expires_at)
+                return (
+                  <>
+                    {lv === 'none' ? (
+                      <Tag bordered={false} color="warning">未设置到期</Tag>
+                    ) : (
+                      <Tooltip title={dateTime(n.expires_at)}>
+                        <Tag bordered={false} color={lv === 'expired' ? 'error' : lv === 'soon' ? 'orange' : 'default'}>{expiryText(n.expires_at)}</Tag>
+                      </Tooltip>
+                    )}
+                    <div className="muted">
+                      {n.vendor_url ? <a href={n.vendor_url} target="_blank" rel="noreferrer">{n.vendor || '续费入口'}</a> : n.vendor || '—'}
+                    </div>
+                  </>
+                )
+              },
+            },
             {
               title: '在线 / 负载',
               width: 110,
@@ -322,7 +345,8 @@ export default function NodesPage() {
           <Form.Item name="plans" label="可用套餐" extra="不选 = 所有套餐都能用；选了则只有这些套餐的用户能看到和连接此节点">
             <Select mode="multiple" allowClear placeholder="全部套餐" options={plans.map((p) => ({ value: p.id, label: p.name }))} />
           </Form.Item>
-          <Form.Item name="note" label="备注" extra="仅后台可见，例如服务商、到期时间、成本">
+          <RentalFields required={c.mode === 'create'} />
+          <Form.Item name="note" label="备注" extra="仅后台可见，例如成本、线路说明">
             <Input.TextArea rows={2} maxLength={300} />
           </Form.Item>
           {c.mode === 'create' ? (

@@ -128,7 +128,7 @@ class _BootstrapGateState extends State<BootstrapGate> with TickerProviderStateM
                             child: Text(
                               _slow ? tr('正在连接服务器…') : tr('无需注册 · 打开即用'),
                               textAlign: TextAlign.center,
-                              style: const TextStyle(color: Color(0xFF66656A), fontSize: 12.5, letterSpacing: 1),
+                              style: const TextStyle(color: Color(0xFF66656A), fontSize: 13, letterSpacing: 1),
                             ),
                           ),
                   ),
@@ -169,7 +169,7 @@ class _RetryBlock extends StatelessWidget {
                 width: double.infinity,
                 height: 52,
                 child: Center(
-                  child: Text(tr('重试'), style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
+                  child: Text(tr('重试'), style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600)),
                 ),
               ),
             ),

@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import '../core/analytics.dart';
 import '../core/api.dart';
 import '../core/device.dart';
 import '../core/node_quality.dart';
@@ -15,7 +16,7 @@ import '../i18n/i18n.dart';
 enum ConnectMode {
   direct('direct', '智能', '国内网站直连，海外经所选节点'),
   cluster('cluster', '集群', '多个节点自动择优，断线自动切换'),
-  ai('ai', 'AI', '只有 ChatGPT、Claude 等 AI 服务走代理');
+  ai('ai', 'AI 优先', 'AI 服务走代理，自动选用最稳定的节点');
 
   const ConnectMode(this.id, this._label, this._hint);
   final String id;
@@ -217,6 +218,8 @@ class AppController extends ChangeNotifier {
     status = e.$1;
     statusHint = e.$1 == VpnStatus.connecting ? e.$2 : null;
     if (e.$1 == VpnStatus.error) message = e.$2 ?? tr('连接失败');
+    if (e.$1 == VpnStatus.connected && prev != VpnStatus.connected) Analytics.track('vpn_connected');
+    if (e.$1 == VpnStatus.error && prev == VpnStatus.connecting) Analytics.track('vpn_connect_failed');
     if (e.$1 == VpnStatus.connected) {
       message = null;
       connectedAt ??= DateTime.now();
@@ -374,9 +377,11 @@ class AppController extends ChangeNotifier {
   /// Picks a node. If [connectNow] (the default from the node page), the tunnel
   /// is (re)connected to it right away. Picking a node leaves cluster mode.
   Future<ConnectResult?> selectNode(String id, {bool connectNow = true}) async {
-    final changed = id != nodeId || mode == ConnectMode.cluster;
+    Analytics.track('node_select');
+    // Picking a node by hand means "use this one": leave the automatic modes.
+    final changed = id != nodeId || mode == ConnectMode.cluster || mode == ConnectMode.ai;
     nodeId = id;
-    if (mode == ConnectMode.cluster) {
+    if (mode == ConnectMode.cluster || mode == ConnectMode.ai) {
       mode = ConnectMode.direct;
       await session.saveMode(mode.id);
     }
@@ -390,6 +395,7 @@ class AppController extends ChangeNotifier {
   /// Changes the mode; reconnects if the tunnel is up.
   Future<ConnectResult?> setMode(ConnectMode m) async {
     if (m == mode) return null;
+    Analytics.track('mode_${m.id}');
     mode = m;
     await session.saveMode(m.id);
     notifyListeners();
@@ -412,6 +418,7 @@ class AppController extends ChangeNotifier {
   /// Connects. [auto] marks a background reconnect attempt: on failure it
   /// schedules the next attempt instead of giving up.
   Future<ConnectResult> connect({bool auto = false}) async {
+    if (!auto) Analytics.track('vpn_connect');
     if (!auto) {
       _reconnectAttempt = 0;
       _reconnectTimer?.cancel();
@@ -439,7 +446,8 @@ class AppController extends ChangeNotifier {
     if (nodes.isEmpty || user == null) await refresh();
     try {
       Profile profile;
-      final node = mode == ConnectMode.cluster ? null : selectedNode?.id;
+      // Cluster and AI 优先 let the server choose (AI picks the most stable nodes).
+      final node = mode == ConnectMode.cluster || mode == ConnectMode.ai ? null : selectedNode?.id;
       try {
         profile = await api.profile(nodeId: node, mode: mode.id);
         await session.saveProfile(profile);
@@ -474,6 +482,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> disconnect() async {
+    Analytics.track('vpn_disconnect');
     _wantConnected = false;
     _wasConnected = false;
     _reconnectTimer?.cancel();

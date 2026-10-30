@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 
 import '../core/api.dart';
 import '../core/prefs.dart';
+import '../core/analytics.dart';
 
 /// Translates a UI string. The Chinese source text is the key; packs map it
 /// to the target language and anything missing falls back to Chinese.
@@ -105,6 +106,7 @@ class I18n extends ChangeNotifier {
   /// Sets the preference ("system" or a code) and switches immediately if the
   /// pack is available. Throws when the download fails.
   Future<void> choose(ApiClient api, String pref) async {
+    Analytics.track('language_change');
     final want = _resolveFor(pref);
     if (want != base && want != _active) {
       downloading = want;

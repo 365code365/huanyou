@@ -66,6 +66,8 @@ type Monitor struct {
 	mu     sync.RWMutex
 	st     map[string]*Status
 	events []Event // newest last, capped
+
+	expiryAlerted map[string]string // node id -> day last alerted
 }
 
 func New(cat *config.LiveCatalog) *Monitor {
@@ -160,6 +162,7 @@ func (m *Monitor) Run(ctx context.Context) {
 		if mc.Enabled {
 			m.checkAll(ctx)
 		}
+		m.checkExpiry(time.Now())
 		select {
 		case <-ctx.Done():
 			return
@@ -293,4 +296,34 @@ func (m *Monitor) post(text string) error {
 		return fmt.Errorf("webhook 返回 %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// checkExpiry raises one event (and webhook alert) per node per day while its
+// server rental expires within 7 days, so renewals are not missed.
+func (m *Monitor) checkExpiry(now time.Time) {
+	day := now.Format("2006-01-02")
+	for _, n := range m.cat.Get().ExpiringNodes(now, 7*24*time.Hour) {
+		m.mu.Lock()
+		if m.expiryAlerted == nil {
+			m.expiryAlerted = map[string]string{}
+		}
+		done := m.expiryAlerted[n.ID] == day
+		m.expiryAlerted[n.ID] = day
+		m.mu.Unlock()
+		if done {
+			continue
+		}
+		left := n.ExpiresAt.Sub(now)
+		vendor := ""
+		if n.Vendor != "" {
+			vendor = "（" + n.Vendor + "）"
+		}
+		var text string
+		if left <= 0 {
+			text = fmt.Sprintf("⛔ 节点「%s」%s 服务器已于 %s 到期，请立即续费", n.Name, vendor, n.ExpiresAt.Format("2006-01-02 15:04"))
+		} else {
+			text = fmt.Sprintf("⏰ 节点「%s」%s 服务器将于 %s 到期（剩 %.0f 小时），请及时续费", n.Name, vendor, n.ExpiresAt.Format("2006-01-02 15:04"), left.Hours())
+		}
+		m.emit(n.ID, "warning", text)
+	}
 }

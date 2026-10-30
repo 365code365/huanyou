@@ -60,6 +60,7 @@ class XrayVpnService : VpnService() {
     private var restarts = 0
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        CrashCatcher.install(this)
         if (intent?.action == ACTION_DISCONNECT) {
             worker.execute { stopVpn() }
             return START_NOT_STICKY

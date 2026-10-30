@@ -1,6 +1,6 @@
 'use client'
 import { ApiOutlined, CrownOutlined, LineChartOutlined, MoneyCollectOutlined, UserOutlined } from '@ant-design/icons'
-import { Button, Col, Empty, Row, Spin, Table, Timeline } from 'antd'
+import { Alert, Button, Col, Empty, Row, Space, Spin, Table, Tag, Timeline } from 'antd'
 import Link from 'next/link'
 import { useEffect } from 'react'
 import { BarChart } from '@/components/BarChart'
@@ -9,7 +9,7 @@ import { PageCard } from '@/components/PageCard'
 import { StatCard } from '@/components/StatCard'
 import { useAsync } from '@/hooks/useAsync'
 import { api, type TrendPoint, type VpnNode } from '@/lib/api'
-import { bytes, dateTime, flag, yuan } from '@/lib/format'
+import { bytes, dateTime, expiryLevel, expiryText, flag, yuan } from '@/lib/format'
 import { colors } from '@/lib/theme'
 
 export default function DashboardPage() {
@@ -25,8 +25,29 @@ export default function DashboardPage() {
   const series = (k: keyof Omit<TrendPoint, 'day'>) => d.trend.map((p) => ({ label: p.day.slice(5), value: p[k] }))
   const s = d.stats
 
+  const expiring = d.expiring_nodes ?? []
   return (
     <div className="page">
+      {expiring.length > 0 && (
+        <Alert
+          type={expiring.some((n) => n.expired) ? 'error' : 'warning'}
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={`${expiring.length} 台服务器 7 天内到期，请及时续费`}
+          description={
+            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+              {expiring.map((n) => (
+                <div key={n.id}>
+                  <Tag color={n.expired ? 'error' : n.hours_left < 48 ? 'volcano' : 'orange'} bordered={false}>{expiryText(n.expires_at)}</Tag>
+                  <b>{n.name}</b> <span className="muted">{n.address} · {dateTime(n.expires_at)} 到期</span>
+                  {n.vendor && <span> · {n.vendor}</span>}
+                  {n.vendor_url && <a href={n.vendor_url} target="_blank" rel="noreferrer" style={{ marginLeft: 8 }}>去续费</a>}
+                </div>
+              ))}
+            </Space>
+          }
+        />
+      )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 16, marginBottom: 16 }}>
         <StatCard label="用户总数" value={s.users} sub={`今日 +${s.new_today}`} icon={<UserOutlined />} color={colors.brand} />
         <StatCard label="付费有效" value={s.paid_active} icon={<CrownOutlined />} color={colors.success} />
@@ -67,6 +88,14 @@ export default function DashboardPage() {
               columns={[
                 { title: '节点', render: (_, n) => <>{flag(n.region)} {n.name} <span className="muted">{n.id}</span></> },
                 { title: '地址', dataIndex: 'address' },
+                {
+                  title: '到期',
+                  width: 130,
+                  render: (_, n) => {
+                    const lv = expiryLevel(n.expires_at)
+                    return lv === 'none' ? <span className="muted">未设置</span> : <Tag bordered={false} color={lv === 'expired' ? 'error' : lv === 'soon' ? 'orange' : 'default'}>{expiryText(n.expires_at)}</Tag>
+                  },
+                },
                 { title: '状态', render: (_, n) => <NodeHealth status={n.status} disabled={n.disabled} /> },
                 { title: '可用率', width: 90, render: (_, n) => (n.status ? Math.round(n.status.uptime * 100) + '%' : '—') },
               ]}

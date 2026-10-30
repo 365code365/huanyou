@@ -52,7 +52,7 @@ func wipe(t *testing.T, driver, dsn string) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	tables := []string{"risk_rules", "user_ips", "lang_packs", "releases", "link_codes", "settings",
+	tables := []string{"crash_reports", "app_events", "risk_rules", "user_ips", "lang_packs", "releases", "link_codes", "settings",
 		"traffic_daily", "orders", "users", "schema_version"}
 	for _, tb := range tables {
 		q := "DROP TABLE IF EXISTS " + tb
@@ -272,6 +272,29 @@ func exercise(t *testing.T, st *Store) {
 		}
 	}
 
+	// Analytics and crashes.
+	today := now.Format("2006-01-02")
+	must(st.RecordEvents(ctx, []EventHit{
+		{Day: today, Event: "app_open", VKey: "u1", Platform: "android", Version: "1.2.1", Count: 2},
+		{Day: today, Event: "app_open", VKey: "u1", Platform: "android", Version: "1.2.1", Count: 1},
+		{Day: today, Event: "app_open", VKey: "dabc", Platform: "ios", Count: 1},
+		{Day: today, Event: "vpn_connected", VKey: "u1", Count: 4},
+	}))
+	ds, err := st.DailyStats(ctx, now, 7)
+	must(err)
+	if l := ds[len(ds)-1]; l.UV != 2 || l.Opens != 4 || l.Connects != 4 {
+		t.Fatalf("daily stats: %+v", l)
+	}
+	cid := CrashID("1.2.1", "dart", "boom", "a\nb")
+	must(st.RecordCrash(ctx, Crash{ID: cid, Kind: "dart", Message: "boom", Stack: "a\nb", AppVersion: "1.2.1"}, true))
+	must(st.RecordCrash(ctx, Crash{ID: cid, Kind: "dart", Message: "boom", Stack: "a\nb", AppVersion: "1.2.1"}, false))
+	cr, err := st.Crashes(ctx, false, 10)
+	must(err)
+	if len(cr) != 1 || cr[0].Count != 2 || cr[0].Users != 1 {
+		t.Fatalf("crashes: %+v", cr)
+	}
+	must(st.SetCrashResolved(ctx, cid, true))
+
 	// Delete a user with children everywhere.
 	must(st.DeleteUser(ctx, d1.ID))
 	if _, err := st.UserByID(ctx, d1.ID); err != ErrNotFound {
@@ -394,4 +417,39 @@ func dump(ctx context.Context, s *Store, t tableSpec) ([][]any, error) {
 		}
 	}
 	return out, rows.Err()
+}
+
+// TestRemoteUpgrade: a MySQL / PostgreSQL database created by the previous
+// version (schema v9) is upgraded in place on open.
+func TestRemoteUpgrade(t *testing.T) {
+	for _, drv := range []string{DriverMySQL, DriverPostgres} {
+		env := map[string]string{DriverMySQL: "VPN_TEST_MYSQL", DriverPostgres: "VPN_TEST_PG"}[drv]
+		dsn := os.Getenv(env)
+		if dsn == "" {
+			continue
+		}
+		wipe(t, drv, dsn)
+		db, err := sql.Open(map[string]string{DriverMySQL: "mysql", DriverPostgres: "pgx"}[drv], dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, stmt := range strings.Split(remoteSchema[drv], ";\n") {
+			if strings.TrimSpace(stmt) != "" {
+				if _, err := db.Exec(stmt); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		db.Exec(`CREATE TABLE schema_version (version INT NOT NULL)`)
+		db.Exec(`INSERT INTO schema_version (version) VALUES (9)`)
+		db.Close()
+		st, err := OpenDSN(drv, dsn)
+		if err != nil {
+			t.Fatalf("%s upgrade: %v", drv, err)
+		}
+		if _, err := st.Crashes(context.Background(), true, 1); err != nil {
+			t.Fatalf("%s crash table: %v", drv, err)
+		}
+		st.Close()
+	}
 }

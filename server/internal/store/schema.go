@@ -189,6 +189,106 @@ var sqliteMigrations = []migration{
 		updated_at INTEGER NOT NULL,
 		PRIMARY KEY (kind, value)
 	);`, post: backfillUserUIDs},
+	// v9 → v10: app analytics (visits / actions) and crash reports.
+	{sql: `CREATE TABLE app_events (
+		day        TEXT    NOT NULL,
+		event      TEXT    NOT NULL,
+		vkey       TEXT    NOT NULL,
+		platform   TEXT    NOT NULL DEFAULT '',
+		version    TEXT    NOT NULL DEFAULT '',
+		cnt        INTEGER NOT NULL DEFAULT 0,
+		updated_at INTEGER NOT NULL,
+		PRIMARY KEY (day, event, vkey)
+	);
+	CREATE INDEX app_events_event ON app_events(event, day);
+	CREATE INDEX app_events_updated ON app_events(updated_at);
+	CREATE TABLE crash_reports (
+		id          TEXT    PRIMARY KEY,
+		user_id     INTEGER NOT NULL DEFAULT 0,
+		platform    TEXT    NOT NULL DEFAULT '',
+		app_version TEXT    NOT NULL DEFAULT '',
+		device      TEXT    NOT NULL DEFAULT '',
+		os_version  TEXT    NOT NULL DEFAULT '',
+		kind        TEXT    NOT NULL DEFAULT '',
+		message     TEXT    NOT NULL DEFAULT '',
+		stack       TEXT    NOT NULL DEFAULT '',
+		cnt         INTEGER NOT NULL DEFAULT 0,
+		users       INTEGER NOT NULL DEFAULT 0,
+		first_at    INTEGER NOT NULL,
+		last_at     INTEGER NOT NULL,
+		resolved    INTEGER NOT NULL DEFAULT 0,
+		updated_at  INTEGER NOT NULL
+	);
+	CREATE INDEX crash_last ON crash_reports(last_at);`},
+}
+
+// remoteBaseVersion is the version remoteSchema creates; remoteUpgrades[d][i]
+// takes a MySQL / PostgreSQL database from remoteBaseVersion+i to +i+1.
+const remoteBaseVersion = 9
+
+var remoteUpgrades = map[string][]string{
+	DriverMySQL: {`
+CREATE TABLE IF NOT EXISTS app_events (
+	day        CHAR(10)    NOT NULL,
+	event      VARCHAR(40) NOT NULL,
+	vkey       VARCHAR(40) NOT NULL,
+	platform   VARCHAR(16) NOT NULL DEFAULT '',
+	version    VARCHAR(32) NOT NULL DEFAULT '',
+	cnt        BIGINT      NOT NULL DEFAULT 0,
+	updated_at BIGINT      NOT NULL,
+	PRIMARY KEY (day, event, vkey),
+	KEY app_events_event (event, day),
+	KEY app_events_updated (updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+CREATE TABLE IF NOT EXISTS crash_reports (
+	id          VARCHAR(64)   NOT NULL PRIMARY KEY,
+	user_id     BIGINT        NOT NULL DEFAULT 0,
+	platform    VARCHAR(16)   NOT NULL DEFAULT '',
+	app_version VARCHAR(32)   NOT NULL DEFAULT '',
+	device      VARCHAR(128)  NOT NULL DEFAULT '',
+	os_version  VARCHAR(64)   NOT NULL DEFAULT '',
+	kind        VARCHAR(16)   NOT NULL DEFAULT '',
+	message     VARCHAR(2000) NOT NULL DEFAULT '',
+	stack       MEDIUMTEXT    NOT NULL,
+	cnt         BIGINT        NOT NULL DEFAULT 0,
+	users       BIGINT        NOT NULL DEFAULT 0,
+	first_at    BIGINT        NOT NULL,
+	last_at     BIGINT        NOT NULL,
+	resolved    SMALLINT      NOT NULL DEFAULT 0,
+	updated_at  BIGINT        NOT NULL,
+	KEY crash_last (last_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin`},
+	DriverPostgres: {`
+CREATE TABLE IF NOT EXISTS app_events (
+	day        TEXT   NOT NULL,
+	event      TEXT   NOT NULL,
+	vkey       TEXT   NOT NULL,
+	platform   TEXT   NOT NULL DEFAULT '',
+	version    TEXT   NOT NULL DEFAULT '',
+	cnt        BIGINT NOT NULL DEFAULT 0,
+	updated_at BIGINT NOT NULL,
+	PRIMARY KEY (day, event, vkey)
+);
+CREATE INDEX IF NOT EXISTS app_events_event ON app_events(event, day);
+CREATE INDEX IF NOT EXISTS app_events_updated ON app_events(updated_at);
+CREATE TABLE IF NOT EXISTS crash_reports (
+	id          TEXT     PRIMARY KEY,
+	user_id     BIGINT   NOT NULL DEFAULT 0,
+	platform    TEXT     NOT NULL DEFAULT '',
+	app_version TEXT     NOT NULL DEFAULT '',
+	device      TEXT     NOT NULL DEFAULT '',
+	os_version  TEXT     NOT NULL DEFAULT '',
+	kind        TEXT     NOT NULL DEFAULT '',
+	message     TEXT     NOT NULL DEFAULT '',
+	stack       TEXT     NOT NULL DEFAULT '',
+	cnt         BIGINT   NOT NULL DEFAULT 0,
+	users       BIGINT   NOT NULL DEFAULT 0,
+	first_at    BIGINT   NOT NULL,
+	last_at     BIGINT   NOT NULL,
+	resolved    SMALLINT NOT NULL DEFAULT 0,
+	updated_at  BIGINT   NOT NULL
+);
+CREATE INDEX IF NOT EXISTS crash_last ON crash_reports(last_at)`},
 }
 
 // SchemaVersion is the current schema version of all dialects.
@@ -561,19 +661,31 @@ func (s *Store) migrateRemote(ctx context.Context) error {
 	if v == SchemaVersion {
 		return nil
 	}
-	if v != 0 {
-		// Place for future remote migrations (v → v+1 for each dialect).
+	if v != 0 && v < remoteBaseVersion {
 		return fmt.Errorf("不支持从数据库版本 %d 升级", v)
 	}
-	// Fresh database: create everything at the current version. DDL is not
-	// transactional on MySQL; every statement is idempotent so a failed run
-	// can simply be retried.
-	for _, stmt := range strings.Split(remoteSchema[s.d.name], ";\n") {
-		if stmt = strings.TrimSpace(stmt); stmt == "" {
-			continue
+	// DDL is not transactional on MySQL; every statement is idempotent so a
+	// failed run can simply be retried.
+	run := func(script string) error {
+		for _, stmt := range strings.Split(script, ";\n") {
+			if stmt = strings.TrimSpace(stmt); stmt == "" {
+				continue
+			}
+			if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+				return fmt.Errorf("schema: %w\n%s", err, firstLine(stmt))
+			}
 		}
-		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("create schema: %w\n%s", err, firstLine(stmt))
+		return nil
+	}
+	if v == 0 { // fresh database
+		if err := run(remoteSchema[s.d.name]); err != nil {
+			return err
+		}
+		v = remoteBaseVersion
+	}
+	for ; v < SchemaVersion; v++ {
+		if err := run(remoteUpgrades[s.d.name][v-remoteBaseVersion]); err != nil {
+			return fmt.Errorf("upgrade to v%d: %w", v+1, err)
 		}
 	}
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM schema_version`); err != nil {

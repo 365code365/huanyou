@@ -1,6 +1,12 @@
 // One function per admin endpoint. Pages import from here, never call fetch directly.
 import { download, downloadGet, http, stream, upload } from './http'
 import type {
+  AdsSettings,
+  Analytics,
+  AutoBan,
+  Crash,
+  GuardSettings,
+  PaymentSettings,
   DBDriver,
   DBInfo,
   DBSyncEvent,
@@ -141,6 +147,8 @@ export const api = {
     config: () => http.get<RiskConfig>('/risk/config'),
     saveConfig: (c: RiskConfig) => http.put<RiskConfig>('/risk/config', c),
     geo: (ip: string) => http.get<GeoLocation>('/risk/geo', { ip }),
+    autoBans: () => http.get<{ items: AutoBan[] }>('/risk/autobans'),
+    liftAutoBan: (ip: string) => http.del<{ ok: boolean }>(`/risk/autobans?ip=${encodeURIComponent(ip)}`),
   },
 
   segments: {
@@ -158,9 +166,35 @@ export const api = {
     switchTo: (driver: DBDriver, dsn: string) => http.post<{ ok: boolean; message: string }>('/database/switch', { driver, dsn }),
   },
 
+  analytics: {
+    get: (days: number) => http.get<Analytics>('/analytics', { days }),
+    crashes: (all: boolean) => http.get<{ items: Crash[] }>('/crashes', all ? { all: 1 } : undefined),
+    crash: (id: string) => http.get<Crash>(`/crashes/${id}`),
+    resolve: (id: string, resolved: boolean) => http.patch<{ ok: true }>(`/crashes/${id}`, { resolved }),
+  },
+
+  payment: {
+    keys: () => http.post<{ merchant_id: string; sign_key: string; enc_key: string }>('/payment/keys'),
+    testLink: () => http.post<{ url: string }>('/payment/test-link'),
+    doc: () => http.get<{ markdown: string }>('/payment/doc'),
+  },
+
+  ads: {
+    upload: (form: FormData) => upload<{ url: string; abs_url: string }>('/ads/upload', form),
+  },
+
   settings: {
-    get: () => http.get<{ settings: Settings; system: SystemInfo }>('/settings'),
+    get: () =>
+      http.get<{
+        settings: Settings
+        system: SystemInfo
+        payment: PaymentSettings
+        ads: AdsSettings
+        guard: GuardSettings
+        endpoints: { notify: string; query: string; return: string }
+      }>('/settings'),
     save: (s: Settings) => http.put<Settings>('/settings', s),
+    saveSection: <T,>(section: 'payment' | 'ads' | 'guard', body: T) => http.put<T>(`/settings/${section}`, body),
   },
 
   monitor: {

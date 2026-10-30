@@ -5,6 +5,7 @@ import '../../core/open_url.dart';
 import '../../state/app_scope.dart';
 import '../../theme/app_theme.dart';
 import '../../i18n/i18n.dart';
+import '../../core/analytics.dart';
 
 /// "应用" tab: backend-configured recommended apps, grouped by category.
 class AppsPage extends StatefulWidget {
@@ -21,6 +22,7 @@ class _AppsPageState extends State<AppsPage> {
   @override
   void initState() {
     super.initState();
+    Analytics.track('apps_view');
     _load();
   }
 
@@ -96,7 +98,10 @@ class _AppCard extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         key: Key('app-${app.id}'),
-        onTap: () => openUrl(Uri.parse(app.url)),
+        onTap: () {
+          Analytics.track('app_rec_open');
+          openUrl(Uri.parse(app.url));
+        },
         child: Padding(
           padding: const EdgeInsets.all(14),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -134,6 +139,6 @@ class _AppCard extends StatelessWidget {
         decoration: BoxDecoration(gradient: AppColors.brandGradient),
         alignment: Alignment.center,
         child: Text(app.name.characters.first,
-            style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+            style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700)),
       );
 }

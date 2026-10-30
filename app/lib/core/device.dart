@@ -28,6 +28,15 @@ class Device {
     }
   }
 
+  /// Phone model, e.g. "OPPO PLY110" (crash reports).
+  static Future<String> model() async {
+    try {
+      return await _ch.invokeMethod<String>('model') ?? '';
+    } catch (_) {
+      return Platform.isIOS ? 'iPhone' : '';
+    }
+  }
+
   static String get platform {
     if (Platform.isIOS) return 'ios';
     if (Platform.isAndroid) return 'android';

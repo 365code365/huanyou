@@ -116,7 +116,9 @@ func Build(p Params) (string, error) {
 	var outbounds []any
 	var proxyTags []string
 
-	if p.Mode == ModeCluster {
+	// Cluster uses every node; AI mode gets several stable nodes from the API
+	// and lets the leastPing balancer keep the AI traffic on a working one.
+	if p.Mode == ModeCluster || (p.Mode == ModeAI && len(p.Nodes) > 1) {
 		for _, n := range p.Nodes {
 			obs, tags := nodeOutbounds(n, p.UUID, "-"+n.ID)
 			outbounds = append(outbounds, obs...)

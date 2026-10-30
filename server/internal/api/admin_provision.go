@@ -72,6 +72,10 @@ type provisionBody struct {
 	Name       string `json:"name"`      // optional, auto from geo if empty
 	Region     string `json:"region"`    // optional, auto from geo if empty
 	ServerName string `json:"server_name"`
+	// Rental info, required for new nodes (provision): expiry and vendor.
+	ExpiresAt *time.Time `json:"expires_at"`
+	Vendor    string     `json:"vendor"`
+	VendorURL string     `json:"vendor_url"`
 }
 
 func (b provisionBody) target() provision.Target {
@@ -139,7 +143,10 @@ func (s *Server) adminProvisionNode(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "请填写 SSH 密码或私钥")
 		return
 	}
-
+	if body.ExpiresAt == nil {
+		writeErr(w, http.StatusBadRequest, "no_expiry", "请选择服务器到期时间")
+		return
+	}
 	// Architecture-matched binaries to upload.
 	bins, err := s.loadNodeBinaries()
 	if err != nil {
@@ -255,6 +262,7 @@ func (s *Server) adminProvisionNode(w http.ResponseWriter, r *http.Request) {
 		ID: nodeID, Name: name, Region: region, Address: host,
 		Token: tok, RealityPrivateKey: priv, RealityTarget: realityTarget,
 		VisionPort: visionPort, XHTTPPath: "/" + xpath[:12], Weight: 1,
+		ExpiresAt: body.ExpiresAt, Vendor: strings.TrimSpace(body.Vendor), VendorURL: strings.TrimSpace(body.VendorURL),
 		Reality: config.RealityPublic{
 			PublicKey: pub, ShortID: sid, ServerName: serverName, Fingerprint: "chrome",
 		},

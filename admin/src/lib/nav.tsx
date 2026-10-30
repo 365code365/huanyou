@@ -9,6 +9,7 @@ import {
   ProfileOutlined,
   SafetyOutlined,
   PieChartOutlined,
+  FundOutlined,
   HddOutlined,
   TranslationOutlined,
   SettingOutlined,
@@ -23,6 +24,7 @@ import type { ReactNode } from 'react'
  */
 export const nav: { path: string; title: string; icon: ReactNode }[] = [
   { path: '/', title: '概览', icon: <DashboardOutlined /> },
+  { path: '/analytics', title: '数据统计', icon: <FundOutlined /> },
   { path: '/users', title: '用户', icon: <UserOutlined /> },
   { path: '/orders', title: '订单', icon: <ProfileOutlined /> },
   { path: '/segments', title: '用户分群', icon: <PieChartOutlined /> },

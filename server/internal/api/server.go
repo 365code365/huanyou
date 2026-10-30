@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/mail"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +41,9 @@ type Server struct {
 	risk      riskState    // blocked IPs / users (risk.go)
 	ips       ipRecorder   // buffered IP records (risk.go)
 	segCache  segmentCache // user segmentation (segments.go)
+	gw        gatewayCache // payment link gateway (gateway.go)
+	guard     guardState   // request flood / abuse protection (guard.go)
+	events    eventBuffer  // app analytics (analytics.go)
 }
 
 func New(cfg *config.API, live *config.LiveCatalog, st *store.Store, issuer *auth.Issuer, mon *monitor.Monitor) (*Server, error) {
@@ -94,12 +98,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/pay/notify/{provider}", s.handleNotify)
 	mux.HandleFunc("GET /pay/return", s.handleReturn)
 	mux.HandleFunc("GET /pay/mock/{id}", s.handleMockPay)
+	mux.HandleFunc("POST "+gatewayNotifyPath, s.handleGatewayNotify)
+	mux.HandleFunc("POST "+gatewayQueryPath, s.handleGatewayQuery)
+
+	mux.HandleFunc("POST /api/v1/events", s.handleEvents)
+	mux.HandleFunc("POST /api/v1/crash", s.handleCrash)
+	mux.HandleFunc("GET /api/v1/ads", s.handleAds)
+	mux.HandleFunc("GET /dl/ads/{name}", s.handleAdImage)
 
 	mux.HandleFunc("GET /internal/v1/users", s.handleNodeUsers)
 	mux.HandleFunc("POST /internal/v1/traffic", s.handleTraffic)
 
 	s.registerAdmin(mux)
-	return withRecover(s.withRiskIP(mux))
+	return withRecover(s.withGuard(s.withRiskIP(mux)))
 }
 
 // ---- app endpoints ----
@@ -348,6 +359,12 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request, u *store.
 	primary := healthy[0]
 	if mode == profile.ModeCluster {
 		p.Nodes = healthy
+	} else if mode == profile.ModeAI {
+		// AI 优先: AI services drop long sessions on any hiccup, so pick the
+		// most stable nodes (uptime first, then latency) rather than the
+		// one the user selected; up to 3 for automatic failover.
+		p.Nodes = s.stableNodes(healthy, 3)
+		primary = p.Nodes[0]
 	} else {
 		if id := r.URL.Query().Get("node"); id != "" {
 			primary = cat.NodeByID(id)
@@ -654,4 +671,31 @@ func (l *ipLimiter) gc(ctx context.Context) {
 			l.mu.Unlock()
 		}
 	}
+}
+
+// stableNodes orders nodes by monitored stability: uptime over the last hour,
+// then current load, then latency from the API. Returns at most n.
+func (s *Server) stableNodes(nodes []*config.Node, n int) []*config.Node {
+	out := append([]*config.Node(nil), nodes...)
+	if s.monitor != nil {
+		st := make(map[string]monitor.Status, len(out))
+		for _, x := range out {
+			st[x.ID] = s.monitor.Status(x.ID)
+		}
+		sort.SliceStable(out, func(i, j int) bool {
+			a, b := st[out[i].ID], st[out[j].ID]
+			// Uptime differences under 2 % are noise.
+			if d := a.Uptime - b.Uptime; d > 0.02 || d < -0.02 {
+				return d > 0
+			}
+			if a.ActiveUsers/10 != b.ActiveUsers/10 {
+				return a.ActiveUsers < b.ActiveUsers
+			}
+			return a.LatencyMs < b.LatencyMs
+		})
+	}
+	if len(out) > n {
+		out = out[:n]
+	}
+	return out
 }

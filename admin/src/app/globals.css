@@ -81,3 +81,20 @@ body {
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 16px;
 }
+/* Sidebar scrollbar: thin, dark, only when needed. */
+.console-sider { scrollbar-width: thin; scrollbar-color: #3a3d45 transparent; }
+.console-sider .ant-layout-sider-children { display: flex; flex-direction: column; }
+/* Markdown docs */
+.md { font-size: 14px; line-height: 1.75; color: #22252b; }
+.md .md-h { margin: 22px 0 10px; font-weight: 650; }
+.md h2.md-h { font-size: 20px; }
+.md h3.md-h { font-size: 16px; }
+.md code { background: #f0eee8; padding: 1px 5px; border-radius: 4px; font-size: 12.5px; font-family: ui-monospace, Menlo, monospace; }
+.md .md-code { background: #15171c; color: #e8e6e0; padding: 12px 14px; border-radius: 10px; overflow-x: auto; font-size: 12.5px; line-height: 1.6; }
+.md .md-table { border-collapse: collapse; width: 100%; margin: 8px 0 14px; font-size: 13px; }
+.md .md-table th, .md .md-table td { border: 1px solid #e8e6e0; padding: 6px 10px; text-align: left; vertical-align: top; }
+.md .md-table th { background: #f7f6f2; font-weight: 600; }
+.md ul, .md ol { padding-left: 20px; }
+.md hr { border: 0; border-top: 1px solid #e8e6e0; margin: 20px 0; }
+.form-section { margin: 18px 0 14px; padding-bottom: 6px; border-bottom: 1px solid #efede7; font-size: 14px; font-weight: 650; color: #22252b; }
+.form-section:first-child { margin-top: 6px; }

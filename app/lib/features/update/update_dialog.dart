@@ -5,6 +5,7 @@ import '../../core/format.dart';
 import '../../core/updater.dart';
 import '../../theme/app_theme.dart';
 import '../../i18n/i18n.dart';
+import '../../core/analytics.dart';
 
 /// Shows the update dialog. A forced update can't be dismissed.
 Future<void> showUpdateDialog(BuildContext context, AppUpdate u) => showDialog<void>(
@@ -29,6 +30,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
   Future<void> _install() async {
     setState(() => _error = null);
     try {
+      Analytics.track('update_open');
       await Updater.install(widget.update);
       if (!mounted) return;
       if (widget.update.force) {
@@ -74,12 +76,12 @@ class _UpdateDialogState extends State<_UpdateDialog> {
         Padding(
           padding: EdgeInsets.only(top: 10),
           child: Text(tr('将在浏览器中打开下载，下载完成后点击安装包即可安装。'),
-              style: TextStyle(color: AppColors.sub, fontSize: 12.5, height: 1.5)),
+              style: TextStyle(color: AppColors.sub, fontSize: 13, height: 1.5)),
         ),
         if (_opened)
           Padding(
             padding: EdgeInsets.only(top: 8),
-            child: Text(tr('已打开浏览器。若没有开始下载，可再点一次。'), style: TextStyle(color: AppColors.signal, fontSize: 12.5)),
+            child: Text(tr('已打开浏览器。若没有开始下载，可再点一次。'), style: TextStyle(color: AppColors.signal, fontSize: 13)),
           ),
         if (_error != null)
           Padding(

@@ -88,6 +88,21 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	a("POST /admin/api/clone", s.adminClone)
 
 	s.registerAdminRisk(a)
+	a("GET /admin/api/analytics", s.adminAnalytics)
+	a("GET /admin/api/crashes", s.adminCrashes)
+	a("GET /admin/api/crashes/{id}", s.adminCrash)
+	a("PATCH /admin/api/crashes/{id}", s.adminResolveCrash)
+	a("PUT /admin/api/settings/{section}", s.adminPutSection)
+	a("POST /admin/api/ads/upload", s.adminAdUpload)
+	a("POST /admin/api/payment/keys", s.adminGatewayKeys)
+	a("POST /admin/api/payment/test-link", s.adminGatewayTest)
+	a("GET /admin/api/payment/doc", s.adminPaymentDoc)
+	a("GET /admin/api/risk/autobans", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"items": s.autoBans()})
+	})
+	a("DELETE /admin/api/risk/autobans", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": s.liftAutoBan(r.URL.Query().Get("ip"))})
+	})
 	s.registerAdminDB(a)
 
 	a("GET /admin/api/settings", s.adminGetSettings)
@@ -159,12 +174,21 @@ func (s *Server) adminDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		nodes = append(nodes, v)
 	}
+	expiring := []map[string]any{}
+	for _, n := range cat.ExpiringNodes(now, 7*24*time.Hour) {
+		expiring = append(expiring, map[string]any{
+			"id": n.ID, "name": n.Name, "address": n.Address, "expires_at": n.ExpiresAt,
+			"vendor": n.Vendor, "vendor_url": n.VendorURL, "expired": !n.ExpiresAt.After(now),
+			"hours_left": int(n.ExpiresAt.Sub(now).Hours()),
+		})
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"stats":        stats,
-		"trend":        trend,
-		"nodes":        nodes,
-		"nodes_online": online,
-		"events":       s.monitor.Events(10),
+		"stats":          stats,
+		"trend":          trend,
+		"nodes":          nodes,
+		"nodes_online":   online,
+		"events":         s.monitor.Events(10),
+		"expiring_nodes": expiring,
 	})
 }
 
@@ -643,6 +667,13 @@ func (s *Server) adminGetSettings(w http.ResponseWriter, _ *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"settings": settingsOf(c),
+		"payment":  c.Payment,
+		"ads":      c.Ads,
+		"guard":    c.Guard,
+		"endpoints": map[string]string{
+			"notify": s.cfg.PublicURL + gatewayNotifyPath, "query": s.cfg.PublicURL + gatewayQueryPath,
+			"return": s.cfg.PublicURL + "/pay/return",
+		},
 		// Read-only: these come from api.json / environment.
 		"system": map[string]any{
 			"public_url":      s.cfg.PublicURL,

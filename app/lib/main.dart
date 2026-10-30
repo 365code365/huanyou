@@ -5,6 +5,10 @@ import 'core/config.dart';
 import 'features/shell/main_shell.dart';
 import 'state/app_controller.dart';
 import 'state/app_scope.dart';
+import 'dart:async';
+import 'dart:ui';
+
+import 'core/analytics.dart';
 import 'core/prefs.dart';
 import 'i18n/i18n.dart';
 import 'theme/app_theme.dart';
@@ -19,7 +23,21 @@ import 'widgets/bootstrap_gate.dart';
 //   features/  one folder per screen / flow
 
 Future<void> main() async {
+  // Every uncaught error (framework, async, platform) goes to the crash
+  // report, which the user can switch off in 我的 → 设置.
+  runZonedGuarded(_main, (e, s) => Analytics.reportError(e, s));
+}
+
+Future<void> _main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  FlutterError.onError = (d) {
+    FlutterError.presentError(d);
+    Analytics.reportError(d.exception, d.stack, kind: 'flutter');
+  };
+  PlatformDispatcher.instance.onError = (e, s) {
+    Analytics.reportError(e, s);
+    return true;
+  };
   // One secure-storage read for everything (no network), so the first frame
   // is already in the right language and palette.
   await Prefs.load();
@@ -51,6 +69,10 @@ class _VpnAppState extends State<VpnApp> with WidgetsBindingObserver {
     I18n.instance.addListener(_restyle);
     Appearance.instance.addListener(_restyle);
     widget.controller.init();
+    Analytics.init(widget.controller.api, widget.controller.session).then((_) {
+      Analytics.track('app_open');
+      Analytics.flush();
+    });
     I18n.instance.sync(widget.controller.api); // pick up new / updated language packs
   }
 
@@ -75,7 +97,12 @@ class _VpnAppState extends State<VpnApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) widget.controller.onResumed();
+    if (state == AppLifecycleState.resumed) {
+      Analytics.track('app_resume');
+      widget.controller.onResumed();
+    } else if (state == AppLifecycleState.paused) {
+      Analytics.flush(); // send what we have before the OS may stop us
+    }
   }
 
   @override
@@ -122,11 +149,10 @@ class _RootState extends State<_Root> {
   @override
   void initState() {
     super.initState();
-    // First launch plays the full intro while the account is provisioned.
-    // Returning users (token on file) only see a brief brand frame: their
-    // home screen is ready from the cached snapshot right away.
-    final returning = Prefs.get('token') != null;
-    Future.delayed(Duration(milliseconds: returning ? 350 : 1300), () {
+    // The brand intro (ring, orbiting dot, name, slogan) always plays in full
+    // (~1.5 s). The home screen is built behind it from the cached snapshot,
+    // so it is ready the moment the splash lifts.
+    Future.delayed(const Duration(milliseconds: 1500), () {
       if (mounted) setState(() => _introDone = true);
     });
   }

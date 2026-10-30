@@ -146,7 +146,7 @@ class _SocialChip extends StatelessWidget {
           Text(contact.name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 11.5, color: AppColors.sub)),
+              style: TextStyle(fontSize: 12, color: AppColors.sub)),
         ]),
       ),
     );

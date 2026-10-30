@@ -8,6 +8,7 @@ import '../home/home_page.dart';
 import '../me/me_page.dart';
 import '../update/update_dialog.dart';
 import '../../i18n/i18n.dart';
+import '../../widgets/ad_banner.dart';
 
 /// Bottom-tab shell with the floating liquid-glass bar. To add a tab, append to [_tabs].
 ///
@@ -33,8 +34,15 @@ class _MainShellState extends State<MainShell> {
   @override
   void initState() {
     super.initState();
-    // Check for a new version shortly after launch (quietly ignore failures).
-    Future.delayed(const Duration(seconds: 2), _checkUpdate);
+    // Ads, then the launch popup (if the admin enabled one), then the update
+    // check, so two dialogs never stack.
+    Future.delayed(const Duration(milliseconds: 900), () async {
+      if (!mounted) return;
+      await AdsStore.instance.load(AppScope.read(context).api);
+      if (mounted) await maybeShowAdPopup(context);
+      await Future.delayed(const Duration(milliseconds: 600));
+      await _checkUpdate();
+    });
   }
 
   Future<void> _checkUpdate() async {

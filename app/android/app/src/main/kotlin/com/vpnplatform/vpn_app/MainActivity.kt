@@ -23,6 +23,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        CrashCatcher.install(this)
         val messenger = flutterEngine.dartExecutor.binaryMessenger
 
         MethodChannel(messenger, "vpn_platform/vpn").setMethodCallHandler { call, result ->
@@ -55,6 +56,17 @@ class MainActivity : FlutterActivity() {
                 }
                 // Primary CPU ABI, so the update check offers the matching APK.
                 "abi" -> result.success(Build.SUPPORTED_ABIS.firstOrNull() ?: "")
+                "model" -> result.success("${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE})")
+                // Native crash saved by CrashCatcher in the previous run; returned once.
+                "takeCrash" -> result.success(CrashCatcher.take(this))
+                // App cache (images, WebView, temp files): size in bytes / clear.
+                "cacheSize" -> result.success(dirSize(cacheDir) + (externalCacheDir?.let { dirSize(it) } ?: 0L))
+                "clearCache" -> {
+                    val freed = dirSize(cacheDir) + (externalCacheDir?.let { dirSize(it) } ?: 0L)
+                    cacheDir.listFiles()?.forEach { it.deleteRecursively() }
+                    externalCacheDir?.listFiles()?.forEach { it.deleteRecursively() }
+                    result.success(freed)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -113,4 +125,7 @@ class MainActivity : FlutterActivity() {
             result.error("permission_denied", "需要允许 VPN 连接权限", null)
         }
     }
+
+    private fun dirSize(f: java.io.File): Long =
+        if (f.isFile) f.length() else (f.listFiles()?.sumOf { dirSize(it) } ?: 0L)
 }

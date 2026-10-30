@@ -25,6 +25,7 @@ type planView struct {
 	SpeedMbps     int     `json:"speed_mbps"`
 	OverQuotaKbps int     `json:"over_quota_kbps"`
 	Free          bool    `json:"free"`
+	Hot           bool    `json:"hot"`
 }
 
 func (s *Server) handlePlans(w http.ResponseWriter, _ *http.Request) {
@@ -36,13 +37,28 @@ func (s *Server) handlePlans(w http.ResponseWriter, _ *http.Request) {
 			continue
 		}
 		plans = append(plans, planView{p.ID, p.Name, p.Description, p.PriceCents, p.DurationDays,
-			p.TrafficGB, p.SpeedMbps, p.OverQuotaKbps, p.ID == cat.FreePlan})
+			p.TrafficGB, p.SpeedMbps, p.OverQuotaKbps, p.ID == cat.FreePlan, p.Hot})
 	}
+	methods := s.payMethods()
+	enabled := !cat.Payment.Disabled && len(methods) > 0
+	if !enabled {
+		methods = []payment.Method{} // nothing to pick: the app greys the buy buttons
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"plans": plans, "methods": methods,
+		"purchase": map[string]any{"enabled": enabled, "notice": cat.Payment.DisabledNotice}})
+}
+
+// payMethods lists the payment options: the link gateway first (when
+// configured in the admin panel), then the providers from api.json.
+func (s *Server) payMethods() []payment.Method {
 	methods := []payment.Method{}
+	if g := s.cat().Payment.Gateway; g.Enabled && s.gateway() != nil {
+		methods = append(methods, payment.Method{ID: gatewayMethod, Name: g.Name})
+	}
 	for _, p := range s.providers {
 		methods = append(methods, p.Methods()...)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"plans": plans, "methods": methods})
+	return methods
 }
 
 // providerFor maps a method id ("alipay", "epay.wxpay", "mock") to its provider.
@@ -65,13 +81,22 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request, u *st
 	if !decode(w, r, &req) {
 		return
 	}
-	plan := s.cat().Plan(req.PlanID)
-	if plan == nil || plan.Hidden || plan.ID == s.cat().FreePlan {
+	cat := s.cat()
+	if cat.Payment.Disabled {
+		writeErr(w, http.StatusForbidden, "purchase_disabled", cat.Payment.DisabledNotice)
+		return
+	}
+	plan := cat.Plan(req.PlanID)
+	if plan == nil || plan.Hidden || plan.ID == cat.FreePlan {
 		writeErr(w, http.StatusBadRequest, "bad_plan", "套餐不存在")
 		return
 	}
+	var gw *payment.Gateway
+	if req.Method == gatewayMethod && cat.Payment.Gateway.Enabled {
+		gw = s.gateway()
+	}
 	prov := s.providerFor(req.Method)
-	if prov == nil {
+	if prov == nil && gw == nil {
 		writeErr(w, http.StatusBadRequest, "bad_method", "不支持的支付方式")
 		return
 	}
@@ -89,10 +114,16 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request, u *st
 		s.internal(w, err)
 		return
 	}
-	payURL, err := prov.PayURL(payment.Order{ID: o.ID, AmountCents: o.AmountCents, Subject: plan.Name},
-		req.Method,
-		s.cfg.PublicURL+"/pay/notify/"+prov.Name(),
-		s.cfg.PublicURL+"/pay/return?order="+o.ID)
+	po := payment.Order{ID: o.ID, AmountCents: o.AmountCents, Subject: plan.Name}
+	var payURL string
+	if gw != nil {
+		payURL, err = gw.PayURL(po, s.cfg.PublicURL+gatewayNotifyPath, s.cfg.PublicURL+gatewayQueryPath,
+			s.cfg.PublicURL+"/pay/return?order="+o.ID)
+	} else {
+		payURL, err = prov.PayURL(po, req.Method,
+			s.cfg.PublicURL+"/pay/notify/"+prov.Name(),
+			s.cfg.PublicURL+"/pay/return?order="+o.ID)
+	}
 	if err != nil {
 		s.internal(w, err)
 		return
@@ -206,6 +237,7 @@ func (s *Server) completeOrder(ctx context.Context, n *payment.Notification) err
 	}
 	if granted {
 		slog.Info("order paid", "order", o.ID, "user", o.UserID, "plan", o.PlanID, "amount", payment.Yuan(o.AmountCents))
+		s.trackServer(o.UserID, "purchase_paid")
 	}
 	return nil
 }
