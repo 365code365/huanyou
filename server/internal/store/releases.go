@@ -12,7 +12,7 @@ var ErrBuildExists = errors.New("build already exists")
 // Release is an uploaded (or linked) app version.
 type Release struct {
 	ID       int64  `json:"id"`
-	Platform string `json:"platform"` // android | ios
+	Platform string `json:"platform"` // android | ios | windows | macos
 	Version  string `json:"version"`
 	Build    int64  `json:"build"`
 	Notes    string `json:"notes"`

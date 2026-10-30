@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -134,9 +135,10 @@ func localIPs() []string {
 // publicIP asks a couple of "what is my IP" services, cached for 10 minutes.
 func publicIP(ctx context.Context) string {
 	publicIPMu.Lock()
-	defer publicIPMu.Unlock()
-	if publicIPVal != "" && time.Since(publicIPAt) < 10*time.Minute {
-		return publicIPVal
+	cached, fresh := publicIPVal, publicIPVal != "" && time.Since(publicIPAt) < 10*time.Minute
+	publicIPMu.Unlock()
+	if fresh {
+		return cached
 	}
 	hc := &http.Client{Timeout: 4 * time.Second}
 	for _, u := range []string{"https://api.ipify.org", "https://ifconfig.me/ip", "https://ipv4.icanhazip.com"} {
@@ -149,11 +151,13 @@ func publicIP(ctx context.Context) string {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64))
 		resp.Body.Close()
 		if ip := strings.TrimSpace(string(b)); net.ParseIP(ip) != nil {
+			publicIPMu.Lock()
 			publicIPVal, publicIPAt = ip, time.Now()
+			publicIPMu.Unlock()
 			return ip
 		}
 	}
-	return publicIPVal
+	return cached
 }
 
 // resolveA asks public resolvers (not /etc/hosts or a local cache) where the
@@ -285,3 +289,50 @@ func binaryHash() string {
 	})
 	return binHashVal
 }
+
+// apiEndpoints is this API's host name and public addresses, for profiles to
+// send the app's own requests direct. Never blocks: the public IP is looked
+// up in the background and cached (local interface addresses cover servers
+// whose public IP is on an interface).
+func (s *Server) apiEndpoints() (hosts, ips []string) {
+	if u, err := url.Parse(s.cfg.PublicURL); err == nil && u.Hostname() != "" {
+		h := u.Hostname()
+		if ip := net.ParseIP(h); ip != nil {
+			if !ip.IsLoopback() && !ip.IsPrivate() {
+				ips = append(ips, h)
+			}
+		} else if h != "localhost" {
+			hosts = append(hosts, h)
+		}
+	}
+	seen := map[string]bool{}
+	add := func(ip string) {
+		p := net.ParseIP(ip)
+		if p == nil || p.To4() == nil || p.IsLoopback() || p.IsPrivate() || p.IsLinkLocalUnicast() || seen[ip] {
+			return
+		}
+		seen[ip] = true
+		ips = append(ips, ip)
+	}
+	for _, ip := range ips {
+		seen[ip] = true
+	}
+	for _, ip := range localIPs() {
+		add(ip)
+	}
+	publicIPMu.Lock()
+	pub, stale := publicIPVal, time.Since(publicIPAt) > 10*time.Minute
+	publicIPMu.Unlock()
+	add(pub)
+	if stale && publicIPRefreshing.CompareAndSwap(false, true) {
+		go func() {
+			defer publicIPRefreshing.Store(false)
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			publicIP(ctx)
+		}()
+	}
+	return hosts, ips
+}
+
+var publicIPRefreshing atomic.Bool

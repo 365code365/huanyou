@@ -18,19 +18,78 @@ import (
 	"strings"
 	"time"
 
+	"vpnplatform/server/internal/pkginfo"
 	"vpnplatform/server/internal/store"
 )
 
-// App releases: the admin uploads an APK / IPA (or links an external URL),
-// the app checks GET /api/v1/app/update, and the public download site lists
-// the latest build per platform.
+// App releases: the admin uploads a package (or links an external URL), the
+// app checks GET /api/v1/app/update, and the public download site lists the
+// latest build per platform.
 
 const maxPackageBytes = 600 << 20 // 600 MB
 
 var versionPattern = regexp.MustCompile(`^\d{1,4}(\.\d{1,4}){0,3}$`)
 
-// androidABIs are the CPU types Flutter's --split-per-abi produces ("" = universal APK).
-var androidABIs = map[string]string{"": "通用", "arm64-v8a": "64 位", "armeabi-v7a": "32 位", "x86_64": "x86_64"}
+// abiSpec is one CPU build a platform can publish.
+type abiSpec struct {
+	ABI   string // "" = universal / runs everywhere
+	Label string // download site, e.g. "64 位版"
+}
+
+// platformSpec describes how a platform's packages are published.
+type platformSpec struct {
+	Ext string
+	Zip bool // the package is a ZIP archive (APK, IPA, Windows zip)
+	// Inspect: version, build and ABI are read from the package itself
+	// (internal/pkginfo) instead of being typed in.
+	Inspect bool
+	// ABIs allowed, in download-site order (the first published one is the
+	// main download button).
+	ABIs []abiSpec
+}
+
+var platforms = map[string]platformSpec{
+	// Flutter's --split-per-abi APKs, or one universal APK.
+	"android": {Ext: ".apk", Zip: true, ABIs: []abiSpec{
+		{"", "通用版"}, {"arm64-v8a", "64 位版"}, {"armeabi-v7a", "32 位版（老款手机）"}, {"x86_64", "x86 版（模拟器 / 平板）"},
+	}},
+	"ios": {Ext: ".ipa", Zip: true, ABIs: []abiSpec{{"", ""}}},
+	// The zipped release folder from app/scripts/build_windows.ps1.
+	"windows": {Ext: ".zip", Zip: true, Inspect: true, ABIs: []abiSpec{
+		{pkginfo.ArchX64, "x64 版（Intel / AMD）"}, {pkginfo.ArchARM64, "ARM 版（骁龙等）"},
+	}},
+	// The drag-to-Applications disk image from app/scripts/build_macos.sh.
+	"macos": {Ext: ".dmg", Inspect: true, ABIs: []abiSpec{
+		{"", "通用版（Apple 芯片 + Intel）"}, {pkginfo.ArchARM64, "Apple 芯片版"}, {pkginfo.ArchX64, "Intel 版"},
+	}},
+}
+
+// knownPlatform reports whether p is an app platform (android, ios, windows, macos).
+func knownPlatform(p string) bool { _, ok := platforms[p]; return ok }
+
+// abiIndex is the ABI's position in p.ABIs (download-site order), -1 if not allowed.
+func (p platformSpec) abiIndex(abi string) int {
+	for i, a := range p.ABIs {
+		if a.ABI == abi {
+			return i
+		}
+	}
+	return -1
+}
+
+func (p platformSpec) allows(abi string) bool { return p.abiIndex(abi) >= 0 }
+
+func (p platformSpec) abiError() string {
+	var names []string
+	for _, a := range p.ABIs {
+		if a.ABI == "" {
+			names = append(names, "留空（通用）")
+		} else {
+			names = append(names, a.ABI)
+		}
+	}
+	return "CPU 架构只能是 " + strings.Join(names, "、")
+}
 
 func (s *Server) releaseDir() string { return filepath.Join(s.cfg.DownloadDir, "releases") }
 
@@ -105,7 +164,12 @@ func (s *Server) adminCreateRelease(w http.ResponseWriter, r *http.Request) {
 				writeErr(w, http.StatusBadRequest, "bad_request", "请先提交 platform 等字段，再提交文件")
 				return
 			}
-			path, size, sum, err := s.saveUpload(part)
+			spec, ok := platforms[rel.Platform]
+			if !ok {
+				writeErr(w, http.StatusBadRequest, "bad_platform", "平台只能是 android、ios、windows 或 macos")
+				return
+			}
+			path, size, sum, err := s.saveUpload(part, spec)
 			if err != nil {
 				writeErr(w, http.StatusBadRequest, "bad_package", err.Error())
 				return
@@ -136,14 +200,33 @@ func (s *Server) adminCreateRelease(w http.ResponseWriter, r *http.Request) {
 			rel.ABI = v
 		}
 	}
-	if _, ok := androidABIs[rel.ABI]; !ok || (rel.ABI != "" && rel.Platform != "android") {
-		writeErr(w, http.StatusBadRequest, "bad_abi", "CPU 架构只能是 arm64-v8a、armeabi-v7a、x86_64 或留空（通用）")
+	spec, ok := platforms[rel.Platform]
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad_platform", "平台只能是 android、ios、windows 或 macos")
+		return
+	}
+	if tmp != "" && spec.Inspect {
+		info, err := pkginfo.Inspect(rel.Platform, tmp)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "bad_package", "无法识别安装包："+err.Error())
+			return
+		}
+		// Typed-in values are optional; if given they must match the package.
+		if rel.Version != "" && rel.Version != info.Version {
+			writeErr(w, http.StatusBadRequest, "version_mismatch", fmt.Sprintf("填写的版本号 %s 与安装包里的 %s 不一致", rel.Version, info.Version))
+			return
+		}
+		if rel.Build != 0 && rel.Build != info.Build {
+			writeErr(w, http.StatusBadRequest, "build_mismatch", fmt.Sprintf("填写的构建号 %d 与安装包里的 %d 不一致", rel.Build, info.Build))
+			return
+		}
+		rel.Version, rel.Build, rel.ABI = info.Version, info.Build, info.ABI(rel.Platform)
+	}
+	if !spec.allows(rel.ABI) {
+		writeErr(w, http.StatusBadRequest, "bad_abi", spec.abiError())
 		return
 	}
 	switch {
-	case rel.Platform != "android" && rel.Platform != "ios":
-		writeErr(w, http.StatusBadRequest, "bad_platform", "平台只能是 android 或 ios")
-		return
 	case !versionPattern.MatchString(rel.Version):
 		writeErr(w, http.StatusBadRequest, "bad_version", "版本号格式应为 1.2.3")
 		return
@@ -161,7 +244,7 @@ func (s *Server) adminCreateRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if tmp != "" {
-		ext := map[string]string{"android": ".apk", "ios": ".ipa"}[rel.Platform]
+		ext := spec.Ext
 		rel.File = fmt.Sprintf("huanyou-%s-%s-%d%s", rel.Platform, rel.Version, rel.Build, ext)
 		if rel.ABI != "" {
 			rel.File = fmt.Sprintf("huanyou-%s-%s-%d-%s%s", rel.Platform, rel.Version, rel.Build, rel.ABI, ext)
@@ -194,9 +277,10 @@ func (s *Server) adminCreateRelease(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.releaseView(created))
 }
 
-// saveUpload streams a package to a temp file, checking it is a ZIP (APK and
-// IPA are both ZIP archives) and hashing it.
-func (s *Server) saveUpload(part *multipart.Part) (path string, size int64, sum string, err error) {
+// saveUpload streams a package to a temp file and hashes it. ZIP-based
+// packages are checked by their first bytes; the others (DMG) are checked by
+// pkginfo once saved.
+func (s *Server) saveUpload(part *multipart.Part, spec platformSpec) (path string, size int64, sum string, err error) {
 	if err := os.MkdirAll(s.releaseDir(), 0o755); err != nil {
 		return "", 0, "", err
 	}
@@ -210,10 +294,10 @@ func (s *Server) saveUpload(part *multipart.Part) (path string, size int64, sum 
 	h := sha256.New()
 	head := make([]byte, 4)
 	n, _ := io.ReadFull(part, head)
-	if n < 4 || string(head[:2]) != "PK" {
+	if spec.Zip && (n < 4 || string(head[:2]) != "PK") {
 		f.Close()
 		os.Remove(path)
-		return "", 0, "", errors.New("文件不是有效的 APK / IPA（不是 ZIP 格式）")
+		return "", 0, "", fmt.Errorf("文件不是有效的 %s 安装包（不是 ZIP 格式）", strings.ToUpper(strings.TrimPrefix(spec.Ext, ".")))
 	}
 	w := io.MultiWriter(f, h)
 	w.Write(head[:n])
@@ -262,8 +346,8 @@ func (s *Server) adminPatchRelease(w http.ResponseWriter, r *http.Request) {
 		cur.Published = *body.Published
 	}
 	if body.ABI != nil {
-		if _, ok := androidABIs[*body.ABI]; !ok || (*body.ABI != "" && cur.Platform != "android") {
-			writeErr(w, http.StatusBadRequest, "bad_abi", "CPU 架构只能是 arm64-v8a、armeabi-v7a、x86_64 或留空（通用）")
+		if spec := platforms[cur.Platform]; !spec.allows(*body.ABI) {
+			writeErr(w, http.StatusBadRequest, "bad_abi", spec.abiError())
 			return
 		}
 		cur.ABI = *body.ABI
@@ -298,19 +382,25 @@ func (s *Server) adminDeleteRelease(w http.ResponseWriter, r *http.Request) {
 // ---- app ----
 
 // handleAppUpdate: GET /api/v1/app/update?platform=android&build=3&abi=arm64-v8a
+// abi is the device CPU (desktop: arm64 / x86_64).
 func (s *Server) handleAppUpdate(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	platform := q.Get("platform")
-	if platform != "android" && platform != "ios" {
-		writeErr(w, http.StatusBadRequest, "bad_platform", "platform 只能是 android 或 ios")
+	spec, ok := platforms[platform]
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad_platform", "platform 只能是 android、ios、windows 或 macos")
 		return
 	}
 	build, _ := strconv.ParseInt(q.Get("build"), 10, 64)
 	abi := q.Get("abi")
-	if _, ok := androidABIs[abi]; !ok {
+	if !spec.allows(abi) {
 		abi = ""
 	}
 	latest, err := s.store.LatestRelease(r.Context(), platform, abi)
+	if errors.Is(err, store.ErrNotFound) && spec.Inspect && abi == pkginfo.ArchARM64 {
+		// ARM desktops run x64 builds too (Windows on ARM emulation, Rosetta).
+		latest, err = s.store.LatestRelease(r.Context(), platform, pkginfo.ArchX64)
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		writeJSON(w, http.StatusOK, map[string]any{"has_update": false})
 		return
@@ -340,11 +430,12 @@ func (s *Server) handleAppUpdate(w http.ResponseWriter, r *http.Request) {
 
 // ---- files ----
 
-var releaseFile = regexp.MustCompile(`^huanyou-(android|ios)-[0-9.]+-\d+(-(arm64-v8a|armeabi-v7a|x86_64))?\.(apk|ipa)$`)
+var releaseFile = regexp.MustCompile(`^huanyou-(android|ios|windows|macos)-[0-9.]+-\d+(-(arm64-v8a|armeabi-v7a|x86_64|arm64))?\.(apk|ipa|zip|dmg)$`)
 
 // handleReleaseFile: GET /dl/releases/{name}
 func (s *Server) handleReleaseFile(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	allowSlowDownload(w)
 	if !releaseFile.MatchString(name) {
 		http.NotFound(w, r)
 		return
@@ -356,6 +447,10 @@ func (s *Server) handleReleaseFile(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasSuffix(name, ".apk") {
 		w.Header().Set("Content-Type", "application/vnd.android.package-archive")
+	} else if strings.HasSuffix(name, ".zip") {
+		w.Header().Set("Content-Type", "application/zip")
+	} else if strings.HasSuffix(name, ".dmg") {
+		w.Header().Set("Content-Type", "application/x-apple-diskimage")
 	} else {
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}
@@ -391,3 +486,10 @@ var manifestTmpl = template.Must(template.New("m").Parse(`<?xml version="1.0" en
 <key>bundle-version</key><string>{{.Version}}</string><key>kind</key><string>software</string>
 <key>title</key><string>{{.Title}}</string></dict>
 </dict></array></dict></plist>`))
+
+// allowSlowDownload lifts the server's 30 s write timeout for a package
+// download: a 36 MB DMG takes minutes on a slow connection, and the timeout
+// cut such downloads off mid-file.
+func allowSlowDownload(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(2 * time.Hour))
+}

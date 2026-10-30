@@ -296,7 +296,7 @@ export interface Release {
   bundle_id: string
   force: boolean
   published: boolean
-  abi: string // Android CPU type: arm64-v8a | armeabi-v7a | x86_64 | "" (universal)
+  abi: string // CPU build: Android arm64-v8a | armeabi-v7a | x86_64, desktop arm64 | x86_64; "" = universal
   created_at: string
   download_url: string
 }

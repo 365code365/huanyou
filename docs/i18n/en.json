@@ -305,6 +305,12 @@
   "集群模式 · 自动连接最优节点，断线自动切换（{0}/{1} 可用）": "Cluster mode · Connects to the best server and switches automatically ({0}/{1} available)",
   "需要相册权限才能保存": "Photo access is needed to save",
   "领取": "Claim",
-  "首页": "Home"
+  "首页": "Home",
+  "platform 只能是 android、ios、windows 或 macos": "platform must be android, ios, windows or macos",
+  "取消连接": "Cancel connection",
+  "启动超时，请重试": "Startup timed out, please try again",
+  "正在取消": "Cancelling",
+  "缺少连接组件 huanyou-core，请重新安装": "The huanyou-core component is missing, please reinstall",
+  "再次点按可取消": "Tap again to cancel"
  }
 }

@@ -174,7 +174,7 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	platform := body.Platform
-	if platform != "ios" && platform != "android" {
+	if !knownPlatform(platform) {
 		platform = ""
 	}
 	existing, lookErr := s.store.UserByDeviceID(r.Context(), id)
@@ -341,6 +341,7 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request, u *store.
 	}
 	mode := profile.ParseMode(r.URL.Query().Get("mode"))
 	p := profile.Params{UUID: u.UUID, Mode: mode, AIDomains: cat.AIDomains}
+	p.DirectDomains, p.DirectIPs = s.apiEndpoints()
 
 	// Prefer nodes the monitor sees as online; fall back to all enabled nodes.
 	healthy := enabled

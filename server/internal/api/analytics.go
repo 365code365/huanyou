@@ -121,7 +121,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	platform := body.Platform
-	if platform != "android" && platform != "ios" {
+	if !knownPlatform(platform) {
 		platform = ""
 	}
 	version := clip(body.Version, 32)

@@ -124,3 +124,6 @@ body {
 .expiry-orange b { color: #d46b08; }
 .expiry-gold b { color: #ad8b00; }
 .expiry-chip.ant-tag-checkable-checked b { color: inherit; }
+/* FoldAlert: compact one-line alert with a fold toggle. */
+.fold-alert .ant-alert-action { align-self: center; margin-inline-start: 8px; }
+.fold-alert:not(:has(.ant-alert-description)) .ant-alert-icon { font-size: 16px; }

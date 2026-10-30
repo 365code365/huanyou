@@ -56,6 +56,11 @@ type Params struct {
 	Mode      Mode
 	Nodes     []*config.Node // one for direct/ai/global; all enabled for cluster
 	AIDomains []string       // used only in ai mode
+	// The API's own host names and addresses: the app's requests (and the
+	// download site) go straight there, not through a node on the other side
+	// of the world, and the host is resolved by the system, not over DoH.
+	DirectDomains []string
+	DirectIPs     []string
 }
 
 // nodeOutbounds returns the outbound definitions and their tags for one node.
@@ -145,7 +150,16 @@ func Build(p Params) (string, error) {
 		map[string]any{"ip": []string{TunDNS + "/32"}, "outboundTag": "block"},
 		map[string]any{"ip": PrivateCIDRs, "outboundTag": "direct"},
 	}
-
+	if len(p.DirectDomains) > 0 {
+		full := make([]string, 0, len(p.DirectDomains))
+		for _, d := range p.DirectDomains {
+			full = append(full, "full:"+d)
+		}
+		rules = append(rules, map[string]any{"domain": full, "outboundTag": "direct"})
+	}
+	if len(p.DirectIPs) > 0 {
+		rules = append(rules, map[string]any{"ip": p.DirectIPs, "outboundTag": "direct"})
+	}
 	switch p.Mode {
 	case ModeAI:
 		// Only AI domains go through the proxy; everything else is direct.
@@ -176,11 +190,7 @@ func Build(p Params) (string, error) {
 		// DNS over HTTPS, routed through the tunnel (dns-module -> proxy rule):
 		// neither the local network nor the node's upstream ISP sees the
 		// queried names. IP-literal endpoints need no bootstrap resolution.
-		"dns": map[string]any{
-			"tag":           "dns-module",
-			"queryStrategy": "UseIPv4",
-			"servers":       []string{"https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"},
-		},
+		"dns": dnsConfig(p.DirectDomains),
 		"inbounds": []any{map[string]any{
 			"tag":      "tun-in",
 			"protocol": "tun",
@@ -214,4 +224,19 @@ func Build(p Params) (string, error) {
 		return "", fmt.Errorf("marshal profile: %w", err)
 	}
 	return string(b), nil
+}
+
+// dnsConfig: DNS over HTTPS through the tunnel, except the API's own host,
+// which the system resolver answers (fast, and it is our own domain).
+func dnsConfig(direct []string) map[string]any {
+	servers := []any{}
+	if len(direct) > 0 {
+		full := make([]string, 0, len(direct))
+		for _, d := range direct {
+			full = append(full, "full:"+d)
+		}
+		servers = append(servers, map[string]any{"address": "localhost", "domains": full, "skipFallback": true})
+	}
+	servers = append(servers, "https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query")
+	return map[string]any{"tag": "dns-module", "queryStrategy": "UseIPv4", "servers": servers}
 }

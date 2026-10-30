@@ -40,7 +40,7 @@ type User struct {
 	InvitedBy    int64     // user id of the inviter, 0 = none
 	Note         string    // admin note
 	DeviceID     string    // stable per-device identity (keychain / SSAID); "" if none
-	Platform     string    // "ios" | "android" | "" — informational
+	Platform     string    // "ios" | "android" | "windows" | "macos" | "" — informational
 	PrimaryID    int64     // if non-zero, this device shares the plan of user PrimaryID
 	CreatedAt    time.Time
 }
@@ -276,7 +276,7 @@ func (s *Store) UserByDeviceID(ctx context.Context, deviceID string) (*User, err
 }
 
 // CreateDeviceUser creates an account tied to a stable device identity, with no
-// email or password. platform is informational ("ios"/"android").
+// email or password. platform is informational ("ios"/"android"/"windows"/"macos").
 func (s *Store) CreateDeviceUser(ctx context.Context, deviceID, platform string) (*User, error) {
 	for attempt := 0; ; attempt++ {
 		uid, vless, ref, err := newUserIDs()

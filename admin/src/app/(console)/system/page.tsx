@@ -3,6 +3,7 @@ import { CheckCircleFilled, CloudDownloadOutlined, CloudServerOutlined, CloseCir
 import { Alert, App, Button, Checkbox, Col, Descriptions, Form, Input, InputNumber, Progress, Row, Segmented, Space, Switch, Tag, Upload } from 'antd'
 import type { UploadFile } from 'antd'
 import { useEffect, useRef, useState } from 'react'
+import { FoldAlert } from '@/components/FoldAlert'
 import { PageCard } from '@/components/PageCard'
 import { useAsync } from '@/hooks/useAsync'
 import { api, type ServerInfo } from '@/lib/api'
@@ -251,11 +252,12 @@ function CloneCard() {
       {phase === 'form' ? (
         <Form form={form} layout="vertical" requiredMark={false}
           initialValues={{ port: 22, user: 'root', mode: 'config', keep_nodes: false }}>
-          <Alert
+          <FoldAlert
+            id="clone_help"
             type="info"
             showIcon
-            style={{ marginBottom: 14 }}
-            message="把本系统（程序 + 数据）一键部署到另一台全新服务器，自动申请 HTTPS 证书。"
+            style={{ marginBottom: 14, paddingBlock: 8 }}
+            message="把本系统（程序 + 数据）一键部署到另一台服务器，自动申请 HTTPS 证书"
             description={<>准备：一台 Debian / Ubuntu（x86_64，80 和 443 端口空闲；已装本系统节点的服务器也可以，节点会自动与后台共用 443，继续可用）。<br />
               · 新域名：先把新域名的 A 记录解析到新服务器（不要开 CDN 代理）。<br />
               · 服务迁移（域名不变）：域名填当前域名 {currentDomain && <b>{currentDomain}</b>}，克隆完成后再把解析改到新服务器。</>}

@@ -11,6 +11,7 @@ import { api, type VpnNode } from '@/lib/api'
 import { bytes, dateTime, errMsg, expiryText, flag } from '@/lib/format'
 import { ProvisionModal } from './ProvisionModal'
 import { RentalFields } from '@/components/ExpiryField'
+import { FoldAlert } from '@/components/FoldAlert'
 
 const blank = (): VpnNode => ({
   id: '', name: '', region: 'US', address: '', token: '', reality_target: '', vision_port: 443, xhttp_path: '',
@@ -235,7 +236,9 @@ export default function NodesPage() {
           )}
         </div>
         <div className="toolbar" style={{ gap: 8 }}>
-          <span className="muted"><ClockCircleOutlined /> 到期统计：</span>
+          <Tooltip title="按服务器到期时间统计，点击筛选。已过期的节点不再下发给 App（节点列表、智能 / 集群 / AI 线路），也不再做在线检测。">
+            <span className="muted" style={{ cursor: 'help' }}><ClockCircleOutlined /> 到期统计：</span>
+          </Tooltip>
           {buckets.map((b) => {
             const n = count((x) => inBucket(x, b.key))
             const on = bucketF === b.key
@@ -253,14 +256,21 @@ export default function NodesPage() {
             )
           })}
           {bucketF && <Button type="link" size="small" onClick={() => setBucketF(undefined)}>清除筛选</Button>}
-          <span className="muted" style={{ fontSize: 12 }}>已过期的节点不再下发给 App（节点列表、智能 / 集群 / AI 线路），也不再做在线检测</span>
         </div>
         {expiring.length > 0 && (
-          <Alert
+          <FoldAlert
+            id="nodes_expiring"
             type={expiring.some((n) => expiryOf(n) !== 'soon') ? 'error' : 'warning'}
             showIcon
-            style={{ marginBottom: 12 }}
-            message={`${expiring.length} 个节点服务器即将到期或已过期，请及时续费或迁移`}
+            style={{ marginBottom: 12, paddingBlock: 8 }}
+            message={
+              <span>
+                {expiring.length} 个节点服务器即将到期或已过期：
+                <span className="muted" style={{ marginLeft: 4 }}>
+                  {expiring.map((n) => `${n.name}（${expiryText(n.expires_at)}）`).join('、')}
+                </span>
+              </span>
+            }
             description={expiring.map((n) => (
               <div key={n.id}>
                 <Tag bordered={false} color={expiryColor[expiryOf(n)]}>{expiryText(n.expires_at)}</Tag>

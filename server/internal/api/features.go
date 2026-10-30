@@ -171,6 +171,7 @@ var safeFile = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$`)
 // handleDownloadFile serves files (the Android APK) from download_dir.
 func (s *Server) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	allowSlowDownload(w)
 	if !safeFile.MatchString(name) || strings.Contains(name, "..") {
 		http.NotFound(w, r)
 		return

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -24,35 +25,33 @@ type siteBuild struct {
 	Size    string
 	Notes   []string
 	URL     string
-	Others  []siteVariant // other CPU builds of the same version (Android)
+	Label   string        // CPU build of URL when there are several, e.g. "x64 版（Intel / AMD）"
+	Others  []siteVariant // other CPU builds of the same version
 }
 
 type siteVariant struct {
 	Label, Size, URL string
 }
 
-var variantLabel = map[string]string{
-	"": "通用版", "arm64-v8a": "64 位版", "armeabi-v7a": "32 位版（老款手机）", "x86_64": "x86 版（模拟器 / 平板）",
-}
-
 // latestBuild resolves what the site offers for a platform, in priority:
 // the latest published release, the share-settings link, the legacy APK.
+// A build published for several CPUs shows the first ABI of the platform
+// spec as the main button and the others as extra links.
 func (s *Server) latestBuild(ctx context.Context, platform string) *siteBuild {
-	if r, err := s.store.LatestRelease(ctx, platform, ""); err == nil {
-		b := &siteBuild{Version: r.Version, Build: r.Build, Date: r.CreatedAt.Format("2006-01-02"), URL: s.releaseURL(r)}
-		if all, err := s.store.LatestBuilds(ctx, platform); err == nil {
-			for _, x := range all {
-				if x.ID != r.ID && x.Build == r.Build {
-					v := siteVariant{Label: variantLabel[x.ABI], URL: s.releaseURL(x)}
-					if x.Size > 0 {
-						v.Size = humanBytes(x.Size)
-					}
-					b.Others = append(b.Others, v)
-				}
-			}
+	spec := platforms[platform]
+	if all, err := s.store.LatestBuilds(ctx, platform); err == nil && len(all) > 0 {
+		sort.SliceStable(all, func(i, j int) bool { return spec.abiIndex(all[i].ABI) < spec.abiIndex(all[j].ABI) })
+		r := all[0]
+		b := &siteBuild{Version: r.Version, Build: r.Build, Date: r.CreatedAt.Format("2006-01-02"), URL: s.releaseURL(r), Size: sizeLabel(r.Size)}
+		if len(all) > 1 { // name the main download too when there is a choice
+			b.Label = spec.ABIs[max(0, spec.abiIndex(r.ABI))].Label
 		}
-		if r.Size > 0 {
-			b.Size = humanBytes(r.Size)
+		for _, x := range all[1:] {
+			label := x.ABI
+			if i := spec.abiIndex(x.ABI); i >= 0 {
+				label = spec.ABIs[i].Label
+			}
+			b.Others = append(b.Others, siteVariant{Label: label, URL: s.releaseURL(x), Size: sizeLabel(x.Size)})
 		}
 		for _, l := range strings.Split(r.Notes, "\n") {
 			if l = strings.TrimSpace(strings.TrimLeft(l, "-•*· ")); l != "" {
@@ -84,6 +83,13 @@ func (s *Server) androidURL() string {
 	return ""
 }
 
+func sizeLabel(n int64) string {
+	if n <= 0 {
+		return ""
+	}
+	return humanBytes(n)
+}
+
 // humanBytes formats a size like "116.9 MB".
 func humanBytes(n int64) string {
 	switch {
@@ -111,6 +117,8 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 	data := map[string]any{
 		"App": AppName, "Slogan": slogan, "Code": code,
 		"Android": s.latestBuild(r.Context(), "android"), "IOS": s.latestBuild(r.Context(), "ios"),
+		"Windows":     s.latestBuild(r.Context(), "windows"),
+		"Mac":         s.latestBuild(r.Context(), "macos"),
 		"InviteeDays": 0, "Year": time.Now().Year(),
 	}
 	if ref.Enabled && code != "" {
@@ -182,7 +190,7 @@ footer{width:100%;max-width:440px;margin:26px 0 30px;color:#66656a;font-size:11.
   {{with .Android}}<div class="meta">{{if .Date}}更新于 {{.Date}}{{end}}{{if .Size}} · {{.Size}}{{end}}</div>
    {{if .Notes}}<ul>{{range .Notes}}<li>{{.}}</li>{{end}}</ul>{{end}}
    <a class="btn primary" href="{{.URL}}" onclick="cp()">下载 Android 安装包</a>
-   {{range .Others}}<a class="alt" href="{{.URL}}" onclick="cp()">下载{{.Label}}{{if .Size}} · {{.Size}}{{end}}</a>{{end}}
+   {{range .Others}}<a class="alt" href="{{.URL}}" onclick="cp()">下载 {{.Label}}{{if .Size}} · {{.Size}}{{end}}</a>{{end}}
   {{else}}<a class="btn primary disabled">暂未提供</a>{{end}}
  </div>
  <div class="pkg">
@@ -193,6 +201,22 @@ footer{width:100%;max-width:440px;margin:26px 0 30px;color:#66656a;font-size:11.
    <div class="tip">请用 Safari 打开本页安装；仅已登记设备的测试人员可以安装。安装后如提示「未受信任的开发者」，到 设置 → 通用 → VPN 与设备管理 中信任。</div>
   {{else}}<a class="btn ghost disabled">iPhone 版暂未提供</a>{{end}}
  </div>
+ {{with .Windows}}<div class="pkg">
+  <h3>Windows 电脑{{if .Version}}<span>v{{.Version}} ({{.Build}})</span>{{end}}</h3>
+  <div class="meta">{{if .Date}}更新于 {{.Date}}{{end}}{{if .Size}} · {{.Size}}{{end}}</div>
+  {{if .Notes}}<ul>{{range .Notes}}<li>{{.}}</li>{{end}}</ul>{{end}}
+  <a class="btn ghost" href="{{.URL}}" onclick="cp()">下载 Windows {{or .Label "版"}}</a>
+  {{range .Others}}<a class="alt" href="{{.URL}}" onclick="cp()">下载 {{.Label}}{{if .Size}} · {{.Size}}{{end}}</a>{{end}}
+  <div class="tip">支持 Windows 10 / 11（64 位）。下载后解压，打开文件夹里的 Huanyou.exe；请勿只单独拷出 exe。连接后通过系统代理生效，浏览器和大多数软件无需设置。</div>
+ </div>{{end}}
+ {{with .Mac}}<div class="pkg">
+  <h3>Mac 电脑{{if .Version}}<span>v{{.Version}} ({{.Build}})</span>{{end}}</h3>
+  <div class="meta">{{if .Date}}更新于 {{.Date}}{{end}}{{if .Size}} · {{.Size}}{{end}}</div>
+  {{if .Notes}}<ul>{{range .Notes}}<li>{{.}}</li>{{end}}</ul>{{end}}
+  <a class="btn ghost" href="{{.URL}}" onclick="cp()">下载 Mac {{or .Label "版"}}</a>
+  {{range .Others}}<a class="alt" href="{{.URL}}" onclick="cp()">下载 {{.Label}}{{if .Size}} · {{.Size}}{{end}}</a>{{end}}
+  <div class="tip">支持 macOS 12 及以上（Apple 芯片和 Intel）。下载后双击打开，把「环游」拖进「应用程序」文件夹。首次打开如提示无法验证开发者，请右键点 App 选「打开」。需要使用管理员账户，连接后通过系统代理生效。</div>
+ </div>{{end}}
  <div class="tip">Android：下载完成后点击安装包安装；如被拦截，请在系统设置里允许「安装未知应用」。{{if .Code}}安装前请保持邀请码已复制，首次打开会自动识别。{{end}}</div>
 </div>
 <footer>{{.App}} 内部测试版 · 仅限受邀测试人员使用，不对外提供服务<br>© {{.Year}} {{.App}} 测试团队</footer>

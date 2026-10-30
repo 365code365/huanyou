@@ -1,31 +1,84 @@
 'use client'
-import { AndroidFilled, AppleFilled, AppleOutlined, CloudUploadOutlined, InboxOutlined, LinkOutlined, ReloadOutlined, WindowsFilled } from '@ant-design/icons'
-import { Alert, App, Button, Form, Input, InputNumber, Modal, Progress, Segmented, Select, Space, Switch, Table, Tag, Upload } from 'antd'
+import { AndroidFilled, AppleFilled, AppleOutlined, CloudUploadOutlined, DownOutlined, InboxOutlined, LinkOutlined, QuestionCircleOutlined, ReloadOutlined, WindowsFilled } from '@ant-design/icons'
+import { Alert, App, Button, Dropdown, Form, Input, InputNumber, Modal, Progress, Segmented, Select, Space, Switch, Table, Tag, Tooltip, Upload } from 'antd'
 import type { UploadFile } from 'antd'
-import { useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { PageCard } from '@/components/PageCard'
 import { useAction, useAsync } from '@/hooks/useAsync'
 import { api, type Release } from '@/lib/api'
 import { bytes, date, errMsg } from '@/lib/format'
 
-type Platform = 'android' | 'ios' | 'windows' | 'macos'
+type Platform = Release['platform']
 
-const platformLabel: Record<Platform, string> = { android: 'Android', ios: 'iOS', windows: 'Windows', macos: 'macOS' }
-/** Package each platform uploads; desktop zips come from app/scripts/build_windows.ps1 / build_macos.sh. */
-const packageExt: Record<Platform, string> = { android: '.apk', ios: '.ipa', windows: '.zip', macos: '.zip' }
-const platformIcon = (p: Platform) =>
-  p === 'ios' ? <AppleFilled style={{ fontSize: 18 }} />
-    : p === 'windows' ? <WindowsFilled style={{ fontSize: 18, color: '#0078d4' }} />
-      : p === 'macos' ? <AppleOutlined style={{ fontSize: 18 }} />
-      : <AndroidFilled style={{ fontSize: 18, color: '#3ddc84' }} />
+interface PlatformSpec {
+  label: string
+  icon: ReactNode
+  /** Package uploaded for this platform. */
+  ext: string
+  /** The server reads version, build and CPU from the uploaded package (server/internal/pkginfo). */
+  auto: boolean
+  /** CPU builds; value "" = universal. Must match `platforms` in server/internal/api/releases.go. */
+  abis: { value: string; label: string; short: string }[]
+  defaultAbi: string
+  /** Shown under the file picker. */
+  hint?: string
+}
 
-const abiOptions = [
-  { value: 'arm64-v8a', label: '64 位（arm64-v8a，绝大多数手机）' },
-  { value: 'armeabi-v7a', label: '32 位（armeabi-v7a，老款手机）' },
-  { value: '', label: '通用（包含所有架构）' },
-  { value: 'x86_64', label: 'x86_64（模拟器 / 少数平板）' },
-]
-const abiShort: Record<string, string> = { 'arm64-v8a': '64 位', 'armeabi-v7a': '32 位', x86_64: 'x86_64', '': '通用' }
+const iconStyle = { fontSize: 18 }
+const platforms: Record<Platform, PlatformSpec> = {
+  android: {
+    label: 'Android',
+    icon: <AndroidFilled style={{ ...iconStyle, color: '#3ddc84' }} />,
+    ext: '.apk',
+    auto: false,
+    abis: [
+      { value: 'arm64-v8a', label: '64 位（arm64-v8a，绝大多数手机）', short: '64 位' },
+      { value: 'armeabi-v7a', label: '32 位（armeabi-v7a，老款手机）', short: '32 位' },
+      { value: '', label: '通用（包含所有架构）', short: '通用' },
+      { value: 'x86_64', label: 'x86_64（模拟器 / 少数平板）', short: 'x86_64' },
+    ],
+    defaultAbi: 'arm64-v8a',
+  },
+  ios: {
+    label: 'iOS',
+    icon: <AppleFilled style={iconStyle} />,
+    ext: '.ipa',
+    auto: false,
+    abis: [],
+    defaultAbi: '',
+    hint: 'IPA 需为 Ad-hoc / 企业签名。下载页会生成 itms-services 安装链接，测试设备用 Safari 打开即可安装（设备需在描述文件里）。',
+  },
+  windows: {
+    label: 'Windows',
+    icon: <WindowsFilled style={{ ...iconStyle, color: '#0078d4' }} />,
+    ext: '.zip',
+    auto: true,
+    abis: [
+      { value: 'x86_64', label: 'x64（Intel / AMD）', short: 'x64' },
+      { value: 'arm64', label: 'ARM64（骁龙等）', short: 'ARM64' },
+    ],
+    defaultAbi: 'x86_64',
+    hint: '上传 app/scripts/build_windows.ps1 打出的 zip（含 Huanyou.exe、huanyou-core.exe 和运行库）。用户在下载页下载后解压运行。',
+  },
+  macos: {
+    label: 'macOS',
+    icon: <AppleOutlined style={iconStyle} />,
+    ext: '.dmg',
+    auto: true,
+    abis: [
+      { value: '', label: '通用（Apple 芯片 + Intel）', short: '通用' },
+      { value: 'arm64', label: 'Apple 芯片（M 系列）', short: 'Apple 芯片' },
+      { value: 'x86_64', label: 'Intel', short: 'Intel' },
+    ],
+    defaultAbi: '',
+    hint: '上传 app/scripts/build_macos.sh 打出的 dmg（打开后把 环游 拖进「应用程序」）。用 Developer ID 签名并公证后，用户打开时不会被系统拦截。',
+  },
+}
+/** Toolbar order, primary button last. */
+const order: Platform[] = ['macos', 'windows', 'ios', 'android']
+
+const abiShort = (r: Release) => platforms[r.platform].abis.find((a) => a.value === (r.abi ?? ''))?.short ?? r.abi
 /** Flutter --split-per-abi output names end in -<abi>-release.apk. */
 const abiFromName = (name: string) => ['arm64-v8a', 'armeabi-v7a', 'x86_64'].find((a) => name.includes(a)) ?? ''
 
@@ -43,6 +96,19 @@ export default function ReleasesPage() {
   const items = useMemo(() => data?.items ?? [], [data])
   const { run } = useAction()
 
+  // Platform tab ("all" = every platform), remembered across visits.
+  const [tab, setTabState] = useState<Platform | 'all'>('all')
+  useEffect(() => {
+    const t = localStorage.getItem('releases_tab') as Platform | 'all' | null
+    if (t && (t === 'all' || t in platforms)) setTabState(t)
+  }, [])
+  const setTab = (t: Platform | 'all') => {
+    setTabState(t)
+    localStorage.setItem('releases_tab', t)
+  }
+  const shown = useMemo(() => (tab === 'all' ? items : items.filter((r) => r.platform === tab)), [items, tab])
+  const tabOrder: Platform[] = ['android', 'ios', 'macos', 'windows']
+
   const [open, setOpen] = useState(false)
   const [platform, setPlatform] = useState<Platform>('android')
   const [source, setSource] = useState<'file' | 'url'>('file')
@@ -50,6 +116,9 @@ export default function ReleasesPage() {
   const [progress, setProgress] = useState<number>()
   const [form] = Form.useForm()
 
+  const spec = platforms[platform]
+  /** Version, build and CPU come from the package: nothing to type in. */
+  const auto = spec.auto && source === 'file'
   const latest = (p: Platform) => items.find((r) => r.platform === p) // list is newest build first per platform
 
   const openCreate = (p: Platform) => {
@@ -65,7 +134,7 @@ export default function ReleasesPage() {
       notes: '',
       force: false,
       bundle_id: p === 'ios' ? (l?.bundle_id || 'app.cygnus6152.artichoke66') : '',
-      abi: p === 'android' ? 'arm64-v8a' : '',
+      abi: platforms[p].defaultAbi,
     })
     setOpen(true)
   }
@@ -76,18 +145,25 @@ export default function ReleasesPage() {
     const fd = new FormData()
     // Text fields first: the server streams the file and needs the platform before it.
     fd.append('platform', platform)
-    fd.append('version', v.version.trim())
-    fd.append('build', String(v.build))
+    if (!auto) {
+      fd.append('version', v.version.trim())
+      fd.append('build', String(v.build))
+      if (spec.abis.length) fd.append('abi', v.abi ?? '')
+    }
     fd.append('notes', v.notes ?? '')
     fd.append('force', String(!!v.force))
     if (platform === 'ios') fd.append('bundle_id', v.bundle_id ?? '')
-    if (platform === 'android') fd.append('abi', v.abi ?? '')
     if (source === 'url') fd.append('url', v.url.trim())
     else fd.append('file', file[0].originFileObj as Blob, file[0].name)
     setProgress(0)
     try {
-      await api.releases.create(fd, setProgress)
-      message.success('已发布，App 内检查更新即可看到')
+      const r = await api.releases.create(fd, setProgress)
+      const cpu = spec.abis.length ? ` · ${abiShort(r)}` : ''
+      message.success(
+        auto
+          ? `已发布：识别为 ${r.version}（构建 ${r.build}）${cpu}，App 内检查更新即可看到`
+          : '已发布，App 内检查更新即可看到',
+      )
       setOpen(false)
       reload()
     } catch (e) {
@@ -106,7 +182,7 @@ export default function ReleasesPage() {
   const remove = (r: Release) =>
     modal.confirm({
       title: '删除版本',
-      content: `删除 ${platformLabel[r.platform]} ${r.version} (${r.build})？安装包文件也会删除。`,
+      content: `删除 ${platforms[r.platform].label} ${r.version} (${r.build})？安装包文件也会删除。`,
       okButtonProps: { danger: true },
       onOk: async () => {
         if (await run(() => api.releases.remove(r.id), '已删除')) reload()
@@ -115,36 +191,61 @@ export default function ReleasesPage() {
 
   const uploading = progress !== undefined
   const fileName = file[0]?.name
-  const wantExt = packageExt[platform]
 
   return (
     <div className="page">
       <PageCard>
         <div className="toolbar">
-          <span className="muted">App 启动和「我的 → 检查更新」读取每个平台最新的已发布版本；标记「强制更新」后，旧版本必须升级才能继续使用</span>
+          <Segmented
+            value={tab}
+            onChange={(v) => setTab(v as Platform | 'all')}
+            options={[
+              { label: `全部 ${items.length}`, value: 'all' },
+              ...tabOrder.map((p) => ({
+                value: p,
+                label: (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    {platforms[p].icon}
+                    {platforms[p].label} {items.filter((r) => r.platform === p).length}
+                  </span>
+                ),
+              })),
+            ]}
+          />
+          <Tooltip title="App 启动和「我的 → 检查更新」读取每个平台最新的已发布版本；标记「强制更新」后，旧版本必须升级才能继续使用">
+            <QuestionCircleOutlined className="muted" style={{ cursor: 'help' }} />
+          </Tooltip>
           <div className="spacer" />
           <Button icon={<ReloadOutlined />} onClick={() => reload()}>刷新</Button>
-          <Button icon={<AppleOutlined />} onClick={() => openCreate('macos')}>发布 macOS 版本</Button>
-          <Button icon={<WindowsFilled />} onClick={() => openCreate('windows')}>发布 Windows 版本</Button>
-          <Button icon={<AppleFilled />} onClick={() => openCreate('ios')}>发布 iOS 版本</Button>
-          <Button type="primary" icon={<AndroidFilled />} onClick={() => openCreate('android')}>发布 Android 版本</Button>
+          {tab === 'all' ? (
+            <Dropdown
+              menu={{
+                items: order.slice().reverse().map((p) => ({ key: p, icon: platforms[p].icon, label: `发布 ${platforms[p].label} 版本` })),
+                onClick: ({ key }) => openCreate(key as Platform),
+              }}
+            >
+              <Button type="primary" icon={<CloudUploadOutlined />}>发布新版本 <DownOutlined /></Button>
+            </Dropdown>
+          ) : (
+            <Button type="primary" icon={platforms[tab].icon} onClick={() => openCreate(tab)}>发布 {platforms[tab].label} 版本</Button>
+          )}
         </div>
         <Table<Release>
           rowKey="id"
           loading={loading}
-          dataSource={items}
+          dataSource={shown}
           pagination={false}
-          locale={{ emptyText: '还没有发布版本' }}
+          locale={{ emptyText: tab === 'all' ? '还没有发布版本' : `还没有发布 ${platforms[tab].label} 版本` }}
           columns={[
             {
               title: '版本',
               render: (_, r) => (
                 <Space>
-                  {platformIcon(r.platform)}
+                  {platforms[r.platform].icon}
                   <div>
                     <div style={{ fontWeight: 600 }}>
                       {r.version} <span className="muted">build {r.build}</span>
-                      {r.platform === 'android' && <Tag bordered={false} style={{ marginLeft: 6 }}>{abiShort[r.abi ?? ''] ?? r.abi}</Tag>}
+                      {platforms[r.platform].abis.length > 0 && <Tag bordered={false} style={{ marginLeft: 6 }}>{abiShort(r)}</Tag>}
                       {latest(r.platform)?.id === r.id && r.published && <Tag color="success" bordered={false} style={{ marginLeft: 6 }}>最新</Tag>}
                     </div>
                     <div className="muted" style={{ maxWidth: 360, whiteSpace: 'pre-line' }}>{r.notes || '—'}</div>
@@ -184,7 +285,7 @@ export default function ReleasesPage() {
 
       <Modal
         open={open}
-        title={`发布 ${platformLabel[platform]} 版本`}
+        title={`发布 ${spec.label} 版本`}
         onCancel={() => !uploading && setOpen(false)}
         maskClosable={!uploading}
         closable={!uploading}
@@ -196,50 +297,65 @@ export default function ReleasesPage() {
         destroyOnHidden
       >
         <Form form={form} layout="vertical" requiredMark={false}>
-          <Space size={12} style={{ display: 'flex' }}>
-            <Form.Item name="version" label="版本号" rules={[{ required: true, pattern: /^\d{1,4}(\.\d{1,4}){0,3}$/, message: '如 1.2.0' }]}>
-              <Input style={{ width: 150 }} placeholder="1.2.0" />
-            </Form.Item>
-            <Form.Item
-              name="build"
-              label="构建号"
-              tooltip="与 pubspec.yaml 里 version 的 + 后面一致（1.2.0+5 的 5）。新版本要比上一版大；同一版本的不同 CPU 架构用相同构建号"
-              rules={[{ required: true, message: '必填' }]}
-            >
-              <InputNumber min={1} style={{ width: 130 }} />
-            </Form.Item>
-          </Space>
-
-          {platform === 'android' && (
-            <Form.Item
-              name="abi"
-              label="CPU 架构"
-              extra="用 flutter build apk --split-per-abi 打出的每个 APK 分别发布一次（同一构建号）；App 会按手机的 CPU 自动拿到对应的包"
-            >
-              <Select options={abiOptions} />
-            </Form.Item>
-          )}
           <Form.Item label="安装包来源">
             <Segmented
               value={source}
               onChange={(v) => setSource(v as 'file' | 'url')}
               options={[
-                { label: `上传 ${wantExt.slice(1).toUpperCase()}`, value: 'file' },
+                { label: `上传 ${spec.ext.slice(1).toUpperCase()}`, value: 'file' },
                 { label: platform === 'ios' ? 'TestFlight / App Store 链接' : '外部链接', value: 'url' },
               ]}
             />
           </Form.Item>
 
+          {auto ? (
+            <Alert
+              type="success"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="版本号、构建号和支持的芯片会从安装包里自动读取，上传时一并校验安装包是否完整（含 VPN 核心）。"
+            />
+          ) : (
+            <>
+              <Space size={12} style={{ display: 'flex' }}>
+                <Form.Item name="version" label="版本号" rules={[{ required: true, pattern: /^\d{1,4}(\.\d{1,4}){0,3}$/, message: '如 1.2.0' }]}>
+                  <Input style={{ width: 150 }} placeholder="1.2.0" />
+                </Form.Item>
+                <Form.Item
+                  name="build"
+                  label="构建号"
+                  tooltip="与 pubspec.yaml 里 version 的 + 后面一致（1.2.0+5 的 5）。新版本要比上一版大；同一版本的不同 CPU 架构用相同构建号"
+                  rules={[{ required: true, message: '必填' }]}
+                >
+                  <InputNumber min={1} style={{ width: 130 }} />
+                </Form.Item>
+              </Space>
+              {spec.abis.length > 0 && (
+                <Form.Item
+                  name="abi"
+                  label="CPU 架构"
+                  extra={
+                    platform === 'android'
+                      ? '用 flutter build apk --split-per-abi 打出的每个 APK 分别发布一次（同一构建号）；App 会按手机的 CPU 自动拿到对应的包'
+                      : '外部链接指向的安装包支持的芯片'
+                  }
+                >
+                  <Select options={spec.abis} />
+                </Form.Item>
+              )}
+            </>
+          )}
+
           {source === 'file' ? (
             <>
               <Form.Item>
                 <Upload.Dragger
-                  accept={wantExt}
+                  accept={spec.ext}
                   maxCount={1}
                   fileList={file}
                   beforeUpload={(f) => {
-                    if (!f.name.toLowerCase().endsWith(wantExt)) {
-                      message.error(`请选择 ${wantExt} 文件`)
+                    if (!f.name.toLowerCase().endsWith(spec.ext)) {
+                      message.error(`请选择 ${spec.ext} 文件`)
                       return Upload.LIST_IGNORE
                     }
                     return false // upload on submit, with the form fields
@@ -252,39 +368,16 @@ export default function ReleasesPage() {
                   disabled={uploading}
                 >
                   <p className="ant-upload-drag-icon"><InboxOutlined /></p>
-                  <p className="ant-upload-text">{fileName ?? `点击或拖拽 ${wantExt} 到这里`}</p>
+                  <p className="ant-upload-text">{fileName ?? `点击或拖拽 ${spec.ext} 到这里`}</p>
                   <p className="ant-upload-hint">最大 600 MB，服务器会计算 SHA-256 供 App 校验</p>
                 </Upload.Dragger>
               </Form.Item>
-              {platform === 'windows' && (
-                <Alert
-                  type="info"
-                  showIcon
-                  style={{ marginBottom: 16 }}
-                  message="在 Windows 上运行 app/scripts/build_windows.ps1 打出的 zip（含 Huanyou.exe、huanyou-core.exe 和运行库）。用户在下载页下载后解压运行。"
-                />
-              )}
-              {platform === 'macos' && (
-                <Alert
-                  type="info"
-                  showIcon
-                  style={{ marginBottom: 16 }}
-                  message="在 Mac 上运行 app/scripts/build_macos.sh 打出的 zip（内含 环游.app）。用 Developer ID 签名并公证后，用户打开时不会被系统拦截。"
-                />
-              )}
               {platform === 'ios' && (
-                <>
-                  <Form.Item name="bundle_id" label="Bundle ID" rules={[{ required: true, message: '必填' }]}>
-                    <Input className="mono" />
-                  </Form.Item>
-                  <Alert
-                    type="info"
-                    showIcon
-                    style={{ marginBottom: 16 }}
-                    message="IPA 需为 Ad-hoc / 企业签名。下载页会生成 itms-services 安装链接，测试设备用 Safari 打开即可安装（设备需在描述文件里）。"
-                  />
-                </>
+                <Form.Item name="bundle_id" label="Bundle ID" rules={[{ required: true, message: '必填' }]}>
+                  <Input className="mono" />
+                </Form.Item>
               )}
+              {spec.hint && <Alert type="info" showIcon style={{ marginBottom: 16 }} message={spec.hint} />}
             </>
           ) : (
             <Form.Item
