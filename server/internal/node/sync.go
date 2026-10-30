@@ -39,7 +39,15 @@ func (s *Syncer) Run(ctx context.Context) {
 	s.current = map[string]string{}
 	t := time.NewTicker(s.Interval)
 	defer t.Stop()
+	redial := time.Now()
 	for {
+		// A polled keep-alive connection never goes idle long enough to be
+		// closed, so it would stay on the old IP forever after the API's
+		// domain moves to another server. Re-dial (and re-resolve) every 5 min.
+		if time.Since(redial) > 5*time.Minute {
+			s.client.CloseIdleConnections()
+			redial = time.Now()
+		}
 		if err := s.reportTraffic(ctx); err != nil {
 			slog.Warn("traffic report failed", "err", err)
 		}

@@ -103,7 +103,7 @@ export interface User {
   email: string // "" for device accounts
   recharge_code: string // e.g. VP-00010
   device_id: string
-  platform: string // ios | android | windows | ""
+  platform: string // ios | android | windows | macos | ""
   disabled: boolean
   note: string
   ref_code: string
@@ -285,7 +285,7 @@ export interface Contact {
 
 export interface Release {
   id: number
-  platform: 'android' | 'ios' | 'windows'
+  platform: 'android' | 'ios' | 'windows' | 'macos'
   version: string
   build: number
   notes: string

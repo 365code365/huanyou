@@ -1,5 +1,5 @@
 'use client'
-import { CloudServerOutlined, DownOutlined, LockOutlined, PlusOutlined, SearchOutlined, SyncOutlined, UnlockOutlined } from '@ant-design/icons'
+import { ClockCircleOutlined, CloudServerOutlined, DownOutlined, LockOutlined, PlusOutlined, SearchOutlined, SyncOutlined, UnlockOutlined, WarningFilled } from '@ant-design/icons'
 import { Alert, App, Button, Collapse, Drawer, Dropdown, Form, Input, InputNumber, Modal, Segmented, Select, Space, Spin, Switch, Table, Tag, Tooltip, Typography } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import { NumberUnit } from '@/components/NumberUnit'
@@ -8,7 +8,7 @@ import { PageCard } from '@/components/PageCard'
 import { useAction, useAsync } from '@/hooks/useAsync'
 import { useCatalog } from '@/hooks/useCatalog'
 import { api, type VpnNode } from '@/lib/api'
-import { bytes, dateTime, errMsg, expiryLevel, expiryText, flag } from '@/lib/format'
+import { bytes, dateTime, errMsg, expiryText, flag } from '@/lib/format'
 import { ProvisionModal } from './ProvisionModal'
 import { RentalFields } from '@/components/ExpiryField'
 
@@ -18,6 +18,16 @@ const blank = (): VpnNode => ({
   weight: 1, sort: 0, expires_at: null, vendor: '', vendor_url: '',
   reality: { public_key: '', short_id: '', server_name: 'www.apple.com', fingerprint: 'chrome' },
 })
+// Rental expiry severity for marks: expired / within 48 h / within 7 days.
+type Expiry = 'expired' | 'urgent' | 'soon' | 'ok' | 'none'
+const expiryOf = (n: VpnNode): Expiry => {
+  if (!n.expires_at) return 'none'
+  const ms = Date.parse(n.expires_at) - Date.now()
+  return ms <= 0 ? 'expired' : ms <= 48 * 3600000 ? 'urgent' : ms <= 7 * 86400000 ? 'soon' : 'ok'
+}
+const expiryWarn = (e: Expiry) => e === 'expired' || e === 'urgent' || e === 'soon'
+const expiryColor: Record<Expiry, string> = { expired: 'error', urgent: 'volcano', soon: 'orange', ok: 'default', none: 'default' }
+
 // Status is response-only; the target follows the SNI.
 const toBody = ({ status: _s, ...n }: VpnNode) => ({ ...n, reality_target: n.reality.server_name + ':443' }) as VpnNode
 
@@ -33,7 +43,7 @@ export default function NodesPage() {
 
   // ---- search / filter / selection ----
   const [q, setQ] = useState('')
-  const [statusF, setStatusF] = useState<'all' | 'ok' | 'down' | 'frozen' | 'off'>('all')
+  const [statusF, setStatusF] = useState<'all' | 'ok' | 'down' | 'expiring' | 'frozen' | 'off'>('all')
   const [tagF, setTagF] = useState<string[]>([])
   const [selected, setSelected] = useState<string[]>([])
   const allTags = useMemo(() => [...new Set(c.items.flatMap((n) => n.tags ?? []))].sort(), [c.items])
@@ -45,6 +55,7 @@ export default function NodesPage() {
       switch (statusF) {
         case 'ok': return !n.frozen && !n.disabled && !!n.status?.online
         case 'down': return !n.frozen && !n.disabled && !n.status?.online
+        case 'expiring': return expiryWarn(expiryOf(n))
         case 'frozen': return n.frozen
         case 'off': return n.disabled
       }
@@ -52,7 +63,10 @@ export default function NodesPage() {
     })
   }, [c.items, q, statusF, tagF])
   const count = (f: (n: VpnNode) => boolean) => c.items.filter(f).length
-
+  const expiring = useMemo(
+    () => c.items.filter((n) => expiryWarn(expiryOf(n))).sort((a, b) => Date.parse(a.expires_at!) - Date.parse(b.expires_at!)),
+    [c.items],
+  )
   // ---- freeze ----
   const [freezing, setFreezing] = useState<VpnNode[]>()
   const [freezeReason, setFreezeReason] = useState('')
@@ -175,6 +189,10 @@ export default function NodesPage() {
               { label: `全部 ${c.items.length}`, value: 'all' },
               { label: `正常 ${count((n) => !n.frozen && !n.disabled && !!n.status?.online)}`, value: 'ok' },
               { label: `离线 ${count((n) => !n.frozen && !n.disabled && !n.status?.online)}`, value: 'down' },
+              {
+                label: expiring.length ? <span style={{ color: '#D4380D' }}><WarningFilled /> 即将到期 {expiring.length}</span> : '即将到期 0',
+                value: 'expiring',
+              },
               { label: `冻结 ${count((n) => n.frozen)}`, value: 'frozen' },
               { label: `已下架 ${count((n) => n.disabled)}`, value: 'off' },
             ]}
@@ -194,6 +212,21 @@ export default function NodesPage() {
             </Space>
           )}
         </div>
+        {expiring.length > 0 && (
+          <Alert
+            type={expiring.some((n) => expiryOf(n) !== 'soon') ? 'error' : 'warning'}
+            showIcon
+            style={{ marginBottom: 12 }}
+            message={`${expiring.length} 个节点服务器即将到期或已过期，请及时续费或迁移`}
+            description={expiring.map((n) => (
+              <div key={n.id}>
+                <Tag bordered={false} color={expiryColor[expiryOf(n)]}>{expiryText(n.expires_at)}</Tag>
+                <b>{n.name}</b> <span className="muted">{n.address} · {dateTime(n.expires_at)}{n.vendor ? ` · ${n.vendor}` : ''}</span>
+                {n.vendor_url && <a href={n.vendor_url} target="_blank" rel="noreferrer" style={{ marginLeft: 8 }}>去续费</a>}
+              </div>
+            ))}
+          />
+        )}
         <Table<VpnNode>
           rowKey="id"
           loading={c.loading}
@@ -201,7 +234,10 @@ export default function NodesPage() {
           pagination={false}
           scroll={{ x: 1470 }}
           rowSelection={{ selectedRowKeys: selected, onChange: (k) => setSelected(k as string[]) }}
-          rowClassName={(n) => (n.frozen ? 'row-frozen' : '')}
+          rowClassName={(n) => {
+            const e = expiryOf(n)
+            return n.frozen ? 'row-frozen' : e === 'expired' || e === 'urgent' ? 'row-expired' : e === 'soon' ? 'row-expiring' : ''
+          }}
           columns={[
             {
               title: '节点',
@@ -209,6 +245,13 @@ export default function NodesPage() {
                 <>
                   <div style={{ fontWeight: 500 }}>
                     {flag(n.region)} {n.name}
+                    {expiryWarn(expiryOf(n)) && (
+                      <Tooltip title={`服务器 ${dateTime(n.expires_at)} 到期${n.vendor ? `（${n.vendor}）` : ''}`}>
+                        <Tag color={expiryColor[expiryOf(n)]} icon={<WarningFilled />} style={{ marginLeft: 6 }}>
+                          {expiryOf(n) === 'expired' ? '已过期' : '即将到期'}
+                        </Tag>
+                      </Tooltip>
+                    )}
                     {n.frozen && <Tag color="blue" icon={<LockOutlined />} style={{ marginLeft: 6 }}>冻结</Tag>}
                     {n.disabled && <Tag style={{ marginLeft: 6 }}>已下架</Tag>}
                     {n.rate !== 1 && <Tag color="orange" bordered={false} style={{ marginLeft: 6 }}>×{n.rate}</Tag>}
@@ -227,14 +270,16 @@ export default function NodesPage() {
               width: 170,
               sorter: (a, b) => (a.expires_at ? Date.parse(a.expires_at) : Infinity) - (b.expires_at ? Date.parse(b.expires_at) : Infinity),
               render: (_, n) => {
-                const lv = expiryLevel(n.expires_at)
+                const lv = expiryOf(n)
                 return (
                   <>
                     {lv === 'none' ? (
-                      <Tag bordered={false} color="warning">未设置到期</Tag>
+                      <span className="muted">未设置到期</span>
                     ) : (
                       <Tooltip title={dateTime(n.expires_at)}>
-                        <Tag bordered={false} color={lv === 'expired' ? 'error' : lv === 'soon' ? 'orange' : 'default'}>{expiryText(n.expires_at)}</Tag>
+                        <Tag bordered={false} color={expiryColor[lv]} icon={expiryWarn(lv) ? <WarningFilled /> : <ClockCircleOutlined />}>
+                          {expiryText(n.expires_at)}
+                        </Tag>
                       </Tooltip>
                     )}
                     <div className="muted">

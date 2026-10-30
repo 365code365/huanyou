@@ -1,5 +1,5 @@
 'use client'
-import { AndroidFilled, AppleFilled, CloudUploadOutlined, InboxOutlined, LinkOutlined, ReloadOutlined, WindowsFilled } from '@ant-design/icons'
+import { AndroidFilled, AppleFilled, AppleOutlined, CloudUploadOutlined, InboxOutlined, LinkOutlined, ReloadOutlined, WindowsFilled } from '@ant-design/icons'
 import { Alert, App, Button, Form, Input, InputNumber, Modal, Progress, Segmented, Select, Space, Switch, Table, Tag, Upload } from 'antd'
 import type { UploadFile } from 'antd'
 import { useMemo, useState } from 'react'
@@ -8,14 +8,15 @@ import { useAction, useAsync } from '@/hooks/useAsync'
 import { api, type Release } from '@/lib/api'
 import { bytes, date, errMsg } from '@/lib/format'
 
-type Platform = 'android' | 'ios' | 'windows'
+type Platform = 'android' | 'ios' | 'windows' | 'macos'
 
-const platformLabel: Record<Platform, string> = { android: 'Android', ios: 'iOS', windows: 'Windows' }
-/** Package each platform uploads; Windows is the zip from app/scripts/build_windows.ps1. */
-const packageExt: Record<Platform, string> = { android: '.apk', ios: '.ipa', windows: '.zip' }
+const platformLabel: Record<Platform, string> = { android: 'Android', ios: 'iOS', windows: 'Windows', macos: 'macOS' }
+/** Package each platform uploads; desktop zips come from app/scripts/build_windows.ps1 / build_macos.sh. */
+const packageExt: Record<Platform, string> = { android: '.apk', ios: '.ipa', windows: '.zip', macos: '.zip' }
 const platformIcon = (p: Platform) =>
   p === 'ios' ? <AppleFilled style={{ fontSize: 18 }} />
     : p === 'windows' ? <WindowsFilled style={{ fontSize: 18, color: '#0078d4' }} />
+      : p === 'macos' ? <AppleOutlined style={{ fontSize: 18 }} />
       : <AndroidFilled style={{ fontSize: 18, color: '#3ddc84' }} />
 
 const abiOptions = [
@@ -123,6 +124,7 @@ export default function ReleasesPage() {
           <span className="muted">App 启动和「我的 → 检查更新」读取每个平台最新的已发布版本；标记「强制更新」后，旧版本必须升级才能继续使用</span>
           <div className="spacer" />
           <Button icon={<ReloadOutlined />} onClick={() => reload()}>刷新</Button>
+          <Button icon={<AppleOutlined />} onClick={() => openCreate('macos')}>发布 macOS 版本</Button>
           <Button icon={<WindowsFilled />} onClick={() => openCreate('windows')}>发布 Windows 版本</Button>
           <Button icon={<AppleFilled />} onClick={() => openCreate('ios')}>发布 iOS 版本</Button>
           <Button type="primary" icon={<AndroidFilled />} onClick={() => openCreate('android')}>发布 Android 版本</Button>
@@ -260,6 +262,14 @@ export default function ReleasesPage() {
                   showIcon
                   style={{ marginBottom: 16 }}
                   message="在 Windows 上运行 app/scripts/build_windows.ps1 打出的 zip（含 Huanyou.exe、huanyou-core.exe 和运行库）。用户在下载页下载后解压运行。"
+                />
+              )}
+              {platform === 'macos' && (
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{ marginBottom: 16 }}
+                  message="在 Mac 上运行 app/scripts/build_macos.sh 打出的 zip（内含 环游.app）。用 Developer ID 签名并公证后，用户打开时不会被系统拦截。"
                 />
               )}
               {platform === 'ios' && (

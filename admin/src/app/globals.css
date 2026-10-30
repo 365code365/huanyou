@@ -73,6 +73,18 @@ body {
   white-space: pre-wrap;
   word-break: break-all;
 }
+.row-expired td {
+  background: #fff1f0 !important;
+}
+.row-expired td:first-child {
+  box-shadow: inset 3px 0 0 #f5222d;
+}
+.row-expiring td {
+  background: #fff7e6 !important;
+}
+.row-expiring td:first-child {
+  box-shadow: inset 3px 0 0 #fa8c16;
+}
 .row-frozen td {
   background: #f3f6fb !important;
 }

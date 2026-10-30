@@ -91,7 +91,7 @@ export default function AnalyticsPage() {
                 <Space direction="vertical" style={{ width: '100%' }}>
                   {[...a.platforms, ...a.versions.map((v) => ({ ...v, key: 'v' + (v.key || '?') }))].map((b) => (
                     <div key={b.key} style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span>{b.key === 'android' ? 'Android' : b.key === 'ios' ? 'iPhone' : b.key === 'windows' ? 'Windows' : b.key || '未知'}</span>
+                      <span>{b.key === 'android' ? 'Android' : b.key === 'ios' ? 'iPhone' : b.key === 'windows' ? 'Windows' : b.key === 'macos' ? 'Mac' : b.key || '未知'}</span>
                       <b>{b.users}</b>
                     </div>
                   ))}
