@@ -63,6 +63,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/referral", s.authed(s.handleReferral))
 	mux.HandleFunc("POST /api/v1/referral/bind", s.authed(s.handleReferralBind))
 	mux.HandleFunc("GET /api/v1/contacts", s.handleContacts)
+	mux.HandleFunc("GET /api/v1/devices", s.authed(s.handleDevices))
+	mux.HandleFunc("POST /api/v1/devices/code", s.authed(s.handleDeviceCode))
+	mux.HandleFunc("POST /api/v1/devices/join", s.authed(s.handleDeviceJoin))
+	mux.HandleFunc("POST /api/v1/devices/leave", s.authed(s.handleDeviceLeave))
+	mux.HandleFunc("DELETE /api/v1/devices/{id}", s.authed(s.handleDeviceRemove))
+	mux.HandleFunc("GET /l/{code}", s.handleLinkLanding)
 	mux.HandleFunc("GET /i/{code}", s.handleLanding)
 	mux.HandleFunc("GET /download", s.handleLanding)
 	mux.HandleFunc("GET /dl/{name}", s.handleDownloadFile)
@@ -103,16 +109,24 @@ type userView struct {
 	Email string `json:"email"`
 	// RechargeCode is the short, human-readable id the user gives when topping up.
 	// Complexity is hidden in the app: this is the only number a user needs.
-	RechargeCode string      `json:"recharge_code"`
-	HasAccount   bool        `json:"has_account"` // email bound (cross-device), vs device-only
-	Entitlement  Entitlement `json:"entitlement"`
+	RechargeCode string `json:"recharge_code"`
+	HasAccount   bool   `json:"has_account"` // email bound (cross-device), vs device-only
+	// Linked: this device uses another account's subscription (multi-device);
+	// OwnerCode is that account's recharge ID (recharges should go there).
+	Linked      bool        `json:"linked"`
+	OwnerCode   string      `json:"owner_code,omitempty"`
+	Entitlement Entitlement `json:"entitlement"`
 }
 
-func (s *Server) viewOf(u *store.User) userView {
-	return userView{
+func (s *Server) viewOf(ctx context.Context, u *store.User) userView {
+	v := userView{
 		ID: u.ID, Email: u.Email, RechargeCode: rechargeCode(u.ID), HasAccount: u.Email != "",
-		Entitlement: entitlementOf(s.cat(), u, time.Now()),
+		Entitlement: s.entitlement(ctx, u),
 	}
+	if u.Linked() {
+		v.Linked, v.OwnerCode = true, rechargeCode(u.PrimaryID)
+	}
+	return v
 }
 
 // rechargeCode formats a user id as a padded, easy-to-read top-up code, e.g. 10042 -> "VP-10042".
@@ -153,7 +167,7 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 			u = fresh
 		}
 	}
-	s.respondToken(w, u)
+	s.respondToken(w, r, u)
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
@@ -192,7 +206,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if fresh, e := s.store.UserByID(r.Context(), u.ID); e == nil {
 		u = fresh
 	}
-	s.respondToken(w, u)
+	s.respondToken(w, r, u)
 }
 
 // applyInvite links a new user to an inviter's code and grants referral bonuses.
@@ -235,20 +249,20 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "bad_credentials", "邮箱或密码错误")
 		return
 	}
-	s.respondToken(w, u)
+	s.respondToken(w, r, u)
 }
 
-func (s *Server) respondToken(w http.ResponseWriter, u *store.User) {
+func (s *Server) respondToken(w http.ResponseWriter, r *http.Request, u *store.User) {
 	tok, exp, err := s.issuer.Issue(u.ID)
 	if err != nil {
 		s.internal(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, tokenResponse{Token: tok, ExpiresAt: exp, User: s.viewOf(u)})
+	writeJSON(w, http.StatusOK, tokenResponse{Token: tok, ExpiresAt: exp, User: s.viewOf(r.Context(), u)})
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, u *store.User) {
-	writeJSON(w, http.StatusOK, s.viewOf(u))
+	writeJSON(w, http.StatusOK, s.viewOf(r.Context(), u))
 }
 
 type nodeView struct {
@@ -287,7 +301,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, _ *http.Request, _ *store.Us
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request, u *store.User) {
 	cat := s.cat()
-	if e := entitlementOf(cat, u, time.Now()); !e.CanConnect {
+	if e := s.entitlement(r.Context(), u); !e.CanConnect {
 		writeErr(w, http.StatusPaymentRequired, "no_entitlement", e.Reason)
 		return
 	}
@@ -362,9 +376,20 @@ func (s *Server) handleNodeUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cat, now := s.cat(), time.Now()
+	byID := make(map[int64]*store.User, len(users))
+	for _, u := range users {
+		byID[u.ID] = u
+	}
 	out := make([]nodeUser, 0, len(users))
 	for _, u := range users {
-		if e := entitlementOf(cat, u, now); e.CanConnect {
+		holder := u
+		if u.Linked() {
+			// Members use their owner's plan; a banned / deleted owner cuts them off.
+			if holder = byID[u.PrimaryID]; holder == nil {
+				continue
+			}
+		}
+		if e := entitlementOf(cat, holder, now); e.CanConnect {
 			out = append(out, nodeUser{Email: u.XrayEmail(), UUID: u.UUID, SpeedKbps: e.SpeedKbps})
 		}
 	}

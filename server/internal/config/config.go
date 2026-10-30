@@ -50,8 +50,9 @@ type AdminConfig struct {
 }
 
 type Payments struct {
-	Alipay *AlipayConfig `json:"alipay"`
-	Epay   *EpayConfig   `json:"epay"`
+	Alipay  *AlipayConfig  `json:"alipay"`
+	Epay    *EpayConfig    `json:"epay"`
+	Cashier *CashierConfig `json:"cashier"`
 	// Mock enables a fake payment page for development. NEVER enable in production.
 	Mock bool `json:"mock"`
 }
@@ -64,6 +65,20 @@ type AlipayConfig struct {
 	AlipayPublicKeyFile string `json:"alipay_public_key_file"`
 	// Gateway: https://openapi.alipay.com/gateway.do (sandbox: https://openapi-sandbox.dl.alipaydev.com/gateway.do)
 	Gateway string `json:"gateway"`
+}
+
+// CashierConfig: our hosted-checkout protocol "收银台 v1" (docs/payment-api.md),
+// AES-256-GCM encrypted + HMAC-SHA256 signed in both directions.
+type CashierConfig struct {
+	APIURL     string `json:"api_url"`
+	MerchantID string `json:"merchant_id"`
+	SignKey    string `json:"sign_key"` // or env VPN_CASHIER_SIGN_KEY (hex/base64, ≥16 bytes)
+	EncKey     string `json:"enc_key"`  // or env VPN_CASHIER_ENC_KEY (hex/base64, 32 bytes)
+	// Channels shown in the app: [{"id":"alipay","name":"支付宝"}, …]
+	Channels []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"channels"`
 }
 
 // EpayConfig: "易支付" aggregator protocol (submit.php + MD5 sign), supports alipay / wxpay / qqpay.
@@ -110,7 +125,18 @@ func LoadAPI(path string) (*API, error) {
 	if c.Provision.RealityTarget == "" {
 		c.Provision.RealityTarget = "www.apple.com:443"
 	}
-	hasPayments := c.Payments.Alipay != nil || c.Payments.Epay != nil || c.Payments.Mock
+	if k := c.Payments.Cashier; k != nil {
+		if v := os.Getenv("VPN_CASHIER_SIGN_KEY"); v != "" {
+			k.SignKey = v
+		}
+		if v := os.Getenv("VPN_CASHIER_ENC_KEY"); v != "" {
+			k.EncKey = v
+		}
+		if k.APIURL == "" || k.MerchantID == "" || k.SignKey == "" || k.EncKey == "" {
+			return nil, errors.New("payments.cashier: api_url, merchant_id, sign_key and enc_key are required")
+		}
+	}
+	hasPayments := c.Payments.Alipay != nil || c.Payments.Epay != nil || c.Payments.Cashier != nil || c.Payments.Mock
 	if hasPayments && !strings.HasPrefix(c.PublicURL, "http") {
 		return nil, errors.New("public_url is required when payments are configured")
 	}

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"html/template"
@@ -74,6 +75,11 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request, u *st
 		writeErr(w, http.StatusBadRequest, "bad_method", "不支持的支付方式")
 		return
 	}
+	if u.Linked() {
+		writeErr(w, http.StatusConflict, "is_member",
+			"本机正在使用 "+rechargeCode(u.PrimaryID)+" 的订阅，续费请在该设备上操作，或先在「多设备」里解除绑定")
+		return
+	}
 	if u.Disabled {
 		writeErr(w, http.StatusForbidden, "disabled", "账号已被停用")
 		return
@@ -103,7 +109,44 @@ func (s *Server) handleGetOrder(w http.ResponseWriter, r *http.Request, u *store
 		s.internal(w, err)
 		return
 	}
+	if o.Status == "pending" {
+		if fresh := s.queryProvider(r.Context(), o); fresh != nil {
+			o = fresh
+		}
+	}
 	writeJSON(w, http.StatusOK, o)
+}
+
+// queryProvider actively asks the order's payment provider for its status
+// (callbacks can be delayed or lost). Throttled per order. Returns the
+// refreshed order if it turned out to be paid, else nil.
+func (s *Server) queryProvider(ctx context.Context, o *store.Order) *store.Order {
+	if time.Since(o.CreatedAt) < 3*time.Second || time.Since(o.CreatedAt) > 2*time.Hour {
+		return nil
+	}
+	q, ok := s.providerFor(o.Method).(payment.Querier)
+	if !ok || !s.limiter.allow("query:"+o.ID) {
+		return nil
+	}
+	qctx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	defer cancel()
+	n, err := q.Query(qctx, o.ID)
+	if err != nil {
+		slog.Warn("payment query failed", "order", o.ID, "err", err)
+		return nil
+	}
+	if !n.Paid {
+		return nil
+	}
+	if err := s.completeOrder(ctx, n); err != nil {
+		slog.Error("payment query complete failed", "order", o.ID, "err", err)
+		return nil
+	}
+	fresh, err := s.store.OrderByID(ctx, o.ID)
+	if err != nil {
+		return nil
+	}
+	return fresh
 }
 
 func (s *Server) handleListOrders(w http.ResponseWriter, r *http.Request, u *store.User) {
@@ -137,7 +180,7 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(prov.Ack()))
 		return
 	}
-	if err := s.completeOrder(r, n); err != nil {
+	if err := s.completeOrder(r.Context(), n); err != nil {
 		slog.Error("payment notify failed", "provider", prov.Name(), "order", n.OrderID, "err", err)
 		http.Error(w, "fail", http.StatusBadRequest) // provider will retry
 		return
@@ -145,8 +188,8 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(prov.Ack()))
 }
 
-func (s *Server) completeOrder(r *http.Request, n *payment.Notification) error {
-	o, err := s.store.OrderByID(r.Context(), n.OrderID)
+func (s *Server) completeOrder(ctx context.Context, n *payment.Notification) error {
+	o, err := s.store.OrderByID(ctx, n.OrderID)
 	if err != nil {
 		return err
 	}
@@ -157,7 +200,7 @@ func (s *Server) completeOrder(r *http.Request, n *payment.Notification) error {
 	if p := s.cat().Plan(o.PlanID); p != nil {
 		days = p.DurationDays
 	}
-	granted, err := s.store.MarkPaid(r.Context(), o.ID, n.TradeNo, days, time.Now())
+	granted, err := s.store.MarkPaid(ctx, o.ID, n.TradeNo, days, time.Now())
 	if err != nil {
 		return err
 	}
@@ -220,6 +263,17 @@ func newProviders(cfg *config.API) ([]payment.Provider, *payment.Mock, error) {
 	if e := cfg.Payments.Epay; e != nil {
 		out = append(out, &payment.Epay{APIURL: e.APIURL, PID: e.PID, Key: e.Key, Types: e.Types})
 	}
+	if k := cfg.Payments.Cashier; k != nil {
+		var ch []payment.Method
+		for _, c := range k.Channels {
+			ch = append(ch, payment.Method{ID: c.ID, Name: c.Name})
+		}
+		p, err := payment.NewCashier(k.APIURL, k.MerchantID, k.SignKey, k.EncKey, ch)
+		if err != nil {
+			return nil, nil, err
+		}
+		out = append(out, p)
+	}
 	var mock *payment.Mock
 	if cfg.Payments.Mock {
 		slog.Warn("MOCK PAYMENTS ENABLED: anyone can get plans for free. Do not use in production.")
@@ -263,13 +317,18 @@ func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 		cur := usage[id]
 		usage[id] = store.Traffic{Up: cur.Up + t.Up, Down: cur.Down + t.Down}
 	}
-	period := time.Duration(s.cat().TrafficPeriodDays) * 24 * time.Hour
-	if err := s.store.AddTraffic(r.Context(), usage, time.Now(), period); err != nil {
+	active := len(usage)
+	// Members share their owner's quota: book their traffic on the owner.
+	if usage, err := s.store.FoldToOwners(r.Context(), usage); err != nil {
+		s.internal(w, err)
+		return
+	} else if err := s.store.AddTraffic(r.Context(), usage, time.Now(),
+		time.Duration(s.cat().TrafficPeriodDays)*24*time.Hour); err != nil {
 		s.internal(w, err)
 		return
 	}
 	if s.monitor != nil {
-		s.monitor.AddTraffic(node.ID, nodeBytes, len(usage))
+		s.monitor.AddTraffic(node.ID, nodeBytes, active)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

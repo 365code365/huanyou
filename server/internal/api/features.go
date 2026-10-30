@@ -114,7 +114,7 @@ func (s *Server) handleReferralBind(w http.ResponseWriter, r *http.Request, u *s
 		s.internal(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"invitee_days": res.InviteeDays, "user": s.viewOf(fresh)})
+	writeJSON(w, http.StatusOK, map[string]any{"invitee_days": res.InviteeDays, "user": s.viewOf(r.Context(), fresh)})
 }
 
 type appView struct {

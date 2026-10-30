@@ -36,8 +36,12 @@ type User struct {
 	Note         string    // admin note
 	DeviceID     string    // stable per-device identity (keychain / SSAID); "" if none
 	Platform     string    // "ios" | "android" | "" — informational
+	PrimaryID    int64     // if non-zero, this device shares the plan of user PrimaryID
 	CreatedAt    time.Time
 }
+
+// Linked reports whether this device follows another account's subscription.
+func (u *User) Linked() bool { return u.PrimaryID != 0 }
 
 // PaidPlanActive reports whether the user's paid plan is still valid.
 func (u *User) PaidPlanActive(now time.Time) bool {
@@ -170,6 +174,16 @@ var migrations = []string{
 	ALTER TABLE users_new RENAME TO users;
 	CREATE UNIQUE INDEX users_ref_code ON users(ref_code) WHERE ref_code <> '';
 	CREATE UNIQUE INDEX users_device_id ON users(device_id) WHERE device_id IS NOT NULL;`,
+	// Multi-device: a device can follow another account's subscription,
+	// joined with a short-lived link code shown as text / QR on the primary.
+	`ALTER TABLE users ADD COLUMN primary_id INTEGER NOT NULL DEFAULT 0;
+	CREATE INDEX users_primary ON users(primary_id) WHERE primary_id <> 0;
+	CREATE TABLE link_codes (
+		code       TEXT    PRIMARY KEY,
+		user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		expires_at INTEGER NOT NULL
+	);
+	CREATE INDEX link_codes_user ON link_codes(user_id);`,
 }
 
 func (s *Store) migrate() error {
@@ -220,7 +234,7 @@ func (s *Store) migrate() error {
 	return rows.Err()
 }
 
-const userCols = `id, email, password_hash, uuid, disabled, expires_at, created_at, plan_id, period_start, traffic_used, ref_code, invited_by, note, device_id, platform`
+const userCols = `id, email, password_hash, uuid, disabled, expires_at, created_at, plan_id, period_start, traffic_used, ref_code, invited_by, note, device_id, platform, primary_id`
 
 func scanUser(row interface{ Scan(...any) error }) (*User, error) {
 	var (
@@ -233,7 +247,7 @@ func scanUser(row interface{ Scan(...any) error }) (*User, error) {
 		periodStart int64
 	)
 	if err := row.Scan(&u.ID, &email, &u.PasswordHash, &u.UUID, &disabled, &expiresAt, &createdAt,
-		&u.PlanID, &periodStart, &u.TrafficUsed, &u.RefCode, &u.InvitedBy, &u.Note, &deviceID, &u.Platform); err != nil {
+		&u.PlanID, &periodStart, &u.TrafficUsed, &u.RefCode, &u.InvitedBy, &u.Note, &deviceID, &u.Platform, &u.PrimaryID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}

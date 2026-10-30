@@ -165,6 +165,7 @@ type adminUser struct {
 	RechargeCode string      `json:"recharge_code"`
 	DeviceID     string      `json:"device_id"`
 	Platform     string      `json:"platform"`
+	PrimaryID    int64       `json:"primary_id"` // >0: this device shares that user's plan
 	Disabled     bool        `json:"disabled"`
 	Note         string      `json:"note"`
 	RefCode      string      `json:"ref_code"`
@@ -179,7 +180,7 @@ type adminUser struct {
 func (s *Server) adminUserView(u *store.User) adminUser {
 	return adminUser{
 		ID: u.ID, Email: u.Email, RechargeCode: rechargeCode(u.ID),
-		DeviceID: u.DeviceID, Platform: u.Platform,
+		DeviceID: u.DeviceID, Platform: u.Platform, PrimaryID: u.PrimaryID,
 		Disabled: u.Disabled, Note: u.Note, RefCode: u.RefCode,
 		InvitedBy: u.InvitedBy, UUID: u.UUID, CreatedAt: u.CreatedAt,
 		PlanID: u.PlanID, ExpiresAt: u.ExpiresAt,

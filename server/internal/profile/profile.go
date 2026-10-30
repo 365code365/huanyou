@@ -169,11 +169,15 @@ func Build(p Params) (string, error) {
 	}
 
 	cfg := map[string]any{
-		"log": map[string]any{"loglevel": "warning"},
+		// Privacy: no per-connection or DNS logging on the device either.
+		"log": map[string]any{"loglevel": "warning", "access": "none", "dnsLog": false},
+		// DNS over HTTPS, routed through the tunnel (dns-module -> proxy rule):
+		// neither the local network nor the node's upstream ISP sees the
+		// queried names. IP-literal endpoints need no bootstrap resolution.
 		"dns": map[string]any{
 			"tag":           "dns-module",
 			"queryStrategy": "UseIPv4",
-			"servers":       []string{"8.8.8.8", "1.1.1.1"},
+			"servers":       []string{"https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"},
 		},
 		"inbounds": []any{map[string]any{
 			"tag":      "tun-in",

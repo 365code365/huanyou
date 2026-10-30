@@ -308,6 +308,8 @@ func (s *Store) DeleteUser(ctx context.Context, id int64) error {
 		`DELETE FROM traffic_daily WHERE user_id = ?`,
 		`DELETE FROM orders WHERE user_id = ?`,
 		`UPDATE users SET invited_by = 0 WHERE invited_by = ?`,
+		`UPDATE users SET primary_id = 0 WHERE primary_id = ?`, // members fall back to their own plan
+		`DELETE FROM link_codes WHERE user_id = ?`,
 	} {
 		if _, err := tx.ExecContext(ctx, q, id); err != nil {
 			return err

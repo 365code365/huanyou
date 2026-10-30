@@ -79,7 +79,10 @@ func BuildServerConfig(c *config.NodeAgent) ([]byte, error) {
 	}
 
 	cfg := map[string]any{
-		"log":      map[string]any{"loglevel": c.LogLevel},
+		// Privacy: never record what users visit. Xray writes an access line per
+		// connection (destination host:port) unless access is "none", and DNS
+		// queries unless dnsLog is false. Only warnings/errors are kept.
+		"log":      map[string]any{"loglevel": c.LogLevel, "access": "none", "dnsLog": false},
 		"inbounds": inbounds,
 		// Egress fingerprint: the freedom outbound relays the client's raw TCP/UDP
 		// payload verbatim to the exact destination the client targeted. "AsIs"

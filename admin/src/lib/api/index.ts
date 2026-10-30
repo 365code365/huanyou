@@ -4,6 +4,7 @@ import type {
   Contact,
   GeoIP,
   ProvisionEvent,
+  ProvisionReport,
   ProvisionRequest,
   AppRec,
   Dashboard,
@@ -76,6 +77,7 @@ export const api = {
     install: (id: string) => http.get<{ node_json: string; steps: string }>(`/nodes/${id}/install`),
     rotateToken: (id: string) => http.post<{ token: string }>(`/nodes/${id}/rotate-token`),
     geoip: (ip: string) => http.get<GeoIP>('/geoip', { ip }),
+    precheck: (body: ProvisionRequest) => http.post<ProvisionReport>('/nodes/precheck', body),
     provision: (body: ProvisionRequest, onEvent: (e: ProvisionEvent) => void) =>
       stream('/nodes/provision', body, onEvent),
   },

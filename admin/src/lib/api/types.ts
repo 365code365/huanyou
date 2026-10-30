@@ -210,9 +210,28 @@ export interface ProvisionRequest {
   user?: string
   password?: string
   private_key?: string
+  node_port?: number
   name?: string
   region?: string
   server_name?: string
+}
+
+export interface ProvisionReport {
+  arch: string
+  os: string
+  systemd: boolean
+  port: number
+  port_free: boolean
+  port_user: string
+  suggest_port: number
+  ram_mb: number
+  disk_free_gb: number
+  time_synced: boolean
+  pkg_mgr: string
+  virt: string
+  arch_ok: boolean
+  fatal: string[] | null
+  warn: string[] | null
 }
 
 export type ProvisionEvent =

@@ -26,8 +26,9 @@ type Catalog struct {
 	Referral ReferralConfig `json:"referral"`
 	Monitor  MonitorConfig  `json:"monitor"`
 	// Contacts are customer-service and social channels shown in the app.
-	Contacts []Contact  `json:"contacts"`
-	Share    ShareConfig `json:"share"`
+	Contacts    []Contact         `json:"contacts"`
+	Share       ShareConfig       `json:"share"`
+	MultiDevice MultiDeviceConfig `json:"multi_device"`
 	// AIDomains are routed through the proxy in "ai" mode (defaults applied if empty).
 	AIDomains []string `json:"ai_domains"`
 }
@@ -176,6 +177,14 @@ type ShareConfig struct {
 	Slogan     string `json:"slogan"` // shown on the landing page and share poster
 }
 
+// MultiDeviceConfig controls sharing one subscription across devices.
+type MultiDeviceConfig struct {
+	// MaxDevices is the total devices per subscription, including the owner (default 5).
+	MaxDevices int `json:"max_devices"`
+	// MinPlanDays: only paid plans with at least this duration may share (default 30 = 月度会员及以上).
+	MinPlanDays int `json:"min_plan_days"`
+}
+
 // AppRec is a recommended app shown inside the VPN app.
 type AppRec struct {
 	ID       string `json:"id"`
@@ -240,6 +249,15 @@ func (c *Catalog) Normalize() error {
 	}
 	if c.Contacts == nil {
 		c.Contacts = []Contact{}
+	}
+	if c.MultiDevice.MaxDevices <= 0 {
+		c.MultiDevice.MaxDevices = 5
+	}
+	if c.MultiDevice.MaxDevices > 20 {
+		return errors.New("每个订阅最多 20 台设备")
+	}
+	if c.MultiDevice.MinPlanDays <= 0 {
+		c.MultiDevice.MinPlanDays = 30
 	}
 	if err := c.validateContacts(); err != nil {
 		return err
