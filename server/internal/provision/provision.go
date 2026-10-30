@@ -616,8 +616,10 @@ func Clone(ctx context.Context, t Target, in CloneInstall) (*CloneResult, error)
 		return nil, fmt.Errorf("目标服务器没有 systemd")
 	case !r.PortFree:
 		return nil, fmt.Errorf("目标服务器 443 端口被 %s 占用，克隆需要独占 80/443（请换一台干净的服务器，或先停掉该程序）", r.PortUser)
-	case !r80.PortFree:
-		return nil, fmt.Errorf("目标服务器 80 端口被 %s 占用（申请 HTTPS 证书需要 80 端口）", r80.PortUser)
+	}
+	if !r80.PortFree {
+		// Certificates also come through TLS-ALPN-01 on :443, so :80 is optional.
+		fmt.Fprintf(log, "80 端口被 %s 占用：不影响，证书改用 443 端口验证（TLS-ALPN），只是 http:// 不会自动跳转到 https://\n", r80.PortUser)
 	}
 	// DNS must already point at the target, or Let's Encrypt can't issue.
 	ips, _ := net.DefaultResolver.LookupHost(ctx, in.Domain)
@@ -746,10 +748,16 @@ echo "::cloned"
 	}
 	if in.Migrate && !pointed {
 		// The domain still reaches the old server; check the new one locally.
-		// bash /dev/tcp: works without curl on minimal images. Expect the
-		// :80 handler's redirect to HTTPS ("HTTP/1.1 302 Found").
-		code := probe(ctx, client, `timeout 5 bash -c 'exec 3<>/dev/tcp/127.0.0.1/80; printf "GET /healthz HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3; head -1 <&3' 2>/dev/null | tr -d '\r' || true`)
-		if !strings.HasPrefix(code, "HTTP/") {
+		// vpn-api must be the one listening on :443 (:80 may belong to another program).
+		code := ""
+		for i := 0; i < 10 && code == ""; i++ {
+			if strings.Contains(probe(ctx, client, "ss -ltnpH 'sport = :443' || true"), "vpn-api") {
+				code = "vpn-api 已监听 443"
+			} else {
+				time.Sleep(time.Second)
+			}
+		}
+		if code == "" {
 			jl, _ := runScript(ctx, client, "journalctl -u vpn-api -n 30 --no-pager")
 			io.WriteString(log, jl)
 			return nil, fmt.Errorf("新服务器上的 vpn-api 没有响应，请查看上面的日志")
