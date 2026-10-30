@@ -141,7 +141,11 @@ function CloneCard() {
   const [error, setError] = useState<string>()
   const [result, setResult] = useState<{ url: string; admin: string; tls: boolean }>()
   const logRef = useRef<HTMLPreElement>(null)
-  useEffect(() => logRef.current?.scrollTo({ top: logRef.current.scrollHeight }), [log])
+  // Braces matter: newer Chrome returns a Promise from scrollTo, and React
+  // would call a returned value as the effect cleanup and crash the page.
+  useEffect(() => {
+    logRef.current?.scrollTo({ top: logRef.current.scrollHeight })
+  }, [log])
 
   const go = async () => {
     const v = await form.validateFields()
