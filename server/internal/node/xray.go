@@ -97,7 +97,13 @@ func BuildServerConfig(c *config.NodeAgent) ([]byte, error) {
 			map[string]any{"tag": "block", "protocol": "blackhole"},
 		},
 		"policy": map[string]any{"levels": map[string]any{"0": map[string]any{
-			"handshake": 4, "connIdle": 300,
+			// Free resources of idle / half-closed connections sooner so a busy
+			// node can hold many more users: idle 180 s, and 2 s / 5 s after
+			// one side finishes (defaults are 300 / 1 / 2 but held buffers longer).
+			"handshake": 4, "connIdle": 180, "uplinkOnly": 2, "downlinkOnly": 5,
+			// 64 KB per-connection buffer: enough for full speed, bounded memory
+			// with thousands of connections (Xray's default scales with RAM).
+			"bufferSize": 64,
 			// Makes Xray wrap each user's traffic with our counters (traffic stats + speed limit).
 			"statsUserUplink": true, "statsUserDownlink": true,
 		}}},

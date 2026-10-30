@@ -1,6 +1,9 @@
 // One function per admin endpoint. Pages import from here, never call fetch directly.
-import { http, stream, upload } from './http'
+import { download, http, stream, upload } from './http'
 import type {
+  BackupInfo,
+  CloneEvent,
+  CloneRequest,
   Release,
   Contact,
   GeoIP,
@@ -90,6 +93,13 @@ export const api = {
     create: (form: FormData, onProgress?: (p: number) => void) => upload<Release>('/releases', form, onProgress),
     patch: (id: number, body: Partial<Pick<Release, 'notes' | 'force' | 'published'>>) => http.patch<Release>(`/releases/${id}`, body),
     remove: (id: number) => http.del<{ ok: true }>(`/releases/${id}`),
+  },
+
+  system: {
+    backupInfo: () => http.get<BackupInfo>('/backup/info'),
+    backup: (password: string, include_packages: boolean) => download('/backup', { password, include_packages }, 'huanyou-backup.hybk'),
+    restore: (form: FormData, onProgress?: (p: number) => void) => upload<{ ok: boolean; message: string }>('/backup/restore', form, onProgress),
+    clone: (body: CloneRequest, onEvent: (e: CloneEvent) => void) => stream('/clone', body, onEvent),
   },
 
   settings: {

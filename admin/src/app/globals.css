@@ -73,3 +73,6 @@ body {
   white-space: pre-wrap;
   word-break: break-all;
 }
+.row-frozen td {
+  background: #f3f6fb !important;
+}

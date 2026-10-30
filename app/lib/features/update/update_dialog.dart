@@ -21,23 +21,22 @@ class _UpdateDialog extends StatefulWidget {
 }
 
 class _UpdateDialogState extends State<_UpdateDialog> {
-  double? _progress; // null = not downloading
   String? _error;
+  bool _opened = false;
 
+  /// Opens the download in the system browser (the reliable install path).
   Future<void> _install() async {
-    setState(() {
-      _progress = 0;
-      _error = null;
-    });
+    setState(() => _error = null);
     try {
-      await Updater.install(widget.update, onProgress: (p) {
-        if (mounted) setState(() => _progress = p);
-      });
-      if (mounted && !widget.update.force) Navigator.pop(context);
+      await Updater.install(widget.update);
+      if (!mounted) return;
+      if (widget.update.force) {
+        setState(() => _opened = true); // stay up until the new version is installed
+      } else {
+        Navigator.pop(context);
+      }
     } on UpdateException catch (e) {
       if (mounted) setState(() => _error = e.message);
-    } finally {
-      if (mounted) setState(() => _progress = null);
     }
   }
 
@@ -45,12 +44,11 @@ class _UpdateDialogState extends State<_UpdateDialog> {
   Widget build(BuildContext context) {
     final u = widget.update;
     final notes = u.notes.split('\n').map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
-    final busy = _progress != null;
     return AlertDialog(
       title: Row(children: [
         const Icon(Icons.system_update_rounded, color: AppColors.signal),
         const SizedBox(width: 8),
-        Text('发现新版本 ${u.version}'),
+        Expanded(child: Text('发现新版本 ${u.version}')),
       ]),
       content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
         if (u.force)
@@ -72,15 +70,16 @@ class _UpdateDialogState extends State<_UpdateDialog> {
             padding: const EdgeInsets.only(top: 8),
             child: Text('安装包 ${formatBytes(u.size)}', style: const TextStyle(color: AppColors.faint, fontSize: 12)),
           ),
-        if (busy) ...[
-          const SizedBox(height: 14),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(3),
-            child: LinearProgressIndicator(value: _progress == 0 ? null : _progress, minHeight: 5, color: AppColors.signal),
+        const Padding(
+          padding: EdgeInsets.only(top: 10),
+          child: Text('将在浏览器中打开下载，下载完成后点击安装包即可安装。',
+              style: TextStyle(color: AppColors.sub, fontSize: 12.5, height: 1.5)),
+        ),
+        if (_opened)
+          const Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: Text('已打开浏览器。若没有开始下载，可再点一次。', style: TextStyle(color: AppColors.signal, fontSize: 12.5)),
           ),
-          const SizedBox(height: 6),
-          Text('下载中 ${((_progress ?? 0) * 100).round()}%', style: const TextStyle(fontSize: 12, color: AppColors.sub)),
-        ],
         if (_error != null)
           Padding(
             padding: const EdgeInsets.only(top: 10),
@@ -88,11 +87,11 @@ class _UpdateDialogState extends State<_UpdateDialog> {
           ),
       ]),
       actions: [
-        if (!u.force) TextButton(onPressed: busy ? null : () => Navigator.pop(context), child: const Text('稍后')),
+        if (!u.force) TextButton(onPressed: () => Navigator.pop(context), child: const Text('稍后')),
         FilledButton(
           key: const Key('update-now'),
-          onPressed: busy ? null : _install,
-          child: Text(_error != null ? '重试' : '立即更新'),
+          onPressed: _install,
+          child: Text(_error != null ? '重试' : '去浏览器下载'),
         ),
       ],
     );

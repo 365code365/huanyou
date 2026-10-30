@@ -173,7 +173,7 @@ func (m *Monitor) checkAll(ctx context.Context) {
 	var wg sync.WaitGroup
 	for i := range cat.Nodes {
 		n := cat.Nodes[i]
-		if n.Disabled {
+		if !n.Serving() {
 			continue
 		}
 		wg.Add(1)

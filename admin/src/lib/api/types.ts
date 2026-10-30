@@ -42,6 +42,7 @@ export interface NodeStatus {
   agent_online: boolean
   agent_seen: string
   users: number
+  active_users: number
   traffic_bytes: number
 }
 
@@ -55,7 +56,14 @@ export interface VpnNode {
   reality_target: string
   vision_port: number
   xhttp_path: string
-  disabled: boolean
+  disabled: boolean // 下架: hidden from the app
+  frozen: boolean // 冻结: serves nobody, sessions dropped
+  frozen_reason: string
+  note: string
+  tags: string[]
+  rate: number // 流量倍率
+  plans: string[] // allowed plan ids, empty = all plans
+  bandwidth_mbps: number // fair-share capacity, 0 = off
   weight: number
   sort: number
   status?: NodeStatus // response only
@@ -113,6 +121,7 @@ export interface Order {
   paid_at: string | null
   email: string
   user_id: number
+  payment_no: string // provider trade no; MANUAL = admin mark-paid
 }
 
 export interface DailyUsage {
@@ -275,3 +284,26 @@ export interface Release {
   created_at: string
   download_url: string
 }
+
+export interface BackupInfo {
+  db_bytes: number
+  package_bytes: number
+  packages: number
+  users: number
+  orders: number
+  nodes: number
+  public_url: string
+}
+
+export interface CloneRequest extends ProvisionRequest {
+  domain: string
+  email?: string
+  admin_password: string
+  mode: 'full' | 'config'
+  keep_nodes: boolean
+}
+
+export type CloneEvent =
+  | { type: 'log'; text: string }
+  | { type: 'error'; message: string }
+  | { type: 'done'; url: string; admin: string; tls: boolean }

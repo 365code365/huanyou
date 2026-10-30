@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -28,6 +29,10 @@ type API struct {
 	Provision ProvisionConfig `json:"provision"`
 	// DownloadDir holds files served at /dl/<name>, e.g. app.apk for the invite page.
 	DownloadDir string `json:"download_dir"`
+	// TLS, if Domain is set, makes the API terminate HTTPS itself on :443 with
+	// an automatic Let's Encrypt certificate (and redirect :80). Used by
+	// cloned deployments that have no nginx in front.
+	TLS TLSConfig `json:"tls"`
 
 	Catalog // seed for the database copy; JSON keys stay flat for compatibility
 }
@@ -42,6 +47,13 @@ type ProvisionConfig struct {
 	BinaryArm64 string `json:"binary_arm64"`
 	// RealityTarget is the camouflage site new nodes impersonate, e.g. "www.apple.com:443".
 	RealityTarget string `json:"reality_target"`
+}
+
+// TLSConfig enables built-in HTTPS with automatic certificates.
+type TLSConfig struct {
+	Domain   string `json:"domain"`    // e.g. vpn.example.com ("" = plain HTTP on Listen)
+	Email    string `json:"email"`     // optional Let's Encrypt contact
+	CacheDir string `json:"cache_dir"` // certificate cache, default <db dir>/acme
 }
 
 // AdminConfig secures the web admin panel. Password can come from env VPN_ADMIN_PASSWORD.
@@ -118,6 +130,9 @@ func LoadAPI(path string) (*API, error) {
 	}
 	if c.DownloadDir == "" {
 		c.DownloadDir = "/var/lib/vpn/dl"
+	}
+	if c.TLS.Domain != "" && c.TLS.CacheDir == "" {
+		c.TLS.CacheDir = filepath.Join(filepath.Dir(c.Database), "acme")
 	}
 	if c.Provision.BinaryAmd64 == "" {
 		c.Provision.BinaryAmd64 = "/usr/local/bin/vpn-node"

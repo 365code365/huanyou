@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,6 +36,7 @@ type Server struct {
 	providers []payment.Provider
 	mock      *payment.Mock
 	monitor   *monitor.Monitor
+	nodeUsers nodeUserCache
 }
 
 func New(cfg *config.API, live *config.LiveCatalog, st *store.Store, issuer *auth.Issuer, mon *monitor.Monitor) (*Server, error) {
@@ -295,8 +297,8 @@ func (s *Server) nodeView(n *config.Node) nodeView {
 	return v
 }
 
-func (s *Server) handleNodes(w http.ResponseWriter, _ *http.Request, _ *store.User) {
-	nodes := s.cat().EnabledNodes()
+func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request, u *store.User) {
+	nodes := s.cat().NodesForPlan(s.entitlement(r.Context(), u).PlanID)
 	out := make([]nodeView, 0, len(nodes))
 	for _, n := range nodes {
 		out = append(out, s.nodeView(n))
@@ -306,11 +308,12 @@ func (s *Server) handleNodes(w http.ResponseWriter, _ *http.Request, _ *store.Us
 
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request, u *store.User) {
 	cat := s.cat()
-	if e := s.entitlement(r.Context(), u); !e.CanConnect {
+	e := s.entitlement(r.Context(), u)
+	if !e.CanConnect {
 		writeErr(w, http.StatusPaymentRequired, "no_entitlement", e.Reason)
 		return
 	}
-	enabled := cat.EnabledNodes()
+	enabled := cat.NodesForPlan(e.PlanID)
 	if len(enabled) == 0 {
 		writeErr(w, http.StatusServiceUnavailable, "no_nodes", "暂无可用节点")
 		return
@@ -338,7 +341,7 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request, u *store.
 	} else {
 		if id := r.URL.Query().Get("node"); id != "" {
 			primary = cat.NodeByID(id)
-			if primary == nil || primary.Disabled {
+			if primary == nil || !primary.Serving() || !primary.AllowsPlan(e.PlanID) {
 				writeErr(w, http.StatusNotFound, "node_not_found", "节点不存在或已下线")
 				return
 			}
@@ -351,12 +354,19 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request, u *store.
 		s.internal(w, err)
 		return
 	}
+	out := map[string]any{"node": s.nodeView(primary), "mode": mode, "config": cfgJSON}
+	// App ≥ 1.2 runs a slimmed core that only accepts compiled (protobuf)
+	// configs; older apps keep getting JSON.
+	if r.URL.Query().Get("format") == "pb" {
+		pb, err := profile.CompileJSON(cfgJSON)
+		if err != nil {
+			s.internal(w, err)
+			return
+		}
+		out = map[string]any{"node": s.nodeView(primary), "mode": mode, "config": pb, "format": "pb"}
+	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, map[string]any{
-		"node":   s.nodeView(primary),
-		"mode":   mode,
-		"config": cfgJSON,
-	})
+	writeJSON(w, http.StatusOK, out)
 }
 
 // ---- node agent endpoints ----
@@ -367,41 +377,91 @@ type nodeUser struct {
 	SpeedKbps int    `json:"speed_kbps"` // 0 = unlimited
 }
 
-// handleNodeUsers returns users allowed to connect right now, with their speed limit.
-// It doubles as the node agent's heartbeat.
+// handleNodeUsers returns users allowed to connect right now, with their speed
+// limit. It doubles as the node agent's heartbeat.
+//
+// Scales to many nodes / users: the user table is read at most every few
+// seconds and shared by all nodes (nodeUserCache), and the response carries an
+// ETag so an agent whose list hasn't changed gets a 304 with no body.
 func (s *Server) handleNodeUsers(w http.ResponseWriter, r *http.Request) {
 	node := s.authNode(r)
 	if node == nil {
 		writeErr(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
-	users, err := s.store.EnabledUsers(r.Context())
+	users, err := s.nodeUsers.get(r.Context(), s.store)
 	if err != nil {
 		s.internal(w, err)
 		return
 	}
 	cat, now := s.cat(), time.Now()
-	byID := make(map[int64]*store.User, len(users))
-	for _, u := range users {
-		byID[u.ID] = u
-	}
 	out := make([]nodeUser, 0, len(users))
-	for _, u := range users {
-		holder := u
-		if u.Linked() {
-			// Members use their owner's plan; a banned / deleted owner cuts them off.
-			if holder = byID[u.PrimaryID]; holder == nil {
-				continue
-			}
+	if !node.Frozen { // a frozen node serves nobody
+		byID := make(map[int64]*store.User, len(users))
+		for _, u := range users {
+			byID[u.ID] = u
 		}
-		if e := entitlementOf(cat, holder, now); e.CanConnect {
-			out = append(out, nodeUser{Email: u.XrayEmail(), UUID: u.UUID, SpeedKbps: e.SpeedKbps})
+		for _, u := range users {
+			holder := u
+			if u.Linked() {
+				// Members use their owner's plan; a banned / deleted owner cuts them off.
+				if holder = byID[u.PrimaryID]; holder == nil {
+					continue
+				}
+			}
+			e := entitlementOf(cat, holder, now)
+			if e.CanConnect && node.AllowsPlan(e.PlanID) {
+				out = append(out, nodeUser{Email: u.XrayEmail(), UUID: u.UUID, SpeedKbps: e.SpeedKbps})
+			}
 		}
 	}
 	if s.monitor != nil {
 		s.monitor.Heartbeat(node.ID, len(out))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"users": out})
+	body, err := json.Marshal(map[string]any{"users": out, "bandwidth_mbps": node.BandwidthMbps})
+	if err != nil {
+		s.internal(w, err)
+		return
+	}
+	sum := sha256.Sum256(body)
+	etag := `"` + hex.EncodeToString(sum[:12]) + `"`
+	w.Header().Set("ETag", etag)
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Write(body)
+}
+
+// nodeUserCache shares one read of the user table between all node agents.
+type nodeUserCache struct {
+	mu    sync.Mutex
+	at    time.Time
+	users []*store.User
+}
+
+const nodeUserCacheTTL = 5 * time.Second
+
+func (c *nodeUserCache) get(ctx context.Context, st *store.Store) ([]*store.User, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.users != nil && time.Since(c.at) < nodeUserCacheTTL {
+		return c.users, nil
+	}
+	users, err := st.EnabledUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	c.users, c.at = users, time.Now()
+	return users, nil
+}
+
+// invalidate forces the next node sync to re-read users (after admin edits).
+func (c *nodeUserCache) invalidate() {
+	c.mu.Lock()
+	c.users = nil
+	c.mu.Unlock()
 }
 
 // authNode returns the node whose agent token is in the Authorization header.

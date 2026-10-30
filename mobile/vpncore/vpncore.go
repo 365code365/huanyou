@@ -10,6 +10,7 @@
 package vpncore
 
 import (
+	"encoding/base64"
 	"errors"
 	"os"
 	"runtime/debug"
@@ -20,10 +21,9 @@ import (
 
 	"github.com/xtls/xray-core/common/platform"
 	core "github.com/xtls/xray-core/core"
-	"github.com/xtls/xray-core/infra/conf/serial"
+	"google.golang.org/protobuf/proto"
 	"github.com/xtls/xray-core/transport/internet"
 
-	_ "github.com/xtls/xray-core/main/distro/all"
 )
 
 // Protector excludes a socket from the VPN so Xray's own connections to the
@@ -62,9 +62,10 @@ func installHook() {
 	})
 }
 
-// Start launches Xray with configJSON reading packets from tunFd.
-// assetDir must contain geoip-only-cn-private.dat when the config uses smart routing.
-func Start(configJSON string, tunFd int32, assetDir string, p Protector) error {
+// Start launches Xray with a compiled profile (base64 protobuf from the API,
+// GET /api/v1/profile?format=pb) reading packets from tunFd. assetDir is kept
+// for compatibility; compiled profiles carry their geo data inline.
+func Start(config string, tunFd int32, assetDir string, p Protector) error {
 	mu.Lock()
 	defer mu.Unlock()
 	if instance != nil {
@@ -84,8 +85,14 @@ func Start(configJSON string, tunFd int32, assetDir string, p Protector) error {
 	protector = p
 	installHook()
 
-	cfg, err := serial.LoadJSONConfig(strings.NewReader(configJSON))
+	// The API compiles the profile to Xray's protobuf config (base64), so the
+	// app needs neither Xray's JSON loaders nor geo files (see features.go).
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(config))
 	if err != nil {
+		return errors.New("vpncore: profile is not a compiled config; update the app or server")
+	}
+	cfg := &core.Config{}
+	if err := proto.Unmarshal(raw, cfg); err != nil {
 		return err
 	}
 	inst, err := core.New(cfg)

@@ -42,7 +42,6 @@ class XrayVpnService : VpnService() {
         private const val TAG = "XrayVpnService"
         private const val CHANNEL_ID = "vpn"
         private const val NOTIFICATION_ID = 1
-        private const val GEO_FILE = "geoip-only-cn-private.dat"
 
         /** The profile is stored on disk so always-on VPN / service restarts can reconnect. */
         fun profileFile(ctx: Context) = File(ctx.noBackupFilesDir, "profile.json")
@@ -87,7 +86,8 @@ class XrayVpnService : VpnService() {
         try {
             val config = profileFile(this).takeIf { it.exists() }?.readText()
                 ?: throw IllegalStateException("请先在应用内登录并连接")
-            val assetDir = prepareAssets()
+            // Compiled profiles carry their geo data; the core needs no asset files.
+            val assetDir = filesDir.absolutePath
 
             val builder = Builder()
                 .setSession(name)
@@ -230,21 +230,6 @@ class XrayVpnService : VpnService() {
             cleanup()
             startVpn(sessionName)
         }, 1200, TimeUnit.MILLISECONDS)
-    }
-
-    /** Copies the geoip file out of the APK so Xray can read it from disk. */
-    private fun prepareAssets(): String {
-        val dir = File(filesDir, "xray").apply { mkdirs() }
-        val out = File(dir, GEO_FILE)
-        val stamp = File(dir, "$GEO_FILE.version")
-        val version = packageManager.getPackageInfo(packageName, 0).lastUpdateTime.toString()
-        if (!out.exists() || !stamp.exists() || stamp.readText() != version) {
-            assets.open("flutter_assets/assets/geo/$GEO_FILE").use { input ->
-                out.outputStream().use { input.copyTo(it) }
-            }
-            stamp.writeText(version)
-        }
-        return dir.absolutePath
     }
 
     override fun onRevoke() {

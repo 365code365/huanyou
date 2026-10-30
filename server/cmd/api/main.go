@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/crypto/acme/autocert"
+
 	"vpnplatform/server/internal/api"
 	"vpnplatform/server/internal/auth"
 	"vpnplatform/server/internal/config"
@@ -32,6 +34,13 @@ func main() {
 	cfg, err := config.LoadAPI(*cfgPath)
 	if err != nil {
 		fatal("load config", err)
+	}
+	// A restore uploaded in the admin panel is staged next to the database
+	// and swapped in here, before anything opens it.
+	if applied, err := store.ApplyPendingRestore(cfg.Database); err != nil {
+		fatal("apply restore", err)
+	} else if applied {
+		slog.Warn("restored database from backup (previous copy kept as .bak-pre-restore-*)")
 	}
 	st, err := store.Open(cfg.Database)
 	if err != nil {
@@ -95,9 +104,45 @@ func main() {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
+	if cfg.TLS.Domain != "" {
+		serveTLS(ctx, srv, cfg)
+		return
+	}
 	slog.Info("api listening", "addr", cfg.Listen, "nodes", len(cat.Nodes), "admin", cfg.Admin.Password != "")
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fatal("serve", err)
+	}
+}
+
+// serveTLS terminates HTTPS on :443 with an automatic Let's Encrypt
+// certificate for cfg.TLS.Domain; :80 answers ACME challenges and redirects
+// everything else to HTTPS. Used by cloned deployments without nginx.
+func serveTLS(ctx context.Context, srv *http.Server, cfg *config.API) {
+	m := &autocert.Manager{
+		Prompt:     autocert.AcceptTOS,
+		HostPolicy: autocert.HostWhitelist(cfg.TLS.Domain),
+		Cache:      autocert.DirCache(cfg.TLS.CacheDir),
+		Email:      cfg.TLS.Email,
+	}
+	srv.Addr = ":443"
+	srv.TLSConfig = m.TLSConfig()
+	redirect := &http.Server{
+		Addr:              ":80",
+		Handler:           m.HTTPHandler(nil),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	go func() {
+		if err := redirect.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("http :80", "err", err)
+		}
+	}()
+	go func() {
+		<-ctx.Done()
+		_ = redirect.Close()
+	}()
+	slog.Info("api listening (tls)", "domain", cfg.TLS.Domain)
+	if err := srv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		fatal("serve tls", err)
 	}
 }
 

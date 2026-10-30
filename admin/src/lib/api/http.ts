@@ -130,3 +130,25 @@ export function upload<T>(path: string, form: FormData, onProgress?: (p: number)
     xhr.send(form)
   })
 }
+
+/** POST JSON and save the binary response as a file (e.g. a backup). */
+export async function download(path: string, body: unknown, fallbackName: string): Promise<void> {
+  const t = token.get()
+  const res = await fetch('/admin/api' + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(t ? { Authorization: 'Bearer ' + t } : {}) },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    if (res.status === 401) token.clear()
+    throw new ApiError(res.status, data.error ?? 'http_' + res.status, data.message ?? `请求失败 (${res.status})`)
+  }
+  const name = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') ?? '')?.[1] ?? fallbackName
+  const url = URL.createObjectURL(await res.blob())
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 10000)
+}

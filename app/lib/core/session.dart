@@ -60,7 +60,10 @@ class Session {
     final s = await _storage.read(key: _kProfile);
     if (s == null) return null;
     try {
-      return Profile.fromJson(jsonDecode(s) as Map<String, dynamic>);
+      final p = Profile.fromJson(jsonDecode(s) as Map<String, dynamic>);
+      // Profiles cached by older versions are JSON; the slim core needs compiled ones.
+      if (p.config.trimLeft().startsWith('{')) return null;
+      return p;
     } catch (_) {
       return null;
     }

@@ -24,10 +24,21 @@ android {
         applicationId = "com.vpnplatform.vpn_app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = 24 // vpncore.aar is built with -androidapi 24
+        minSdk = 24
+        // vpncore.aar is built with -androidapi 24 for arm64 + 32-bit arm only
+        // (see mobile/build.sh); build with --target-platform android-arm,android-arm64.
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+    }
+
+    // Store native libraries compressed: the download is roughly half the size
+    // (the Go core and Flutter engine compress well); Android extracts them once
+    // at install time.
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 
     buildTypes {
@@ -46,5 +57,4 @@ flutter {
 dependencies {
     // Xray-core client, built by mobile/build.sh android
     implementation(files("libs/vpncore.aar"))
-    implementation("androidx.core:core:1.13.1") // FileProvider for in-app updates
 }

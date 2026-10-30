@@ -318,6 +318,12 @@ func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 		usage[id] = store.Traffic{Up: cur.Up + t.Up, Down: cur.Down + t.Down}
 	}
 	active := len(usage)
+	// 流量倍率: bill traffic on this node at its rate (raw bytes stay in node stats).
+	if r := node.Rate; r > 0 && r != 1 {
+		for id, t := range usage {
+			usage[id] = store.Traffic{Up: int64(float64(t.Up) * r), Down: int64(float64(t.Down) * r)}
+		}
+	}
 	// Members share their owner's quota: book their traffic on the owner.
 	if usage, err := s.store.FoldToOwners(r.Context(), usage); err != nil {
 		s.internal(w, err)

@@ -6,11 +6,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
-import android.net.Uri
 import android.provider.Settings
-import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
-import java.io.File
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
@@ -43,21 +40,6 @@ class MainActivity : FlutterActivity() {
                 "disconnect" -> {
                     startService(Intent(this, XrayVpnService::class.java).setAction(XrayVpnService.ACTION_DISCONNECT))
                     result.success(null)
-                }
-                else -> result.notImplemented()
-            }
-        }
-
-        // In-app update: open the system installer for a downloaded APK.
-        MethodChannel(messenger, "vpn_platform/update").setMethodCallHandler { call, result ->
-            when (call.method) {
-                "installApk" -> {
-                    val path = call.argument<String>("path")
-                    if (path == null) {
-                        result.error("bad_args", "缺少安装包路径", null)
-                        return@setMethodCallHandler
-                    }
-                    installApk(File(path), result)
                 }
                 else -> result.notImplemented()
             }
@@ -106,32 +88,6 @@ class MainActivity : FlutterActivity() {
         } else {
             startVpnService(name)
             result.success(null)
-        }
-    }
-
-    private fun installApk(file: File, result: MethodChannel.Result) {
-        if (!file.exists()) {
-            result.error("missing", "安装包不存在，请重新下载", null)
-            return
-        }
-        // Android 8+: the user must allow this app to install packages, once.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
-            startActivity(
-                Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName"))
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-            result.error("permission", "请在打开的设置里允许「安装未知应用」，然后返回点「重试」", null)
-            return
-        }
-        val uri = FileProvider.getUriForFile(this, "$packageName.updates", file)
-        val intent = Intent(Intent.ACTION_VIEW)
-            .setDataAndType(uri, "application/vnd.android.package-archive")
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-        try {
-            startActivity(intent)
-            result.success(null)
-        } catch (e: Exception) {
-            result.error("install", "无法打开系统安装器：${e.message}", null)
         }
     }
 

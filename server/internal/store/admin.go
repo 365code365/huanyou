@@ -171,6 +171,9 @@ type AdminOrder struct {
 	Order
 	Email      string `json:"email"`
 	UserIDJSON int64  `json:"user_id"` // Order.UserID is hidden from app clients; the admin needs it
+	// PaymentNo is the payment provider's transaction id (支付订单号), shown
+	// next to the system order id (系统订单号). "MANUAL" = 后台手动入账.
+	PaymentNo string `json:"payment_no"`
 }
 
 func (s *Store) ListOrders(ctx context.Context, f OrderFilter) ([]*AdminOrder, int64, error) {
@@ -180,8 +183,8 @@ func (s *Store) ListOrders(ctx context.Context, f OrderFilter) ([]*AdminOrder, i
 	var conds []string
 	var args []any
 	if q := strings.TrimSpace(f.Query); q != "" {
-		conds = append(conds, `(o.id LIKE ? OR u.email LIKE ? OR o.user_id = ?)`)
-		args = append(args, "%"+q+"%", "%"+q+"%", rechargeID(q))
+		conds = append(conds, `(o.id LIKE ? OR o.trade_no LIKE ? OR u.email LIKE ? OR o.user_id = ?)`)
+		args = append(args, "%"+q+"%", "%"+q+"%", "%"+q+"%", rechargeID(q))
 	}
 	if f.Status == "paid" || f.Status == "pending" {
 		conds = append(conds, `o.status = ?`)
@@ -216,7 +219,7 @@ func (s *Store) ListOrders(ctx context.Context, f OrderFilter) ([]*AdminOrder, i
 			&ao.TradeNo, &created, &paid, &ao.Email); err != nil {
 			return nil, 0, err
 		}
-		ao.UserIDJSON = ao.UserID
+		ao.UserIDJSON, ao.PaymentNo = ao.UserID, ao.TradeNo
 		ao.CreatedAt = time.Unix(created, 0)
 		if paid != nil {
 			t := time.Unix(*paid, 0)

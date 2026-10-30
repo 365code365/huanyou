@@ -636,3 +636,72 @@ func NewUUID() (string, error) {
 	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
+
+// SnapshotTo writes a consistent copy of the database to path (VACUUM INTO),
+// safe while the server is running.
+func (s *Store) SnapshotTo(ctx context.Context, path string) error {
+	_ = os.Remove(path)
+	_, err := s.db.ExecContext(ctx, `VACUUM INTO ?`, path)
+	return err
+}
+
+// Counts returns row counts for the backup manifest.
+func (s *Store) Counts(ctx context.Context) (users, orders int64, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM users), (SELECT COUNT(*) FROM orders)`).Scan(&users, &orders)
+	return
+}
+
+// PendingRestore is where a restored database is staged until the next start.
+func PendingRestore(dbPath string) string { return dbPath + ".restore" }
+
+// ApplyPendingRestore swaps in a staged restore before the database is opened:
+// the current file is kept as <db>.bak-pre-restore-<time>. Returns true if a
+// restore was applied.
+func ApplyPendingRestore(dbPath string) (bool, error) {
+	staged := PendingRestore(dbPath)
+	if _, err := os.Stat(staged); err != nil {
+		return false, nil
+	}
+	if _, err := os.Stat(dbPath); err == nil {
+		bak := dbPath + ".bak-pre-restore-" + time.Now().Format("20060102150405")
+		if err := os.Rename(dbPath, bak); err != nil {
+			return false, err
+		}
+	}
+	for _, sfx := range []string{"-wal", "-shm"} {
+		_ = os.Remove(dbPath + sfx)
+	}
+	if err := os.Rename(staged, dbPath); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// ValidateDB opens a candidate database file read-only and checks it is a
+// healthy database of this system (has the users table, passes integrity_check).
+func ValidateDB(path string) error {
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	var res string
+	if err := db.QueryRow(`PRAGMA integrity_check`).Scan(&res); err != nil {
+		return fmt.Errorf("数据库无法读取：%w", err)
+	}
+	if res != "ok" {
+		return fmt.Errorf("数据库校验失败：%s", res)
+	}
+	var v int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
+		return err
+	}
+	if v > len(migrations) {
+		return fmt.Errorf("备份来自更新版本的系统（数据库版本 %d，本系统支持 %d），请先升级本系统", v, len(migrations))
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='users'`).Scan(&n); err != nil || n == 0 {
+		return errors.New("不是本系统的数据库")
+	}
+	return nil
+}

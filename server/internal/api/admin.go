@@ -72,6 +72,11 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	a("PATCH /admin/api/releases/{id}", s.adminPatchRelease)
 	a("DELETE /admin/api/releases/{id}", s.adminDeleteRelease)
 
+	a("GET /admin/api/backup/info", s.adminBackupInfo)
+	a("POST /admin/api/backup", s.adminBackup)
+	a("POST /admin/api/backup/restore", s.adminRestore)
+	a("POST /admin/api/clone", s.adminClone)
+
 	a("GET /admin/api/settings", s.adminGetSettings)
 	a("PUT /admin/api/settings", s.adminPutSettings)
 
@@ -469,6 +474,7 @@ type adminNodeStatusView struct {
 	AgentOnline  bool      `json:"agent_online"`
 	AgentSeen    time.Time `json:"agent_seen"`
 	Users        int       `json:"users"`
+	ActiveUsers  int       `json:"active_users"` // users moving traffic right now
 	TrafficBytes int64     `json:"traffic_bytes"`
 }
 
@@ -482,7 +488,7 @@ func (s *Server) adminNodeView(n *config.Node) adminNodeResp {
 	out := adminNodeResp{Node: *n, Status: adminNodeStatusView{
 		Online: st.Online, LatencyMs: st.LatencyMs, Uptime: st.Uptime, History: st.History,
 		LastCheck: st.LastCheck, AgentOnline: st.AgentOnline, AgentSeen: st.AgentSeen,
-		Users: st.Users, TrafficBytes: st.TrafficBytes,
+		Users: st.Users, ActiveUsers: st.ActiveUsers, TrafficBytes: st.TrafficBytes,
 	}}
 	out.Node.RealityPrivateKey = "" // shown only via /install
 	out.Node.Token = maskSecret(n.Token)

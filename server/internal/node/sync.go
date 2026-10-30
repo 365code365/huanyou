@@ -26,9 +26,11 @@ type Syncer struct {
 	Interval time.Duration
 	Xray     *Xray
 	Stats    *Stats
+	Fair     *FairShare // optional; receives the node bandwidth from the API
 
 	client  http.Client
 	current map[string]string // email -> uuid
+	etag    string            // last user list version; the API answers 304 if unchanged
 }
 
 func (s *Syncer) Run(ctx context.Context) {
@@ -109,10 +111,35 @@ func (s *Syncer) reportTraffic(ctx context.Context) error {
 
 func (s *Syncer) syncUsers(ctx context.Context) error {
 	var body struct {
-		Users []remoteUser `json:"users"`
+		Users         []remoteUser `json:"users"`
+		BandwidthMbps int          `json:"bandwidth_mbps"`
 	}
-	if err := s.do(ctx, http.MethodGet, "/internal/v1/users", nil, &body); err != nil {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(s.APIURL, "/")+"/internal/v1/users", nil)
+	if err != nil {
 		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.Token)
+	if s.etag != "" {
+		req.Header.Set("If-None-Match", s.etag)
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusNotModified:
+		return nil // nothing changed since the last sync
+	case http.StatusOK:
+	default:
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("GET /internal/v1/users: status %d: %s", resp.StatusCode, b)
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&body); err != nil {
+		return err
+	}
+	if s.Fair != nil {
+		s.Fair.SetBandwidth(body.BandwidthMbps)
 	}
 	want := make(map[string]remoteUser, len(body.Users))
 	for _, u := range body.Users {
@@ -144,5 +171,6 @@ func (s *Syncer) syncUsers(ctx context.Context) error {
 	if added+removed > 0 {
 		slog.Info("users synced", "added", added, "removed", removed, "total", len(s.current))
 	}
+	s.etag = resp.Header.Get("ETag")
 	return nil
 }

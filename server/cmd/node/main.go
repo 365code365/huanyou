@@ -45,12 +45,16 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// Fair sharing under load; the API tells us the node's bandwidth (0 = off).
+	fair := &node.FairShare{Stats: st}
+	go fair.Run(ctx)
 	(&node.Syncer{
 		APIURL:   cfg.APIURL,
 		Token:    cfg.Token,
 		Interval: time.Duration(cfg.SyncIntervalSeconds) * time.Second,
 		Xray:     x,
 		Stats:    st,
+		Fair:     fair,
 	}).Run(ctx)
 	slog.Info("shutting down")
 }

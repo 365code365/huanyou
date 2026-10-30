@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -384,6 +385,41 @@ echo "VIRT=$(systemd-detect-virt 2>/dev/null || echo unknown)"
 echo "::done"
 `
 
+// tuneScript applies kernel settings for many concurrent proxied connections:
+// BBR + fq (better throughput on lossy cross-border links), larger socket
+// buffers, bigger accept / SYN queues, more file descriptors and ports,
+// faster recycling of closed connections. Idempotent.
+const tuneScript = `
+echo "::step kernel tuning"
+cat > /etc/sysctl.d/99-vpn-node.conf <<'SYSCTL'
+# vpn-node: high-concurrency proxy tuning (managed by the panel)
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+net.core.somaxconn = 65535
+net.core.netdev_max_backlog = 65536
+net.ipv4.tcp_max_syn_backlog = 65536
+net.core.rmem_max = 33554432
+net.core.wmem_max = 33554432
+net.ipv4.tcp_rmem = 4096 87380 33554432
+net.ipv4.tcp_wmem = 4096 65536 33554432
+net.ipv4.tcp_fastopen = 3
+net.ipv4.tcp_mtu_probing = 1
+net.ipv4.tcp_slow_start_after_idle = 0
+net.ipv4.tcp_fin_timeout = 15
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.tcp_keepalive_time = 600
+net.ipv4.tcp_keepalive_intvl = 30
+net.ipv4.tcp_keepalive_probes = 5
+net.ipv4.ip_local_port_range = 10240 65535
+net.ipv4.tcp_max_tw_buckets = 262144
+fs.file-max = 2097152
+fs.nr_open = 2097152
+SYSCTL
+modprobe tcp_bbr 2>/dev/null || true
+sysctl --system >/dev/null 2>&1 || sysctl -p /etc/sysctl.d/99-vpn-node.conf >/dev/null 2>&1 || true
+echo "congestion=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)"
+`
+
 // installScript places files and starts the service. port is baked in.
 func installScript(port int) string {
 	return fmt.Sprintf(`#!/bin/bash
@@ -396,6 +432,7 @@ echo "::step place files"
 install -m 0755 -o root -g root /tmp/vpn-node.bin /usr/local/bin/vpn-node
 install -m 0640 -o root -g vpn /tmp/vpn-node.json /etc/vpn/node.json
 install -m 0644 -o root -g root /tmp/vpn-node.service /etc/systemd/system/vpn-node.service
+`+tuneScript+`
 echo "::step time sync"
 timedatectl set-ntp true 2>/dev/null || systemctl enable --now systemd-timesyncd 2>/dev/null || true
 echo "::step firewall"
@@ -439,6 +476,7 @@ test -f /etc/vpn/node.json || { echo "::fail no /etc/vpn/node.json"; exit 1; }
 cp -f /usr/local/bin/vpn-node /usr/local/bin/vpn-node.prev 2>/dev/null || true
 install -m 0755 -o root -g root /tmp/vpn-node.bin /usr/local/bin/vpn-node
 rm -f /tmp/vpn-node.bin /tmp/vpn-upgrade.sh
+` + tuneScript + `
 systemctl restart vpn-node
 echo "::upgraded"
 `
@@ -457,4 +495,194 @@ echo "::upgraded"
 	jl, _ := runScript(ctx, client, "journalctl -u vpn-node -n 20 --no-pager")
 	io.WriteString(log, jl)
 	return arch, fmt.Errorf("升级后 vpn-node 未能运行（已保留旧程序 /usr/local/bin/vpn-node.prev）")
+}
+
+// CloneInstall is a complete control-plane deployment for a new server.
+type CloneInstall struct {
+	Domain       string
+	APIBinary    []byte            // linux/amd64 vpn-api (the running binary)
+	NodeBinaries map[string][]byte // optional: so the clone can one-click install nodes
+	APIConfig    []byte            // /etc/vpn/api.json
+	APIEnv       []byte            // /etc/vpn/api.env (secrets)
+	Database     []byte            // /var/lib/vpn/vpn.db
+	Log          io.Writer
+}
+
+type CloneResult struct {
+	TLSReady bool `json:"tls_ready"`
+}
+
+const apiUnit = `[Unit]
+Description=VPN control-plane API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=vpn
+Group=vpn
+EnvironmentFile=/etc/vpn/api.env
+ExecStart=/usr/local/bin/vpn-api -config /etc/vpn/api.json
+Restart=always
+RestartSec=3
+StateDirectory=vpn
+LimitNOFILE=1048576
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/vpn
+
+[Install]
+WantedBy=multi-user.target
+`
+
+// Clone checks the target (arch, systemd, free 80/443, DNS → this IP), then
+// installs vpn-api with the given config, secrets and database and waits for
+// HTTPS to come up with a Let's Encrypt certificate.
+func Clone(ctx context.Context, t Target, in CloneInstall) (*CloneResult, error) {
+	var log io.Writer = io.Discard
+	if in.Log != nil {
+		log = in.Log
+	}
+	client, err := t.dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+	fmt.Fprintf(log, "已连接 %s\n", t.addr())
+
+	// --- checks ---
+	if err := upload(ctx, client, "/tmp/vpn-check.sh", []byte(checkScript)); err != nil {
+		return nil, err
+	}
+	out, _ := runScript(ctx, client, "bash /tmp/vpn-check.sh 443")
+	r := parseReport(out)
+	out80, _ := runScript(ctx, client, "bash /tmp/vpn-check.sh 80")
+	r80 := parseReport(out80)
+	runScript(ctx, client, "rm -f /tmp/vpn-check.sh")
+	fmt.Fprintf(log, "系统：%s · %s · 内存 %d MB · 磁盘空闲 %d GB\n", r.OS, r.Arch, r.RAMMB, r.DiskFreeGB)
+	switch {
+	case r.Arch != "x86_64":
+		return nil, fmt.Errorf("目标服务器架构为 %q，目前克隆只支持 x86_64", r.Arch)
+	case !r.Systemd:
+		return nil, fmt.Errorf("目标服务器没有 systemd")
+	case !r.PortFree:
+		return nil, fmt.Errorf("目标服务器 443 端口被 %s 占用，克隆需要独占 80/443（请换一台干净的服务器，或先停掉该程序）", r.PortUser)
+	case !r80.PortFree:
+		return nil, fmt.Errorf("目标服务器 80 端口被 %s 占用（申请 HTTPS 证书需要 80 端口）", r80.PortUser)
+	}
+	// DNS must already point at the target, or Let's Encrypt can't issue.
+	ips, _ := net.DefaultResolver.LookupHost(ctx, in.Domain)
+	targetIP := t.Host
+	if net.ParseIP(targetIP) == nil {
+		if a, err := net.DefaultResolver.LookupHost(ctx, targetIP); err == nil && len(a) > 0 {
+			targetIP = a[0]
+		}
+	}
+	pointed := false
+	for _, ip := range ips {
+		if ip == targetIP {
+			pointed = true
+		}
+	}
+	if !pointed {
+		return nil, fmt.Errorf("域名 %s 当前解析到 %v，没有指向目标服务器 %s。请先在 DNS 添加 A 记录（不要开 CDN 代理），生效后再克隆", in.Domain, ips, targetIP)
+	}
+	fmt.Fprintf(log, "域名 %s → %s ✓，80/443 空闲 ✓\n", in.Domain, targetIP)
+
+	// --- upload ---
+	files := []struct {
+		path string
+		data []byte
+	}{
+		{"/tmp/vpn-api.bin", in.APIBinary},
+		{"/tmp/vpn-api.json", in.APIConfig},
+		{"/tmp/vpn-api.env", in.APIEnv},
+		{"/tmp/vpn-api.db", in.Database},
+		{"/tmp/vpn-api.service", []byte(apiUnit)},
+	}
+	if b := in.NodeBinaries["x86_64"]; b != nil {
+		files = append(files, struct {
+			path string
+			data []byte
+		}{"/tmp/vpn-node.bin", b})
+	}
+	total := 0
+	for _, f := range files {
+		total += len(f.data)
+	}
+	fmt.Fprintf(log, "上传程序和数据（%s）…\n", humanSize(total))
+	for _, f := range files {
+		if err := upload(ctx, client, f.path, f.data); err != nil {
+			return nil, err
+		}
+	}
+	script := `#!/bin/bash
+set -e
+echo "::step user+dirs"
+id vpn >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin vpn
+mkdir -p /etc/vpn /var/lib/vpn/dl/releases /var/lib/vpn/acme
+echo "::step place files"
+install -m 0755 -o root -g root /tmp/vpn-api.bin /usr/local/bin/vpn-api
+if [ -f /tmp/vpn-node.bin ]; then install -m 0755 -o root -g root /tmp/vpn-node.bin /usr/local/bin/vpn-node; fi
+install -m 0640 -o root -g vpn /tmp/vpn-api.json /etc/vpn/api.json
+install -m 0640 -o root -g vpn /tmp/vpn-api.env /etc/vpn/api.env
+if [ -f /var/lib/vpn/vpn.db ]; then mv /var/lib/vpn/vpn.db /var/lib/vpn/vpn.db.bak-pre-clone-$(date +%s); fi
+rm -f /var/lib/vpn/vpn.db-wal /var/lib/vpn/vpn.db-shm
+install -m 0600 -o vpn -g vpn /tmp/vpn-api.db /var/lib/vpn/vpn.db
+chown -R vpn:vpn /var/lib/vpn
+install -m 0644 -o root -g root /tmp/vpn-api.service /etc/systemd/system/vpn-api.service
+rm -f /tmp/vpn-api.bin /tmp/vpn-node.bin /tmp/vpn-api.json /tmp/vpn-api.env /tmp/vpn-api.db /tmp/vpn-api.service
+echo "::step firewall"
+if command -v ufw >/dev/null 2>&1; then ufw allow 80/tcp >/dev/null 2>&1 || true; ufw allow 443/tcp >/dev/null 2>&1 || true; fi
+if command -v firewall-cmd >/dev/null 2>&1; then firewall-cmd --permanent --add-service=http --add-service=https >/dev/null 2>&1 && firewall-cmd --reload >/dev/null 2>&1 || true; fi
+` + tuneScript + `
+echo "::step start"
+systemctl daemon-reload
+systemctl enable vpn-api >/dev/null 2>&1 || true
+systemctl restart vpn-api
+echo "::cloned"
+`
+	if err := upload(ctx, client, "/tmp/vpn-clone.sh", []byte(script)); err != nil {
+		return nil, err
+	}
+	out, _ = runScript(ctx, client, "bash /tmp/vpn-clone.sh")
+	io.WriteString(log, out)
+	runScript(ctx, client, "rm -f /tmp/vpn-clone.sh")
+
+	ok := false
+	for i := 0; i < 10 && !ok; i++ {
+		ok = probe(ctx, client, "systemctl is-active vpn-api") == "active"
+		if !ok {
+			time.Sleep(time.Second)
+		}
+	}
+	if !ok {
+		jl, _ := runScript(ctx, client, "journalctl -u vpn-api -n 30 --no-pager")
+		io.WriteString(log, jl)
+		return nil, fmt.Errorf("新系统的 vpn-api 没有运行起来，请查看上面的日志")
+	}
+	fmt.Fprint(log, "vpn-api 已启动，正在申请 HTTPS 证书…\n")
+
+	// --- wait for HTTPS (the first request triggers certificate issuance) ---
+	hc := &http.Client{Timeout: 20 * time.Second}
+	for i := 0; i < 12; i++ {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+in.Domain+"/healthz", nil)
+		if resp, err := hc.Do(req); err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				fmt.Fprintf(log, "HTTPS 正常：https://%s ✓\n", in.Domain)
+				return &CloneResult{TLSReady: true}, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+	fmt.Fprint(log, "证书暂未就绪（可能 DNS 仍在生效），服务已运行，稍后访问即会自动申请。\n")
+	return &CloneResult{TLSReady: false}, nil
 }

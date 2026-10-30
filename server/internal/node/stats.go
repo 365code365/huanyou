@@ -26,7 +26,41 @@ type Stats struct {
 
 type userMeter struct {
 	up, down atomic.Int64 // bytes since last Drain
+	window   atomic.Int64 // bytes since the last fair-share tick
 	limiter  atomic.Pointer[rate.Limiter]
+
+	mu      sync.Mutex
+	planBps float64 // plan speed limit, bytes/s (0 = unlimited)
+	dynBps  float64 // fair-share cap set under load, bytes/s (0 = none)
+}
+
+// effective is the tighter of the plan limit and the fair-share cap (0 = none).
+func (m *userMeter) effective() float64 {
+	switch {
+	case m.planBps == 0:
+		return m.dynBps
+	case m.dynBps == 0:
+		return m.planBps
+	default:
+		return min(m.planBps, m.dynBps)
+	}
+}
+
+// apply swaps in a limiter matching the effective limit. Callers hold m.mu.
+func (m *userMeter) apply() {
+	bps := m.effective()
+	if bps <= 0 {
+		m.limiter.Store(nil)
+		return
+	}
+	if old := m.limiter.Load(); old != nil && old.Limit() == rate.Limit(bps) {
+		return
+	}
+	burst := int(bps)
+	if burst < 32<<10 {
+		burst = 32 << 10
+	}
+	m.limiter.Store(rate.NewLimiter(rate.Limit(bps), burst))
 }
 
 func NewStats() *Stats {
@@ -58,22 +92,16 @@ func (s *Stats) meter(email string) *userMeter {
 	return m
 }
 
-// SetSpeed sets the user's limit in kbit/s (0 = unlimited). Applies to new and existing connections.
+// SetSpeed sets the user's plan limit in kbit/s (0 = unlimited). Applies to new and existing connections.
 func (s *Stats) SetSpeed(email string, kbps int) {
 	m := s.meter(email)
-	if kbps <= 0 {
-		m.limiter.Store(nil)
-		return
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.planBps = 0
+	if kbps > 0 {
+		m.planBps = float64(kbps) * 1000 / 8
 	}
-	bps := float64(kbps) * 1000 / 8
-	burst := int(bps)
-	if burst < 32<<10 {
-		burst = 32 << 10
-	}
-	if old := m.limiter.Load(); old != nil && old.Limit() == rate.Limit(bps) {
-		return
-	}
-	m.limiter.Store(rate.NewLimiter(rate.Limit(bps), burst))
+	m.apply()
 }
 
 // Usage is traffic since the previous Drain.
@@ -169,6 +197,7 @@ func (c *counter) Add(n int64) int64 {
 		} else {
 			m.down.Add(n)
 		}
+		m.window.Add(n)
 		if l := m.limiter.Load(); l != nil {
 			wait(l, n)
 		}

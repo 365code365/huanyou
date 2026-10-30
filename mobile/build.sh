@@ -25,7 +25,7 @@ build_android() {
     export ANDROID_NDK_HOME
   fi
   mkdir -p "$APP/android/app/libs"
-  gomobile bind -v -target=android/arm64,android/arm,android/amd64 -androidapi 24 \
+  gomobile bind -v -target=android/arm64,android/arm -androidapi 24 \
     -trimpath -ldflags="$LDFLAGS" -javapkg=com.vpnplatform \
     -o "$APP/android/app/libs/vpncore.aar" ./vpncore
   echo "-> $APP/android/app/libs/vpncore.aar"

@@ -414,7 +414,9 @@ class ApiClient {
   }
 
   Future<Profile> profile({String? nodeId, String mode = 'smart'}) async {
-    final q = {'mode': mode, 'node': ?nodeId};
+    // format=pb: the server compiles the profile (smart-routing IP lists
+    // included) so the native core needs no JSON loader or geo files.
+    final q = {'mode': mode, 'format': 'pb', 'node': ?nodeId};
     return Profile.fromJson(await _send('GET', '/api/v1/profile', query: q));
   }
 

@@ -59,12 +59,43 @@ type Node struct {
 	VisionPort int `json:"vision_port"`
 	// XHTTPPath: if set, the same port also serves VLESS + XHTTP + REALITY.
 	XHTTPPath string `json:"xhttp_path"`
-	// Disabled hides the node from the app and from cluster mode.
+	// Disabled hides the node from the app and from cluster mode (下架).
 	Disabled bool `json:"disabled"`
+	// Frozen (冻结) stops the node serving anyone: hidden from the app and the
+	// agent receives an empty user list, so existing sessions are dropped.
+	Frozen       bool   `json:"frozen"`
+	FrozenReason string `json:"frozen_reason"`
+	// Note is an internal admin remark (provider, expiry date, cost …).
+	Note string `json:"note"`
+	// Tags group nodes for search / filtering, e.g. ["高速", "流媒体"].
+	Tags []string `json:"tags"`
+	// Rate (流量倍率) multiplies traffic billed on this node (1 = normal, 0.5 = half).
+	Rate float64 `json:"rate"`
+	// Plans restricts the node to these plan ids ("" / empty = every plan).
+	Plans []string `json:"plans"`
+	// BandwidthMbps is the node's usable uplink. When set, the agent shares it
+	// fairly between active users under load (see node.FairShare). 0 = off.
+	BandwidthMbps int `json:"bandwidth_mbps"`
 	// Weight biases cluster-mode ordering (higher first, default 1).
 	Weight int `json:"weight"`
 	// Sort orders the node list in the app (ascending).
 	Sort int `json:"sort"`
+}
+
+// Serving reports whether the node is offered to users at all.
+func (n *Node) Serving() bool { return !n.Disabled && !n.Frozen }
+
+// AllowsPlan reports whether users on planID may use the node.
+func (n *Node) AllowsPlan(planID string) bool {
+	if len(n.Plans) == 0 {
+		return true
+	}
+	for _, p := range n.Plans {
+		if p == planID {
+			return true
+		}
+	}
+	return false
 }
 
 // Plan is a subscription tier. The free plan has price 0 and duration 0.
@@ -344,6 +375,32 @@ func (c *Catalog) validateNodes() error {
 			return fmt.Errorf("节点 %s 的 xhttp_path 必须以 / 开头", n.ID)
 		}
 		n.Region = strings.ToUpper(strings.TrimSpace(n.Region))
+		if n.Rate == 0 {
+			n.Rate = 1
+		}
+		if n.Rate < 0 || n.Rate > 10 {
+			return fmt.Errorf("节点 %s 的流量倍率需在 0–10 之间", n.ID)
+		}
+		if n.BandwidthMbps < 0 || n.BandwidthMbps > 100000 {
+			return fmt.Errorf("节点 %s 的带宽数值无效", n.ID)
+		}
+		n.Note = strings.TrimSpace(n.Note)
+		n.FrozenReason = strings.TrimSpace(n.FrozenReason)
+		tags := []string{}
+		for _, t := range n.Tags {
+			if t = strings.TrimSpace(t); t != "" && !slicesContains(tags, t) {
+				tags = append(tags, t)
+			}
+		}
+		n.Tags = tags
+		if n.Plans == nil {
+			n.Plans = []string{}
+		}
+		for _, p := range n.Plans {
+			if c.Plan(p) == nil {
+				return fmt.Errorf("节点 %s 限定的套餐 %q 不存在", n.ID, p)
+			}
+		}
 		seen[n.ID] = true
 	}
 	return nil
@@ -437,12 +494,27 @@ func (c *Catalog) NodeByID(id string) *Node {
 	return nil
 }
 
-// EnabledNodes returns nodes offered to clients, sorted by Sort then Weight (desc).
-func (c *Catalog) EnabledNodes() []*Node {
+func slicesContains(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+// EnabledNodes returns nodes offered to clients (not disabled, not frozen),
+// sorted by Sort then Weight (desc).
+func (c *Catalog) EnabledNodes() []*Node { return c.NodesForPlan("") }
+
+// NodesForPlan is EnabledNodes restricted to nodes that allow planID
+// ("" = no restriction check).
+func (c *Catalog) NodesForPlan(planID string) []*Node {
 	var out []*Node
 	for i := range c.Nodes {
-		if !c.Nodes[i].Disabled {
-			out = append(out, &c.Nodes[i])
+		n := &c.Nodes[i]
+		if n.Serving() && (planID == "" || n.AllowsPlan(planID)) {
+			out = append(out, n)
 		}
 	}
 	sortSlice(out, func(a, b *Node) bool {
