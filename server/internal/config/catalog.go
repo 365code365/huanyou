@@ -189,8 +189,13 @@ type Node struct {
 	Sort int `json:"sort"`
 }
 
-// Serving reports whether the node is offered to users at all.
-func (n *Node) Serving() bool { return !n.Disabled && !n.Frozen }
+// Serving reports whether the node is offered to users at all. A node whose
+// server rental has expired is withheld from the app (node list, profiles,
+// cluster / AI selection) and from health checks, like a disabled one.
+func (n *Node) Serving() bool { return !n.Disabled && !n.Frozen && !n.Expired(time.Now()) }
+
+// Expired reports whether the node's server rental ended before t.
+func (n *Node) Expired(t time.Time) bool { return n.ExpiresAt != nil && !n.ExpiresAt.After(t) }
 
 // AllowsPlan reports whether users on planID may use the node.
 func (n *Node) AllowsPlan(planID string) bool {

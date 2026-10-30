@@ -26,6 +26,22 @@ const expiryOf = (n: VpnNode): Expiry => {
   return ms <= 0 ? 'expired' : ms <= 48 * 3600000 ? 'urgent' : ms <= 7 * 86400000 ? 'soon' : 'ok'
 }
 const expiryWarn = (e: Expiry) => e === 'expired' || e === 'urgent' || e === 'soon'
+const isExpired = (n: VpnNode) => !!n.expires_at && Date.parse(n.expires_at) <= Date.now()
+// Expiry buckets for the statistics row: expired, or due within N days (cumulative).
+const buckets = [
+  { key: 'expired', label: '已过期', days: 0 },
+  { key: 'd1', label: '1 天内到期', days: 1 },
+  { key: 'd3', label: '3 天内到期', days: 3 },
+  { key: 'd7', label: '7 天内到期', days: 7 },
+  { key: 'd15', label: '15 天内到期', days: 15 },
+] as const
+type Bucket = (typeof buckets)[number]['key']
+const inBucket = (n: VpnNode, b: Bucket) => {
+  if (!n.expires_at) return false
+  const ms = Date.parse(n.expires_at) - Date.now()
+  const d = buckets.find((x) => x.key === b)!.days
+  return b === 'expired' ? ms <= 0 : ms > 0 && ms <= d * 86400000
+}
 const expiryColor: Record<Expiry, string> = { expired: 'error', urgent: 'volcano', soon: 'orange', ok: 'default', none: 'default' }
 
 // Status is response-only; the target follows the SNI.
@@ -43,7 +59,8 @@ export default function NodesPage() {
 
   // ---- search / filter / selection ----
   const [q, setQ] = useState('')
-  const [statusF, setStatusF] = useState<'all' | 'ok' | 'down' | 'expiring' | 'frozen' | 'off'>('all')
+  const [statusF, setStatusF] = useState<'all' | 'ok' | 'down' | 'expired' | 'frozen' | 'off'>('all')
+  const [bucketF, setBucketF] = useState<Bucket>()
   const [tagF, setTagF] = useState<string[]>([])
   const [selected, setSelected] = useState<string[]>([])
   const allTags = useMemo(() => [...new Set(c.items.flatMap((n) => n.tags ?? []))].sort(), [c.items])
@@ -52,17 +69,22 @@ export default function NodesPage() {
     return c.items.filter((n) => {
       if (needle && ![n.id, n.name, n.address, n.region, n.note, ...(n.tags ?? [])].some((v) => v?.toLowerCase().includes(needle))) return false
       if (tagF.length && !tagF.every((t) => n.tags?.includes(t))) return false
+      if (bucketF && !inBucket(n, bucketF)) return false
       switch (statusF) {
-        case 'ok': return !n.frozen && !n.disabled && !!n.status?.online
-        case 'down': return !n.frozen && !n.disabled && !n.status?.online
-        case 'expiring': return expiryWarn(expiryOf(n))
+        case 'ok': return live(n) && !!n.status?.online
+        case 'down': return live(n) && !n.status?.online
+        case 'expired': return isExpired(n)
         case 'frozen': return n.frozen
         case 'off': return n.disabled
       }
       return true
     })
-  }, [c.items, q, statusF, tagF])
+  }, [c.items, q, statusF, tagF, bucketF])
   const count = (f: (n: VpnNode) => boolean) => c.items.filter(f).length
+  // Expired nodes are no longer served to the app, so they are neither 正常 nor 离线.
+  function live(n: VpnNode) {
+    return !n.frozen && !n.disabled && !isExpired(n)
+  }
   const expiring = useMemo(
     () => c.items.filter((n) => expiryWarn(expiryOf(n))).sort((a, b) => Date.parse(a.expires_at!) - Date.parse(b.expires_at!)),
     [c.items],
@@ -187,11 +209,11 @@ export default function NodesPage() {
             onChange={(v) => setStatusF(v as typeof statusF)}
             options={[
               { label: `全部 ${c.items.length}`, value: 'all' },
-              { label: `正常 ${count((n) => !n.frozen && !n.disabled && !!n.status?.online)}`, value: 'ok' },
-              { label: `离线 ${count((n) => !n.frozen && !n.disabled && !n.status?.online)}`, value: 'down' },
+              { label: `正常 ${count((n) => live(n) && !!n.status?.online)}`, value: 'ok' },
+              { label: `离线 ${count((n) => live(n) && !n.status?.online)}`, value: 'down' },
               {
-                label: expiring.length ? <span style={{ color: '#D4380D' }}><WarningFilled /> 即将到期 {expiring.length}</span> : '即将到期 0',
-                value: 'expiring',
+                label: count(isExpired) ? <span style={{ color: '#CF1322' }}>已过期 {count(isExpired)}</span> : '已过期 0',
+                value: 'expired',
               },
               { label: `冻结 ${count((n) => n.frozen)}`, value: 'frozen' },
               { label: `已下架 ${count((n) => n.disabled)}`, value: 'off' },
@@ -211,6 +233,27 @@ export default function NodesPage() {
               <Button onClick={() => bulk({ disabled: true }, '已下架')}>下架</Button>
             </Space>
           )}
+        </div>
+        <div className="toolbar" style={{ gap: 8 }}>
+          <span className="muted"><ClockCircleOutlined /> 到期统计：</span>
+          {buckets.map((b) => {
+            const n = count((x) => inBucket(x, b.key))
+            const on = bucketF === b.key
+            const color = b.key === 'expired' || b.key === 'd1' ? 'red' : b.key === 'd3' ? 'volcano' : b.key === 'd7' ? 'orange' : 'gold'
+            return (
+              <Tag.CheckableTag
+                key={b.key}
+                checked={on}
+                onChange={(v) => setBucketF(v ? b.key : undefined)}
+                className={'expiry-chip expiry-' + color}
+                style={{ opacity: n || on ? 1 : 0.55 }}
+              >
+                {b.label} <b>{n}</b>
+              </Tag.CheckableTag>
+            )
+          })}
+          {bucketF && <Button type="link" size="small" onClick={() => setBucketF(undefined)}>清除筛选</Button>}
+          <span className="muted" style={{ fontSize: 12 }}>已过期的节点不再下发给 App（节点列表、智能 / 集群 / AI 线路），也不再做在线检测</span>
         </div>
         {expiring.length > 0 && (
           <Alert
@@ -263,7 +306,18 @@ export default function NodesPage() {
                 </>
               ),
             },
-            { title: '状态（近 1 小时）', width: 280, render: (_, n) => <NodeHealth status={n.status} disabled={n.disabled} history /> },
+            {
+              title: '状态（近 1 小时）',
+              width: 280,
+              render: (_, n) =>
+                isExpired(n) ? (
+                  <Tooltip title="服务器租期已到，App 不再获取这个节点，也不再检测。续费后修改到期时间即可恢复。">
+                    <Tag color="error" bordered={false}>已过期 · 已停止下发</Tag>
+                  </Tooltip>
+                ) : (
+                  <NodeHealth status={n.status} disabled={n.disabled} history />
+                ),
+            },
             { title: '可用率', width: 80, render: (_, n) => (n.status ? Math.round(n.status.uptime * 100) + '%' : '—') },
             {
               title: '到期 / 厂商',
