@@ -90,18 +90,18 @@
 
 ## 当前线上部署
 
-美国节点 **64.83.22.32**（Debian 12，宝塔 nginx），域名 **net-w.51aihelp.com**：
+香港节点 **162.211.181.15**（Debian 12），域名 **net-w.51aihelp.com**。2026-10-30 从 64.83.22.32 用「克隆 → 服务迁移」搬过来，后台和香港节点共用这台服务器：
 
 ```
-:443  nginx stream（ssl_preread 按 SNI 分流，PROXY protocol 传真实 IP）
-      ├─ SNI = net-w.51aihelp.com → 127.0.0.1:8443 nginx HTTPS（Let's Encrypt）→ 127.0.0.1:8080 vpn-api
+:443  vpn-api（按 TLS SNI 分流，PROXY protocol 传真实 IP）
+      ├─ SNI = net-w.51aihelp.com → vpn-api 自己的 HTTPS（Let's Encrypt，TLS-ALPN 验证，自动续期）
       └─ 其它 SNI（VPN 客户端 / 探测）→ 127.0.0.1:4443 vpn-node（REALITY，伪装 www.apple.com）
-:80   ACME 验证 + 其余 301 跳转 https
+:80   本机原有的 nginx（与本系统无关）
 ```
 
 - API / 管理后台：`https://net-w.51aihelp.com/`、`https://net-w.51aihelp.com/admin/`（管理员密码在 `/etc/vpn/api.env`）。
-- 证书由 acme.sh 签发并自动续期（cron），续期后自动 reload nginx。证书在 `/etc/vpn/tls/`。
-- 相关配置：`/www/server/panel/vhost/nginx/tcp/vpn-sni.conf`（443 分流）、`/www/server/panel/vhost/nginx/vpn-api.conf`（80 / 8443）；节点 `node.json` 里 `listen=127.0.0.1`、`vision_port=4443`、`accept_proxy_protocol=true`。
+- 配置：`/etc/vpn/api.json`（`tls.domain`、`tls.passthrough=127.0.0.1:4443`）；节点 `node.json` 里 `listen=127.0.0.1`、`vision_port=4443`、`accept_proxy_protocol=true`（原配置备份为 `node.json.bak-pre-clone`）。证书缓存在 `/var/lib/vpn/acme/`。
+- 「备份与克隆」页顶部的「当前服务器」卡片显示公网 IP、域名解析是否指向本机、证书剩余天数和本机节点。
 - App 编译时用 `--dart-define=API_BASE_URLS=https://net-w.51aihelp.com`。iOS 默认禁止明文 HTTP，所以真机必须走 HTTPS。
 
 > 仍是演示配置：`payments.mock` 为开启状态，上线前关闭。
@@ -118,7 +118,7 @@ server/                Go
   internal/monitor     节点探测、心跳、预警
   internal/payment     支付宝 / 易支付 / 模拟支付
 admin/                 管理后台前端：Next.js 16 + React 19 + Ant Design 6（见 admin/README.md）
-mobile/                Go：vpncore，gomobile 编译成 Android AAR / iOS xcframework
+mobile/                Go：vpncore，gomobile 编译成 Android AAR / iOS xcframework；cmd/huanyou-core 是 Windows 版核心
 app/                   Flutter App
 ```
 
@@ -292,6 +292,29 @@ PacketTunnel 扩展 target 已经通过 `app/ios/scripts/setup_packet_tunnel.rb`
 2. 在 Apple Developer 后台注册两个 App ID：`com.vpnplatform.vpnApp` 和 `com.vpnplatform.vpnApp.PacketTunnel`，都勾选 **Network Extensions** 能力。
 3. 在 Xcode 里打开 `ios/Runner.xcworkspace`，给 Runner 和 PacketTunnel 两个 target 都选上你的 Team。如果要改 Bundle ID，两个都要改，扩展的 ID 必须是 `<App ID>.PacketTunnel`。
 4. 注意：国区 App Store 不允许上架 VPN 类 App，需要上架到其他地区。
+
+### Windows 版
+
+Windows 版和手机版是同一套 Flutter 代码（`app/windows/`）。连接用的是 `huanyou-core.exe`（`mobile/cmd/huanyou-core`，也基于 Xray-core），以**系统代理模式**工作：
+
+- App 启动核心进程，通过标准输入把 API 下发的配置交给它。核心在 `127.0.0.1` 的随机端口开一个 HTTP + SOCKS5 混合代理，并把 Windows 系统代理（设置 → 网络 → 代理）指向这个端口。路由规则（大陆直连 / AI / 全局 / 集群）和手机版相同。
+- 不需要管理员权限，也不需要安装 TUN 驱动。浏览器和大多数遵循系统代理的软件会自动走代理。不读系统代理的程序（部分游戏、命令行工具）不会经过代理。
+- 断开或退出 App 时会恢复用户原来的代理设置。核心被强制结束时（任务管理器、断电），下次打开 App 会自动恢复。
+- 设备标识用 Windows 的 MachineGuid，重装 App 不会变成新账号。
+- Windows 版没有扫码绑定（`mobile_scanner` 不支持 Windows），可以用「输入令牌」。
+
+打包需要一台装了 Flutter 和 Visual Studio 2022（勾选「使用 C++ 的桌面开发」）的 Windows 电脑：
+
+```bash
+# 1) 编译核心（纯 Go，在 macOS / Linux / Windows 上都能编译）
+cd mobile && ./build.sh windows        # -> app/windows/core/huanyou-core.exe
+
+# 2) 在 Windows 上打包，生成 app/build/dist/huanyou-windows-<版本>-<构建号>.zip
+cd app
+powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1 -ApiBaseUrls https://api.example.com
+```
+
+`-ApiBaseUrls` 对应手机版的 `--dart-define=API_BASE_URLS=...`。然后在后台「版本发布 → 发布 Windows 版本」上传这个 zip。下载页会多出 Windows 下载入口，App 内检查更新会在浏览器里打开下载链接。
 
 ---
 
