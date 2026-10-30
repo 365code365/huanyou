@@ -1,6 +1,7 @@
 'use client'
 import { Alert, Button, Descriptions, Form, Input, InputNumber, Select, Space, Spin, Switch, Tag } from 'antd'
 import { useEffect } from 'react'
+import { NumberUnit } from '@/components/NumberUnit'
 import { PageCard } from '@/components/PageCard'
 import { PlanSelect } from '@/components/PlanSelect'
 import { useAction, useAsync } from '@/hooks/useAsync'
@@ -39,7 +40,7 @@ export default function SettingsPage() {
               <PlanSelect plans={plans} allowClear placeholder="不提供免费套餐" />
             </Form.Item>
             <Form.Item name="traffic_period_days" label="流量重置周期" rules={[{ required: true }]}>
-              <InputNumber min={1} suffix="天" />
+              <NumberUnit min={1} unit="天" />
             </Form.Item>
           </div>
         </PageCard>
@@ -52,9 +53,9 @@ export default function SettingsPage() {
                 <Form.Item name={['referral', 'reward_plan_id']} label="奖励套餐" rules={[{ required: true, message: '请选择付费套餐' }]} extra="奖励按该套餐发放；对方已有同一套餐则顺延">
                   <PlanSelect plans={plans.filter((p) => p.id !== freePlan)} />
                 </Form.Item>
-                <Form.Item name={['referral', 'inviter_days']} label="邀请人获得"><InputNumber min={0} suffix="天 / 人" /></Form.Item>
-                <Form.Item name={['referral', 'invitee_days']} label="被邀请人获得"><InputNumber min={0} suffix="天" /></Form.Item>
-                <Form.Item name={['referral', 'max_invites']} label="每人奖励上限" extra="0 = 不限"><InputNumber min={0} suffix="人" /></Form.Item>
+                <Form.Item name={['referral', 'inviter_days']} label="邀请人获得"><NumberUnit min={0} unit="天 / 人" /></Form.Item>
+                <Form.Item name={['referral', 'invitee_days']} label="被邀请人获得"><NumberUnit min={0} unit="天" /></Form.Item>
+                <Form.Item name={['referral', 'max_invites']} label="每人奖励上限" extra="0 = 不限"><NumberUnit min={0} unit="人" /></Form.Item>
               </>
             )}
           </div>
@@ -63,10 +64,10 @@ export default function SettingsPage() {
         <PageCard title="多设备共享">
           <div style={{ maxWidth: 640 }}>
             <Form.Item name={['multi_device', 'max_devices']} label="每个订阅设备数" extra="含主设备；会员在 App「我的 → 多设备」生成令牌 / 二维码，其它设备扫码或输入令牌即可共用">
-              <InputNumber min={1} max={20} suffix="台" />
+              <NumberUnit min={1} max={20} unit="台" />
             </Form.Item>
             <Form.Item name={['multi_device', 'min_plan_days']} label="套餐最短时长" extra="只有有效期不少于这个天数的付费套餐能共享，默认 30 天（月度会员及以上）">
-              <InputNumber min={1} suffix="天" />
+              <NumberUnit min={1} unit="天" />
             </Form.Item>
           </div>
         </PageCard>

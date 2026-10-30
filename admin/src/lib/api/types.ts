@@ -258,3 +258,20 @@ export interface Contact {
   sort: number
   link?: string // response-only: resolved URL ("" = app copies value)
 }
+
+export interface Release {
+  id: number
+  platform: 'android' | 'ios'
+  version: string
+  build: number
+  notes: string
+  file: string
+  url: string
+  size: number
+  sha256: string
+  bundle_id: string
+  force: boolean
+  published: boolean
+  created_at: string
+  download_url: string
+}

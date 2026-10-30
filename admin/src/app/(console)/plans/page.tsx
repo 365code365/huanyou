@@ -1,6 +1,7 @@
 'use client'
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
 import { Button, Drawer, Form, Input, InputNumber, Space, Switch, Table, Tag } from 'antd'
+import { NumberUnit } from '@/components/NumberUnit'
 import { PageCard } from '@/components/PageCard'
 import { useCatalog } from '@/hooks/useCatalog'
 import { api, type Plan } from '@/lib/api'
@@ -99,18 +100,18 @@ export default function PlansPage() {
           {!editingFree && (
             <Space size={24}>
               <Form.Item name="price_cents" label="价格" rules={[{ required: true }]}><PriceInput /></Form.Item>
-              <Form.Item name="duration_days" label="有效天数" rules={[{ required: true }]}><InputNumber min={1} suffix="天" /></Form.Item>
+              <Form.Item name="duration_days" label="有效天数" rules={[{ required: true }]}><NumberUnit min={1} unit="天" /></Form.Item>
             </Space>
           )}
           <Space size={24}>
-            <Form.Item name="traffic_gb" label="流量 / 周期" extra="0 = 不限"><InputNumber min={0} precision={2} suffix="GB" /></Form.Item>
-            <Form.Item name="speed_mbps" label="限速" extra="0 = 不限速"><InputNumber min={0} suffix="Mbps" /></Form.Item>
+            <Form.Item name="traffic_gb" label="流量 / 周期" extra="0 = 不限"><NumberUnit min={0} precision={2} unit="GB" /></Form.Item>
+            <Form.Item name="speed_mbps" label="限速" extra="0 = 不限速"><NumberUnit min={0} unit="Mbps" /></Form.Item>
           </Space>
           <Form.Item noStyle shouldUpdate={(a, b) => a.traffic_gb !== b.traffic_gb}>
             {({ getFieldValue }) =>
               getFieldValue('traffic_gb') > 0 && (
                 <Form.Item name="over_quota_kbps" label="超额后速度" extra="流量用完后的限速，0 = 停止服务直到下个周期">
-                  <InputNumber min={0} suffix="kbps" />
+                  <NumberUnit min={0} unit="kbps" />
                 </Form.Item>
               )
             }

@@ -46,4 +46,5 @@ flutter {
 dependencies {
     // Xray-core client, built by mobile/build.sh android
     implementation(files("libs/vpncore.aar"))
+    implementation("androidx.core:core:1.13.1") // FileProvider for in-app updates
 }

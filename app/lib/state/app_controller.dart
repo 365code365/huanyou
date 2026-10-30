@@ -190,19 +190,67 @@ class AppController extends ChangeNotifier {
     _statusSub?.cancel();
     _refreshTimer?.cancel();
     _retryTimer?.cancel();
+    _reconnectTimer?.cancel();
     super.dispose();
   }
 
   void _onStatus((VpnStatus, String?) e) {
+    final prev = status;
     status = e.$1;
+    statusHint = e.$1 == VpnStatus.connecting ? e.$2 : null;
     if (e.$1 == VpnStatus.error) message = e.$2 ?? '连接失败';
     if (e.$1 == VpnStatus.connected) {
       message = null;
       connectedAt ??= DateTime.now();
+      _wasConnected = true;
+      _reconnectAttempt = 0;
+      _reconnectTimer?.cancel();
     } else if (e.$1 != VpnStatus.connecting) {
       connectedAt = null;
     }
+    // The tunnel went down without the user asking: bring it back.
+    final dropped = e.$1 == VpnStatus.error || (e.$1 == VpnStatus.disconnected && prev != VpnStatus.disconnecting);
+    // Only for a tunnel that was actually up: a first connect that fails
+    // (bad config, permission) is reported, not retried in a loop.
+    if (dropped && _wantConnected && _wasConnected) {
+      if (e.$2 == 'revoked') {
+        // Another VPN app took over or permission was revoked: respect that.
+        _wantConnected = false;
+        message = 'VPN 已被系统或其它 VPN 应用断开';
+      } else {
+        _scheduleReconnect();
+      }
+    }
     notifyListeners();
+  }
+
+  // ---- auto-reconnect ----
+  // Network switches are handled natively (the tunnel is rebuilt on the new
+  // network). This covers the rest: the service being killed, a failed start,
+  // or the core stopping. Backoff 3 s → 6 → 12 → 24 → 48 → 60 s, max 8 tries.
+
+  /// Extra status text from the native side while connecting (e.g. waiting for network).
+  String? statusHint;
+  bool _wantConnected = false;
+  bool _wasConnected = false; // the tunnel reached "connected" since the user connected
+  int _reconnectAttempt = 0;
+  Timer? _reconnectTimer;
+
+  bool get reconnecting => _reconnectTimer?.isActive ?? false;
+
+  void _scheduleReconnect() {
+    _reconnectTimer?.cancel();
+    if (_reconnectAttempt >= 8) {
+      _wantConnected = false;
+      message = '多次重连失败，请检查网络后手动连接';
+      return;
+    }
+    final secs = min(60, 3 << _reconnectAttempt);
+    _reconnectAttempt++;
+    message = '连接已断开，$secs 秒后自动重连（第 $_reconnectAttempt 次）';
+    _reconnectTimer = Timer(Duration(seconds: secs), () {
+      if (_wantConnected && !active) connect(auto: true);
+    });
   }
 
   // ---- auth ----
@@ -341,7 +389,29 @@ class AppController extends ChangeNotifier {
     return connect();
   }
 
-  Future<ConnectResult> connect() async {
+  /// Connects. [auto] marks a background reconnect attempt: on failure it
+  /// schedules the next attempt instead of giving up.
+  Future<ConnectResult> connect({bool auto = false}) async {
+    if (!auto) {
+      _reconnectAttempt = 0;
+      _reconnectTimer?.cancel();
+    }
+    _wantConnected = true;
+    final r = await _connectOnce();
+    if (r == ConnectResult.needPlan) {
+      _wantConnected = false;
+    } else if (r == ConnectResult.failed) {
+      if (auto && _wantConnected && _wasConnected) {
+        _scheduleReconnect();
+        notifyListeners();
+      } else if (!auto) {
+        _wantConnected = false;
+      }
+    }
+    return r;
+  }
+
+  Future<ConnectResult> _connectOnce() async {
     status = VpnStatus.connecting;
     message = null;
     notifyListeners();
@@ -384,6 +454,10 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> disconnect() async {
+    _wantConnected = false;
+    _wasConnected = false;
+    _reconnectTimer?.cancel();
+    _reconnectAttempt = 0;
     status = VpnStatus.disconnecting;
     notifyListeners();
     try {

@@ -11,6 +11,8 @@ import '../../widgets/section_card.dart';
 import '../devices/devices_page.dart';
 import '../plans/plans_page.dart';
 import '../referral/referral_page.dart';
+import '../../core/updater.dart';
+import '../update/update_dialog.dart';
 import 'contacts_section.dart';
 import 'orders_page.dart';
 
@@ -25,11 +27,33 @@ class MePage extends StatefulWidget {
 class _MePageState extends State<MePage> {
   List<DailyUsage> _usage = [];
   List<Contact> _contacts = [];
+  String _version = '';
+  bool _checking = false;
+
+  Future<void> _checkUpdate() async {
+    setState(() => _checking = true);
+    try {
+      final u = await Updater.check(AppScope.read(context).api);
+      if (!mounted) return;
+      if (u != null && u.hasUpdate) {
+        await showUpdateDialog(context, u);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已是最新版本')));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('检查失败：$e')));
+    } finally {
+      if (mounted) setState(() => _checking = false);
+    }
+  }
 
   @override
   void initState() {
     super.initState();
     _load();
+    Updater.info().then((i) {
+      if (mounted) setState(() => _version = '${i.version} (${i.buildNumber})');
+    });
   }
 
   Future<void> _load() async {
@@ -108,6 +132,15 @@ class _MePageState extends State<MePage> {
                   icon: Icons.receipt_long_outlined,
                   title: '购买记录',
                   onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const OrdersPage())),
+                ),
+                const Divider(indent: 66),
+                MenuRow(
+                  key: const Key('menu-update'),
+                  icon: Icons.system_update_rounded,
+                  color: AppColors.signal,
+                  title: '检查更新',
+                  value: _checking ? '检查中…' : (_version.isEmpty ? null : 'v$_version'),
+                  onTap: _checking ? null : _checkUpdate,
                 ),
               ]),
             ),

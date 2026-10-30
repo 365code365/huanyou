@@ -2,6 +2,7 @@ import {
   AppstoreOutlined,
   ApiOutlined,
   BellOutlined,
+  CloudUploadOutlined,
   CustomerServiceOutlined,
   DashboardOutlined,
   ProfileOutlined,
@@ -24,6 +25,7 @@ export const nav: { path: string; title: string; icon: ReactNode }[] = [
   { path: '/monitor', title: '监控预警', icon: <BellOutlined /> },
   { path: '/apps', title: '推荐应用', icon: <AppstoreOutlined /> },
   { path: '/contacts', title: '客服与社交', icon: <CustomerServiceOutlined /> },
+  { path: '/releases', title: '版本发布', icon: <CloudUploadOutlined /> },
   { path: '/settings', title: '系统设置', icon: <SettingOutlined /> },
 ]
 

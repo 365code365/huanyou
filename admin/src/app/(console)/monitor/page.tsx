@@ -2,6 +2,7 @@
 import { ReloadOutlined } from '@ant-design/icons'
 import { Button, Col, Form, Input, InputNumber, Row, Select, Space, Spin, Switch, Table, Tag } from 'antd'
 import { useEffect } from 'react'
+import { NumberUnit } from '@/components/NumberUnit'
 import { PageCard } from '@/components/PageCard'
 import { useAction, useAsync } from '@/hooks/useAsync'
 import { api, type MonitorEvent, type MonitorSettings, type Settings } from '@/lib/api'
@@ -41,9 +42,9 @@ export default function MonitorPage() {
               <Form form={form} layout="vertical">
                 <Form.Item name="enabled" label="启用监控" valuePropName="checked"><Switch /></Form.Item>
                 <Space size={16} wrap>
-                  <Form.Item name="interval_seconds" label="检测间隔"><InputNumber min={10} suffix="秒" /></Form.Item>
-                  <Form.Item name="timeout_seconds" label="超时"><InputNumber min={1} max={60} suffix="秒" /></Form.Item>
-                  <Form.Item name="fail_threshold" label="离线阈值" extra="连续失败次数"><InputNumber min={1} suffix="次" /></Form.Item>
+                  <Form.Item name="interval_seconds" label="检测间隔"><NumberUnit min={10} unit="秒" /></Form.Item>
+                  <Form.Item name="timeout_seconds" label="超时"><NumberUnit min={1} max={60} unit="秒" /></Form.Item>
+                  <Form.Item name="fail_threshold" label="离线阈值" extra="连续失败次数"><NumberUnit min={1} unit="次" /></Form.Item>
                 </Space>
                 <Form.Item name="alert_format" label="预警格式">
                   <Select

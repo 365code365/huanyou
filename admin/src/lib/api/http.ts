@@ -102,3 +102,31 @@ export async function stream<E>(path: string, body: unknown, onEvent: (e: E) => 
   }
   if (buf.trim()) onEvent(JSON.parse(buf) as E)
 }
+
+/**
+ * multipart POST with upload progress (fetch can't report upload progress).
+ * onProgress receives 0..1. Resolves with the JSON body; rejects with ApiError.
+ */
+export function upload<T>(path: string, form: FormData, onProgress?: (p: number) => void): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', '/admin/api' + path)
+    const t = token.get()
+    if (t) xhr.setRequestHeader('Authorization', 'Bearer ' + t)
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total)
+    xhr.onerror = () => reject(new ApiError(0, 'network', '上传失败：网络中断'))
+    xhr.onload = () => {
+      let data: { error?: string; message?: string } = {}
+      try {
+        data = JSON.parse(xhr.responseText)
+      } catch {
+        // non-JSON (e.g. nginx 413 page)
+      }
+      if (xhr.status === 401) token.clear()
+      if (xhr.status >= 200 && xhr.status < 300) return resolve(data as T)
+      const msg = xhr.status === 413 ? '文件太大，被服务器拒绝（请检查 nginx client_max_body_size）' : data.message
+      reject(new ApiError(xhr.status, data.error ?? 'http_' + xhr.status, msg ?? `上传失败 (${xhr.status})`))
+    }
+    xhr.send(form)
+  })
+}

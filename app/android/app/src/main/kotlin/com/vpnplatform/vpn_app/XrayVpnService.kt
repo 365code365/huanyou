@@ -7,6 +7,10 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -15,10 +19,20 @@ import com.vpnplatform.vpncore.Protector
 import com.vpnplatform.vpncore.Vpncore
 import java.io.File
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 
 /**
  * Creates the TUN interface and hands its file descriptor to Xray-core (vpncore.aar).
  * Xray's own sockets are excluded from the tunnel via VpnService.protect().
+ *
+ * Reconnect on network changes: Wi-Fi ↔ mobile switches, losing and regaining
+ * signal, etc. kill every connection Xray has to the node, and some stay
+ * half-open for minutes. The service watches the default (non-VPN) network;
+ * when it changes or comes back after a loss, the tunnel is rebuilt on the new
+ * network (debounced, ~1 s of downtime). While there is no network at all the
+ * tunnel stays up and shows "等待网络恢复" so apps don't fall back to the
+ * unprotected network.
  */
 class XrayVpnService : VpnService() {
     companion object {
@@ -34,8 +48,17 @@ class XrayVpnService : VpnService() {
         fun profileFile(ctx: Context) = File(ctx.noBackupFilesDir, "profile.json")
     }
 
-    private val worker = Executors.newSingleThreadExecutor()
+    private val worker = Executors.newSingleThreadScheduledExecutor()
     private var tun: ParcelFileDescriptor? = null
+    private var sessionName = "VPN"
+
+    // ---- network watching (all fields touched on the worker thread) ----
+    private var netCallback: ConnectivityManager.NetworkCallback? = null
+    private var currentNet: Network? = null
+    private val available = mutableListOf<Network>()
+    private var lostNetwork = false
+    private var pendingRestart: ScheduledFuture<*>? = null
+    private var restarts = 0
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_DISCONNECT) {
@@ -44,8 +67,14 @@ class XrayVpnService : VpnService() {
         }
         // ACTION_CONNECT, or started by the system for always-on VPN (action = android.net.VpnService).
         val name = intent?.getStringExtra(EXTRA_NAME) ?: "VPN"
+        sessionName = name
         startForegroundCompat(name)
-        worker.execute { startVpn(name) }
+        worker.execute {
+            restarts = 0
+            // An explicit connect while running (e.g. new node) replaces the tunnel.
+            if (intent?.action == ACTION_CONNECT && Vpncore.isRunning()) cleanup()
+            startVpn(name)
+        }
         return START_STICKY
     }
 
@@ -79,19 +108,24 @@ class XrayVpnService : VpnService() {
             Vpncore.start(config, pfd.fd, assetDir, object : Protector {
                 override fun protect(fd: Int): Boolean = this@XrayVpnService.protect(fd)
             })
+            currentNet?.let { setUnderlyingNetworks(arrayOf(it)) }
+            watchNetwork()
             VpnState.set("connected")
         } catch (e: Exception) {
             Log.e(TAG, "start failed", e)
+            unwatchNetwork()
             cleanup()
             VpnState.set("error", e.message)
             stopSelf()
         }
     }
 
-    private fun stopVpn() {
+    /** reason != null tells the app the stop was not the user's choice (don't auto-reconnect). */
+    private fun stopVpn(reason: String? = null) {
         VpnState.set("disconnecting")
+        unwatchNetwork()
         cleanup()
-        VpnState.set("disconnected")
+        VpnState.set("disconnected", reason)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -107,6 +141,95 @@ class XrayVpnService : VpnService() {
         } catch (_: Exception) {
         }
         tun = null
+    }
+
+    // ---- reconnect on network change ----
+
+    private fun watchNetwork() {
+        if (netCallback != null) return
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                Log.w(TAG, "default network: $network")
+                worker.execute { onNetworkAvailable(network) }
+            }
+
+            override fun onLost(network: Network) {
+                Log.w(TAG, "default network lost: $network")
+                worker.execute { onNetworkLost(network) }
+            }
+        }
+        try {
+            // Listen (not request) for real, non-VPN internet networks; the
+            // default-network callback would report our own VPN network.
+            val req = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                .build()
+            cm.registerNetworkCallback(req, cb)
+            netCallback = cb
+        } catch (e: Exception) {
+            Log.w(TAG, "network callback", e)
+        }
+    }
+
+    private fun unwatchNetwork() {
+        pendingRestart?.cancel(false)
+        pendingRestart = null
+        val cb = netCallback ?: return
+        netCallback = null
+        try {
+            getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(cb)
+        } catch (_: Exception) {
+        }
+        currentNet = null
+        available.clear()
+        lostNetwork = false
+    }
+
+    private fun onNetworkAvailable(network: Network) {
+        if (network !in available) available.add(network)
+        // Keep using the current network while it's alive; a second network
+        // appearing (e.g. mobile data alongside Wi-Fi) is not a switch.
+        if (currentNet != null && currentNet != network && !lostNetwork) return
+        val previous = currentNet
+        currentNet = network
+        if (!Vpncore.isRunning()) return
+        setUnderlyingNetworks(arrayOf(network))
+        // First callback after start just reports the current network.
+        if (previous == null && !lostNetwork) return
+        if (previous == network && !lostNetwork) return
+        Log.w(TAG, "network changed (lost=$lostNetwork), rebuilding tunnel")
+        lostNetwork = false
+        scheduleRestart()
+    }
+
+    private fun onNetworkLost(network: Network) {
+        available.remove(network)
+        if (network != currentNet) return
+        val next = available.lastOrNull()
+        if (next != null) {
+            // e.g. Wi-Fi dropped while mobile data is up: move to it now.
+            currentNet = null
+            onNetworkAvailable(next)
+            return
+        }
+        currentNet = null
+        lostNetwork = true
+        if (Vpncore.isRunning()) VpnState.set("connecting", "网络已断开，恢复后自动重连")
+    }
+
+    /** Debounced: networks often flap several times while switching. */
+    private fun scheduleRestart() {
+        pendingRestart?.cancel(false)
+        pendingRestart = worker.schedule({
+            pendingRestart = null
+            if (netCallback == null) return@schedule // user disconnected meanwhile
+            restarts++
+            VpnState.set("connecting", "网络已切换，正在重连…")
+            cleanup()
+            startVpn(sessionName)
+        }, 1200, TimeUnit.MILLISECONDS)
     }
 
     /** Copies the geoip file out of the APK so Xray can read it from disk. */
@@ -126,11 +249,14 @@ class XrayVpnService : VpnService() {
 
     override fun onRevoke() {
         // Another VPN app took over or the user revoked permission in Settings.
-        worker.execute { stopVpn() }
+        worker.execute { stopVpn("revoked") }
     }
 
     override fun onDestroy() {
-        worker.execute { cleanup() }
+        worker.execute {
+            unwatchNetwork()
+            cleanup()
+        }
         worker.shutdown()
         if (VpnState.status != "error") VpnState.set("disconnected")
         super.onDestroy()

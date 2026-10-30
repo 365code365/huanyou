@@ -67,6 +67,11 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	a("POST /admin/api/nodes/provision", s.adminProvisionNode)
 	a("GET /admin/api/geoip", s.adminGeoIP)
 
+	a("GET /admin/api/releases", s.adminListReleases)
+	a("POST /admin/api/releases", s.adminCreateRelease)
+	a("PATCH /admin/api/releases/{id}", s.adminPatchRelease)
+	a("DELETE /admin/api/releases/{id}", s.adminDeleteRelease)
+
 	a("GET /admin/api/settings", s.adminGetSettings)
 	a("PUT /admin/api/settings", s.adminPutSettings)
 

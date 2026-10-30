@@ -184,6 +184,23 @@ var migrations = []string{
 		expires_at INTEGER NOT NULL
 	);
 	CREATE INDEX link_codes_user ON link_codes(user_id);`,
+	// App releases for in-app update checks and the download site.
+	`CREATE TABLE releases (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		platform    TEXT    NOT NULL,             -- android | ios
+		version     TEXT    NOT NULL,             -- display version, e.g. 1.1.0
+		build       INTEGER NOT NULL,             -- monotonically increasing build number
+		notes       TEXT    NOT NULL DEFAULT '',
+		file        TEXT    NOT NULL DEFAULT '',  -- stored package name under download_dir/releases
+		url         TEXT    NOT NULL DEFAULT '',  -- external link (App Store / TestFlight / other host)
+		size        INTEGER NOT NULL DEFAULT 0,
+		sha256      TEXT    NOT NULL DEFAULT '',
+		bundle_id   TEXT    NOT NULL DEFAULT '',  -- iOS IPA, for the itms-services manifest
+		force       INTEGER NOT NULL DEFAULT 0,   -- users below this build must update
+		published   INTEGER NOT NULL DEFAULT 1,
+		created_at  INTEGER NOT NULL
+	);
+	CREATE UNIQUE INDEX releases_platform_build ON releases(platform, build);`,
 }
 
 func (s *Store) migrate() error {

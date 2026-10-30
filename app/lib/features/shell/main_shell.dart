@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 
+import '../../core/updater.dart';
+import '../../state/app_scope.dart';
 import '../../widgets/glass_nav_bar.dart';
 import '../apps/apps_page.dart';
 import '../home/home_page.dart';
 import '../me/me_page.dart';
+import '../update/update_dialog.dart';
 
 /// Bottom-tab shell with the floating liquid-glass bar. To add a tab, append to [_tabs].
 ///
@@ -25,6 +28,23 @@ class _MainShellState extends State<MainShell> {
   ];
   int _index = 0;
   final _built = <int>{0}; // build tabs lazily, then keep them alive
+
+  @override
+  void initState() {
+    super.initState();
+    // Check for a new version shortly after launch (quietly ignore failures).
+    Future.delayed(const Duration(seconds: 2), _checkUpdate);
+  }
+
+  Future<void> _checkUpdate() async {
+    if (!mounted) return;
+    try {
+      final u = await Updater.check(AppScope.read(context).api);
+      if (u != null && u.hasUpdate && mounted) await showUpdateDialog(context, u);
+    } catch (_) {
+      // offline / server without releases: try again next launch
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

@@ -150,6 +150,27 @@ class Node {
   final int load; // users currently moving traffic
 }
 
+/// Result of an update check.
+class AppUpdate {
+  AppUpdate.fromJson(Map<String, dynamic> j)
+      : hasUpdate = j['has_update'] as bool? ?? false,
+        force = j['force'] as bool? ?? false,
+        version = (j['latest'] as Map?)?['version'] as String? ?? '',
+        build = ((j['latest'] as Map?)?['build'] as num?)?.toInt() ?? 0,
+        notes = (j['latest'] as Map?)?['notes'] as String? ?? '',
+        url = (j['latest'] as Map?)?['url'] as String? ?? '',
+        size = ((j['latest'] as Map?)?['size'] as num?)?.toInt() ?? 0,
+        sha256 = (j['latest'] as Map?)?['sha256'] as String? ?? '';
+  final bool hasUpdate;
+  final bool force; // the installed build is below a forced release
+  final String version;
+  final int build;
+  final String notes;
+  final String url; // APK file (Android) or install / store link (iOS)
+  final int size;
+  final String sha256; // "" for external links
+}
+
 /// One device on a shared subscription.
 class SharedDevice {
   SharedDevice.fromJson(Map<String, dynamic> j)
@@ -336,6 +357,9 @@ class ApiClient {
     final j = await _send('POST', '/api/v1/referral/bind', body: {'code': code.trim().toUpperCase()});
     return (j['invitee_days'] as num?)?.toInt() ?? 0;
   }
+
+  Future<AppUpdate> appUpdate(String platform, int build) async =>
+      AppUpdate.fromJson(await _send('GET', '/api/v1/app/update', query: {'platform': platform, 'build': '$build'}));
 
   // ---- multi-device ----
   Future<DeviceShare> devices() async => DeviceShare.fromJson(await _send('GET', '/api/v1/devices'));

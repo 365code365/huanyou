@@ -1,6 +1,7 @@
 // One function per admin endpoint. Pages import from here, never call fetch directly.
-import { http, stream } from './http'
+import { http, stream, upload } from './http'
 import type {
+  Release,
   Contact,
   GeoIP,
   ProvisionEvent,
@@ -82,6 +83,13 @@ export const api = {
       http.post<{ ok: boolean; arch: string; log: string }>(`/nodes/${id}/upgrade`, body),
     provision: (body: ProvisionRequest, onEvent: (e: ProvisionEvent) => void) =>
       stream('/nodes/provision', body, onEvent),
+  },
+
+  releases: {
+    list: () => http.get<Page<Release>>('/releases'),
+    create: (form: FormData, onProgress?: (p: number) => void) => upload<Release>('/releases', form, onProgress),
+    patch: (id: number, body: Partial<Pick<Release, 'notes' | 'force' | 'published'>>) => http.patch<Release>(`/releases/${id}`, body),
+    remove: (id: number) => http.del<{ ok: true }>(`/releases/${id}`),
   },
 
   settings: {

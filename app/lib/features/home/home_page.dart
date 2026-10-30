@@ -174,7 +174,7 @@ class _Headline extends StatelessWidget {
     };
     final sub = switch (app.status) {
       VpnStatus.connected => '已连接 ${_elapsed()}',
-      VpnStatus.connecting => '正在建立加密通道…',
+      VpnStatus.connecting => app.statusHint ?? '正在建立加密通道…',
       VpnStatus.disconnecting => ' ',
       _ => '轻点下方按钮开始',
     };
