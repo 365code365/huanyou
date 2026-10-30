@@ -61,20 +61,65 @@ func (s *Server) adminGeoIP(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// provisionBody is the shared request for precheck and install.
+type provisionBody struct {
+	Host       string `json:"host"`
+	Port       int    `json:"port"` // SSH port, default 22
+	User       string `json:"user"` // default root
+	Password   string `json:"password"`
+	PrivateKey string `json:"private_key"`
+	NodePort   int    `json:"node_port"` // public port the node listens on, default 443
+	Name       string `json:"name"`      // optional, auto from geo if empty
+	Region     string `json:"region"`    // optional, auto from geo if empty
+	ServerName string `json:"server_name"`
+}
+
+func (b provisionBody) target() provision.Target {
+	return provision.Target{Host: strings.TrimSpace(b.Host), Port: b.Port, User: b.User,
+		Password: b.Password, PrivateKey: b.PrivateKey}
+}
+
+func (b provisionBody) nodePort() int {
+	if b.NodePort > 0 && b.NodePort <= 65535 {
+		return b.NodePort
+	}
+	return 443
+}
+
+// adminPrecheckNode SSHes in and runs a read-only environment check, so the
+// operator sees whether the box is suitable (and what to fix) before installing.
+func (s *Server) adminPrecheckNode(w http.ResponseWriter, r *http.Request) {
+	var body provisionBody
+	if !decode(w, r, &body) {
+		return
+	}
+	if strings.TrimSpace(body.Host) == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "请填写服务器地址")
+		return
+	}
+	if body.Password == "" && strings.TrimSpace(body.PrivateKey) == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "请填写 SSH 密码或私钥")
+		return
+	}
+	bins, _ := s.loadNodeBinaries()
+	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
+	defer cancel()
+	rep, err := provision.Check(ctx, body.target(), body.nodePort(), func(a string) bool {
+		_, ok := bins[a]
+		return ok
+	})
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "ssh_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, rep)
+}
+
 // adminProvisionNode installs vpn-node on a server over SSH, then registers it
 // in the catalog. The operator only supplies the SSH address and credentials;
 // REALITY keys, token and region are generated / detected automatically.
 func (s *Server) adminProvisionNode(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Host       string `json:"host"`
-		Port       int    `json:"port"`
-		User       string `json:"user"`
-		Password   string `json:"password"`
-		PrivateKey string `json:"private_key"`
-		Name       string `json:"name"`        // optional, auto from geo if empty
-		Region     string `json:"region"`      // optional, auto from geo if empty
-		ServerName string `json:"server_name"` // REALITY SNI, default www.apple.com
-	}
+	var body provisionBody
 	if !decode(w, r, &body) {
 		return
 	}
@@ -149,7 +194,7 @@ func (s *Server) adminProvisionNode(w http.ResponseWriter, r *http.Request) {
 		s.internal(w, err)
 		return
 	}
-	const visionPort = 443
+	visionPort := body.nodePort()
 
 	apiURL := s.cfg.PublicURL
 	if apiURL == "" {
@@ -195,12 +240,9 @@ func (s *Server) adminProvisionNode(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Minute)
 	defer cancel()
-	res, provErr := provision.Run(ctx, provision.Target{
-		Host: host, Port: body.Port, User: body.User,
-		Password: body.Password, PrivateKey: body.PrivateKey,
-	}, provision.Install{
+	res, provErr := provision.Run(ctx, body.target(), provision.Install{
 		NodeJSON: nodeJSON, ServiceUnit: []byte(systemdUnit),
-		Binaries: bins, VisionPort: visionPort,
+		Binaries: bins, Port: visionPort,
 		Log: writerFunc(func(p []byte) { emit(map[string]any{"type": "log", "text": string(p)}) }),
 	})
 	if provErr != nil {

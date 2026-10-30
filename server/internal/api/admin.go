@@ -62,6 +62,7 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	})
 	a("GET /admin/api/nodes/{id}/install", s.adminNodeInstall)
 	a("POST /admin/api/nodes/{id}/rotate-token", s.adminNodeRotateToken)
+	a("POST /admin/api/nodes/precheck", s.adminPrecheckNode)
 	a("POST /admin/api/nodes/provision", s.adminProvisionNode)
 	a("GET /admin/api/geoip", s.adminGeoIP)
 
