@@ -31,6 +31,39 @@ type Catalog struct {
 	MultiDevice MultiDeviceConfig `json:"multi_device"`
 	// AIDomains are routed through the proxy in "ai" mode (defaults applied if empty).
 	AIDomains []string `json:"ai_domains"`
+	// Risk: IP records and abuse thresholds.
+	Risk RiskConfig `json:"risk"`
+	// Segments: thresholds for the user segmentation report.
+	Segments SegmentConfig `json:"segments"`
+}
+
+// RiskConfig controls IP recording and the suspicious-behaviour lists.
+type RiskConfig struct {
+	// RecordAPI / RecordNode: keep the addresses users call the API from and
+	// connect to nodes from. Pointers so "unset" (old catalogs) means on.
+	RecordAPI  *bool `json:"record_api"`
+	RecordNode *bool `json:"record_node"`
+	// RetentionDays: IP records older than this are deleted (default 30).
+	RetentionDays int `json:"retention_days"`
+	// MaxIPsPerUser: an account seen from more distinct IPs than this within
+	// 24 h is listed as suspicious (default 8; mobile networks change IPs often).
+	MaxIPsPerUser int `json:"max_ips_per_user"`
+	// MaxUsersPerIP: an IP used by more subscriptions than this within 24 h is
+	// listed as suspicious (default 4; multi-device members count as their owner).
+	MaxUsersPerIP int `json:"max_users_per_ip"`
+}
+
+func (r RiskConfig) APIOn() bool  { return r.RecordAPI == nil || *r.RecordAPI }
+func (r RiskConfig) NodeOn() bool { return r.RecordNode == nil || *r.RecordNode }
+
+// SegmentConfig holds the thresholds used to classify users.
+type SegmentConfig struct {
+	HighValueCents  int `json:"high_value_cents"` // lifetime spend at or above = 高价 (default ¥100)
+	LowValueCents   int `json:"low_value_cents"`  // paid but below = 低价 (default ¥30); in between = 中价
+	LoyalOrders     int `json:"loyal_orders"`     // paid orders for 优质 (default 2, i.e. repurchased)
+	ActiveDays      int `json:"active_days"`      // days with traffic in 14 days to count as active (default 4)
+	PromoterInvites int `json:"promoter_invites"` // invites for 推广达人 (default 3)
+	ChurnDays       int `json:"churn_days"`       // paid plan expired more than N days ago = 已流失 (default 14)
 }
 
 // RealityPublic is the client-side half of a node's REALITY settings.
@@ -265,6 +298,40 @@ func (c *Catalog) Normalize() error {
 	}
 	if len(c.AIDomains) == 0 {
 		c.AIDomains = append([]string(nil), DefaultAIDomains...)
+	}
+	r := &c.Risk
+	if r.RetentionDays <= 0 {
+		r.RetentionDays = 30
+	}
+	r.RetentionDays = min(r.RetentionDays, 365)
+	if r.MaxIPsPerUser <= 0 {
+		r.MaxIPsPerUser = 8
+	}
+	if r.MaxUsersPerIP <= 0 {
+		r.MaxUsersPerIP = 4
+	}
+	g := &c.Segments
+	if g.HighValueCents <= 0 {
+		g.HighValueCents = 10000
+	}
+	if g.LowValueCents <= 0 {
+		g.LowValueCents = 3000
+	}
+	if g.LowValueCents >= g.HighValueCents {
+		return errors.New("分群设置：低价门槛必须小于高价门槛")
+	}
+	if g.LoyalOrders <= 0 {
+		g.LoyalOrders = 2
+	}
+	if g.ActiveDays <= 0 {
+		g.ActiveDays = 4
+	}
+	g.ActiveDays = min(g.ActiveDays, 14)
+	if g.PromoterInvites <= 0 {
+		g.PromoterInvites = 3
+	}
+	if g.ChurnDays <= 0 {
+		g.ChurnDays = 14
 	}
 	for i, d := range c.AIDomains {
 		c.AIDomains[i] = strings.ToLower(strings.TrimSpace(d))

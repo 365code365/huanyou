@@ -76,3 +76,8 @@ body {
 .row-frozen td {
   background: #f3f6fb !important;
 }
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 16px;
+}

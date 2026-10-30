@@ -79,14 +79,36 @@ func (s *Store) Trend(ctx context.Context, now time.Time, n int) ([]DailyPoint, 
 		}
 		return rows.Err()
 	}
-	// SQLite 'localtime' matches the server timezone used for traffic_daily days.
-	if err := q(`SELECT date(created_at, 'unixepoch', 'localtime') d, COUNT(*) FROM users
-		WHERE created_at >= ? GROUP BY d`, []any{start.Unix()},
+	// Group timestamps into local days with integer math (portable across
+	// SQLite / MySQL / PostgreSQL), then label them in Go. The offset is the
+	// server's current UTC offset, the same zone traffic_daily days use.
+	_, off := start.Zone()
+	bucket := func(col string) string { return s.d.idiv(col+" + "+strconv.Itoa(off), "86400") }
+	dayOf := func(b int64) string { return time.Unix(b*86400, 0).UTC().Format("2006-01-02") }
+	qBucket := func(sqlText string, args []any, apply func(p *DailyPoint, v int64)) error {
+		rows, err := s.db.QueryContext(ctx, sqlText, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var b, v int64
+			if err := rows.Scan(&b, &v); err != nil {
+				return err
+			}
+			if i, ok := idx[dayOf(b)]; ok {
+				apply(&pts[i], v)
+			}
+		}
+		return rows.Err()
+	}
+	if err := qBucket(`SELECT `+bucket("created_at")+` AS d, COUNT(*) FROM users
+		WHERE created_at >= ? GROUP BY `+bucket("created_at"), []any{start.Unix()},
 		func(p *DailyPoint, v int64) { p.NewUsers = v }); err != nil {
 		return nil, err
 	}
-	if err := q(`SELECT date(paid_at, 'unixepoch', 'localtime') d, SUM(amount_cents) FROM orders
-		WHERE status = 'paid' AND paid_at >= ? GROUP BY d`, []any{start.Unix()},
+	if err := qBucket(`SELECT `+bucket("paid_at")+` AS d, COALESCE(SUM(amount_cents), 0) FROM orders
+		WHERE status = 'paid' AND paid_at >= ? GROUP BY `+bucket("paid_at"), []any{start.Unix()},
 		func(p *DailyPoint, v int64) { p.RevenueCents = v }); err != nil {
 		return nil, err
 	}
@@ -111,8 +133,9 @@ func (f UserFilter) where(now time.Time) (string, []any) {
 	var args []any
 	if q := strings.TrimSpace(f.Query); q != "" {
 		// Match email, invite code, device id, or a numeric / "VP-xxxxx" recharge code.
-		conds = append(conds, `(email LIKE ? OR ref_code = ? OR device_id = ? OR id = ?)`)
-		args = append(args, "%"+q+"%", strings.ToUpper(q), q, rechargeID(q))
+		// Emails are stored lower-case, so a lower-case LIKE is case-insensitive everywhere.
+		conds = append(conds, `(email LIKE ? ESCAPE '!' OR ref_code = ? OR device_id = ? OR id = ?)`)
+		args = append(args, "%"+likeEscape(strings.ToLower(q))+"%", strings.ToUpper(q), q, rechargeID(q))
 	}
 	switch f.Status {
 	case "paid":
@@ -183,8 +206,10 @@ func (s *Store) ListOrders(ctx context.Context, f OrderFilter) ([]*AdminOrder, i
 	var conds []string
 	var args []any
 	if q := strings.TrimSpace(f.Query); q != "" {
-		conds = append(conds, `(o.id LIKE ? OR o.trade_no LIKE ? OR u.email LIKE ? OR o.user_id = ?)`)
-		args = append(args, "%"+q+"%", "%"+q+"%", "%"+q+"%", rechargeID(q))
+		// Order numbers are upper-case, emails lower-case.
+		conds = append(conds, `(o.id LIKE ? ESCAPE '!' OR o.trade_no LIKE ? ESCAPE '!' OR u.email LIKE ? ESCAPE '!' OR o.user_id = ?)`)
+		e := likeEscape(q)
+		args = append(args, "%"+strings.ToUpper(e)+"%", "%"+e+"%", "%"+strings.ToLower(e)+"%", rechargeID(q))
 	}
 	if f.Status == "paid" || f.Status == "pending" {
 		conds = append(conds, `o.status = ?`)
@@ -233,7 +258,8 @@ func (s *Store) ListOrders(ctx context.Context, f OrderFilter) ([]*AdminOrder, i
 // ---- id-based user mutations for the admin panel ----
 
 func (s *Store) updateByID(ctx context.Context, id int64, set string, args ...any) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE users SET `+set+` WHERE id = ?`, append(args, id)...)
+	args = append(args, time.Now().Unix(), id)
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET `+set+`, updated_at = ? WHERE id = ?`, args...)
 	if err != nil {
 		return err
 	}
@@ -244,11 +270,7 @@ func (s *Store) updateByID(ctx context.Context, id int64, set string, args ...an
 }
 
 func (s *Store) SetDisabledByID(ctx context.Context, id int64, disabled bool) error {
-	v := 0
-	if disabled {
-		v = 1
-	}
-	return s.updateByID(ctx, id, `disabled = ?`, v)
+	return s.updateByID(ctx, id, `disabled = ?`, b2i(disabled))
 }
 
 func (s *Store) ResetTrafficByID(ctx context.Context, id int64) error {
@@ -307,14 +329,20 @@ func (s *Store) DeleteUser(ctx context.Context, id int64) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, q := range []string{
-		`DELETE FROM traffic_daily WHERE user_id = ?`,
-		`DELETE FROM orders WHERE user_id = ?`,
-		`UPDATE users SET invited_by = 0 WHERE invited_by = ?`,
-		`UPDATE users SET primary_id = 0 WHERE primary_id = ?`, // members fall back to their own plan
-		`DELETE FROM link_codes WHERE user_id = ?`,
+	now := time.Now().Unix()
+	for _, q := range []struct {
+		sql  string
+		args []any
+	}{
+		{`DELETE FROM traffic_daily WHERE user_id = ?`, []any{id}},
+		{`DELETE FROM orders WHERE user_id = ?`, []any{id}},
+		{`DELETE FROM user_ips WHERE user_id = ?`, []any{id}},
+		{`DELETE FROM link_codes WHERE user_id = ?`, []any{id}},
+		{`DELETE FROM risk_rules WHERE kind = 'user' AND value = ?`, []any{strconv.FormatInt(id, 10)}},
+		{`UPDATE users SET invited_by = 0, updated_at = ? WHERE invited_by = ?`, []any{now, id}},
+		{`UPDATE users SET primary_id = 0, updated_at = ? WHERE primary_id = ?`, []any{now, id}}, // members fall back to their own plan
 	} {
-		if _, err := tx.ExecContext(ctx, q, id); err != nil {
+		if _, err := tx.ExecContext(ctx, q.sql, q.args...); err != nil {
 			return err
 		}
 	}
@@ -331,6 +359,12 @@ func (s *Store) DeleteUser(ctx context.Context, id int64) error {
 // MarkOrderPaidManually completes a pending order from the admin panel (e.g. offline payment).
 func (s *Store) MarkOrderPaidManually(ctx context.Context, orderID string, durationDays int) (bool, error) {
 	return s.MarkPaid(ctx, orderID, "MANUAL", durationDays, time.Now())
+}
+
+// likeEscape makes % and _ typed by the admin match literally; use with
+// LIKE ? ESCAPE '!' (the same syntax on SQLite, MySQL and PostgreSQL).
+func likeEscape(s string) string {
+	return strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(s)
 }
 
 // rechargeID parses "VP-00010", "vp-10" or "10" into a user id; -1 if q isn't one.

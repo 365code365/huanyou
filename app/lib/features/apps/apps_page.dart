@@ -106,7 +106,12 @@ class _AppCard extends StatelessWidget {
                 child: app.iconUrl.isEmpty
                     ? _fallback()
                     : Image.network(app.iconUrl,
-                        width: 42, height: 42, fit: BoxFit.cover, errorBuilder: (ctx, err, st) => _fallback()),
+                        width: 42,
+                        height: 42,
+                        fit: BoxFit.cover,
+                        // Decode at display size, not the source size (icons are often 512 px).
+                        cacheWidth: (42 * MediaQuery.devicePixelRatioOf(context)).round(),
+                        errorBuilder: (ctx, err, st) => _fallback()),
               ),
               const Spacer(),
               Icon(Icons.north_east_rounded, size: 18, color: AppColors.faint),

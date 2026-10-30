@@ -21,7 +21,7 @@ func TestMigrateV5FromV4(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 4; i++ {
-		if _, err := raw.Exec(migrations[i]); err != nil {
+		if _, err := raw.Exec(sqliteMigrations[i].sql); err != nil {
 			t.Fatalf("seed migration %d: %v", i, err)
 		}
 	}
@@ -56,8 +56,8 @@ func TestMigrateV5FromV4(t *testing.T) {
 	if err := st.db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
 		t.Fatal(err)
 	}
-	if v != len(migrations) {
-		t.Fatalf("user_version = %d, want %d", v, len(migrations))
+	if v != len(sqliteMigrations) {
+		t.Fatalf("user_version = %d, want %d", v, len(sqliteMigrations))
 	}
 
 	ctx := context.Background()

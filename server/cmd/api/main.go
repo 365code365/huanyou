@@ -35,14 +35,7 @@ func main() {
 	if err != nil {
 		fatal("load config", err)
 	}
-	// A restore uploaded in the admin panel is staged next to the database
-	// and swapped in here, before anything opens it.
-	if applied, err := store.ApplyPendingRestore(cfg.Database); err != nil {
-		fatal("apply restore", err)
-	} else if applied {
-		slog.Warn("restored database from backup (previous copy kept as .bak-pre-restore-*)")
-	}
-	st, err := store.Open(cfg.Database)
+	st, err := openDatabase(cfg)
 	if err != nil {
 		fatal("open database", err)
 	}
@@ -97,6 +90,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go mon.Run(ctx)
+	runDone := make(chan struct{})
+	go func() { apiServer.Run(ctx); close(runDone) }()
+	defer func() { <-runDone }() // flush buffered IP records on shutdown
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -217,6 +213,72 @@ func loadCatalog(st *store.Store, cfg *config.API) (*config.Catalog, error) {
 		return nil, fmt.Errorf("stored catalog invalid: %w", err)
 	}
 	return c, nil
+}
+
+// openDatabase opens the primary database (SQLite file, or MySQL / PostgreSQL
+// from database.json). It also finishes two hand-overs that need a restart:
+//   - a restore staged in the admin panel replaces the SQLite file; with a
+//     MySQL / PostgreSQL primary the restored data is then copied into it;
+//   - after a database switch, rows written to the old database after the
+//     final sync are copied over once.
+func openDatabase(cfg *config.API) (*store.Store, error) {
+	ctx := context.Background()
+	restored, err := store.ApplyPendingRestore(cfg.Database)
+	if err != nil {
+		return nil, fmt.Errorf("apply restore: %w", err)
+	}
+	if restored {
+		slog.Warn("restored database from backup (previous copy kept as .bak-pre-restore-*)")
+	}
+	cfgPath := store.DBConfigPath(cfg.Database)
+	dbc, err := store.LoadDBConfig(cfgPath)
+	if err != nil {
+		return nil, err
+	}
+	st, err := store.OpenConfigured(dbc, cfg.Database)
+	if err != nil {
+		return nil, err
+	}
+	slog.Info("database opened", "driver", st.Driver())
+	if dbc == nil {
+		return st, nil
+	}
+	if restored && st.Driver() != store.DriverSQLite {
+		src, err := store.Open(cfg.Database)
+		if err != nil {
+			st.Close()
+			return nil, fmt.Errorf("open restored backup: %w", err)
+		}
+		res, err := store.Sync(ctx, src, st, store.SyncOptions{Full: true})
+		src.Close()
+		if err != nil {
+			st.Close()
+			return nil, fmt.Errorf("import restored backup into %s: %w", st.Driver(), err)
+		}
+		slog.Warn("restored backup imported", "driver", st.Driver(), "seconds", res.Seconds)
+	}
+	if dbc.CatchUp != nil {
+		// One shot: whatever happens, never replay the old database again
+		// (it would overwrite newer rows on a later start).
+		prev, since := dbc.CatchUp, dbc.CatchUpSince
+		dbc.CatchUp, dbc.CatchUpSince = nil, 0
+		if err := store.SaveDBConfig(cfgPath, dbc); err != nil {
+			slog.Error("clear catch-up marker", "err", err)
+		}
+		src, err := store.OpenConfigured(prev, cfg.Database)
+		if err == nil {
+			var res *store.SyncResult
+			res, err = store.Sync(ctx, src, st, store.SyncOptions{Since: since - 5})
+			src.Close()
+			if err == nil {
+				slog.Info("database switch: caught up writes made during the switch", "from", prev.Driver, "tables", res.Tables)
+			}
+		}
+		if err != nil {
+			slog.Error("database switch: catch-up from the old database failed; rows written in the last seconds before the switch may be missing", "err", err)
+		}
+	}
+	return st, nil
 }
 
 func fatal(msg string, err error) {

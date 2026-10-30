@@ -53,6 +53,8 @@ class MainActivity : FlutterActivity() {
                     val id = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
                     result.success(id)
                 }
+                // Primary CPU ABI, so the update check offers the matching APK.
+                "abi" -> result.success(Build.SUPPORTED_ABIS.firstOrNull() ?: "")
                 else -> result.notImplemented()
             }
         }

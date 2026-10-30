@@ -130,6 +130,21 @@ class AppController extends ChangeNotifier {
     final token = await session.token();
     api.token = token;
     if (token != null) {
+      // Show the last known account and nodes right away (no spinner on a
+      // normal start); the refresh below replaces them within a moment.
+      final snap = session.snapshot();
+      if (snap != null) {
+        try {
+          user = User.fromJson(snap.$1);
+          nodes = [for (final e in snap.$2) Node.fromJson(e as Map<String, dynamic>)];
+          if (nodeId == null || !nodes.any((n) => n.id == nodeId)) {
+            nodeId = nodes.isEmpty ? null : nodes.first.id;
+          }
+        } catch (_) {
+          user = null;
+          nodes = [];
+        }
+      }
       loggedIn = true;
       notifyListeners();
       await refresh();
@@ -302,9 +317,11 @@ class AppController extends ChangeNotifier {
 
   Future<void> _doRefresh(bool quiet) async {
     try {
-      final r = await Future.wait([api.me(), api.nodes()]);
-      user = r[0] as User;
-      nodes = r[1] as List<Node>;
+      final r = await Future.wait([api.getJson('/api/v1/me'), api.getJson('/api/v1/nodes')]);
+      final nodeList = r[1]['nodes'] as List<dynamic>;
+      user = User.fromJson(r[0]);
+      nodes = [for (final e in nodeList) Node.fromJson(e as Map<String, dynamic>)];
+      session.saveSnapshot(r[0], nodeList);
       if (nodeId == null || !nodes.any((n) => n.id == nodeId)) {
         nodeId = nodes.isEmpty ? null : nodes.first.id;
       }

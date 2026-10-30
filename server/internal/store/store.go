@@ -1,4 +1,6 @@
-// Package store persists users, orders and traffic in SQLite (pure Go driver, no cgo).
+// Package store persists users, orders, traffic and settings. SQLite (pure Go,
+// no cgo) is the default; MySQL 8.0.19+ and PostgreSQL 12+ are supported for
+// larger deployments (see dialect.go, schema.go, sync.go).
 package store
 
 import (
@@ -12,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 )
 
@@ -23,9 +27,10 @@ var (
 
 type User struct {
 	ID           int64
+	UID          string // stable random identity used for syncing between databases
 	Email        string // "" for device-only accounts (no email/password)
 	PasswordHash string
-	UUID         string // VLESS credential, unique per user
+	UUID         string // VLESS credential, unique per user (rotates)
 	Disabled     bool   // admin ban, overrides everything
 	PlanID       string // paid plan; "" = none
 	ExpiresAt    *time.Time
@@ -77,22 +82,94 @@ func ParseXrayEmail(s string) (int64, bool) {
 	return id, true
 }
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db   *dbx
+	d    dialect
+	path string // SQLite file ("" for MySQL / PostgreSQL)
+}
 
+// Driver returns "sqlite", "mysql" or "postgres".
+func (s *Store) Driver() string { return s.d.name }
+
+// Open opens (creating if needed) the SQLite database at path.
 func Open(path string) (*Store, error) {
 	if dir := filepath.Dir(path); dir != "" {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, err
 		}
 	}
-	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+	// WAL lets readers run alongside the writer; synchronous=NORMAL is safe
+	// with WAL and avoids an fsync per commit; _txlock=immediate takes the
+	// write lock at BEGIN so concurrent transactions queue on busy_timeout
+	// instead of failing with SQLITE_BUSY when they upgrade from read to write.
+	dsn := "file:" + path + "?_txlock=immediate" +
+		"&_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_pragma=foreign_keys(1)" +
+		"&_pragma=synchronous(NORMAL)&_pragma=temp_store(MEMORY)&_pragma=cache_size(-16000)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1) // SQLite: serialize writers
-	s := &Store{db: db}
-	if err := s.migrate(); err != nil {
+	// Several connections so admin / dashboard reads don't queue behind each
+	// other or behind traffic writes (SQLite still serializes the writers).
+	db.SetMaxOpenConns(8)
+	db.SetMaxIdleConns(8)
+	db.SetConnMaxIdleTime(5 * time.Minute)
+	return open(db, dialect{DriverSQLite}, path)
+}
+
+// OpenDSN opens a MySQL or PostgreSQL database and creates / upgrades its schema.
+//
+//	mysql:    user:pass@tcp(host:3306)/vpn
+//	postgres: postgres://user:pass@host:5432/vpn?sslmode=disable
+func OpenDSN(driver, dsn string) (*Store, error) {
+	var drv string
+	switch driver {
+	case DriverMySQL:
+		drv = "mysql"
+		dsn = mysqlDSN(dsn)
+	case DriverPostgres:
+		drv = "pgx"
+	case DriverSQLite:
+		return Open(dsn)
+	default:
+		return nil, fmt.Errorf("不支持的数据库类型 %q", driver)
+	}
+	db, err := sql.Open(drv, dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(32)
+	db.SetMaxIdleConns(8)
+	db.SetConnMaxLifetime(30 * time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("连接数据库失败：%w", err)
+	}
+	return open(db, dialect{driver}, "")
+}
+
+// mysqlDSN adds the options this package relies on: utf8mb4 and statement
+// interpolation off (server-side prepared statements keep types exact).
+func mysqlDSN(dsn string) string {
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	if !strings.Contains(dsn, "charset=") {
+		dsn += sep + "charset=utf8mb4"
+		sep = "&"
+	}
+	if !strings.Contains(dsn, "timeout=") {
+		dsn += sep + "timeout=10s"
+	}
+	return dsn
+}
+
+func open(db *sql.DB, d dialect, path string) (*Store, error) {
+	s := &Store{db: &dbx{DB: db, d: d}, d: d, path: path}
+	if err := s.migrate(context.Background()); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -101,169 +178,10 @@ func Open(path string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
-// migrations[i] upgrades the schema from version i to i+1 (PRAGMA user_version).
-var migrations = []string{
-	`CREATE TABLE IF NOT EXISTS users (
-		id            INTEGER PRIMARY KEY AUTOINCREMENT,
-		email         TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-		password_hash TEXT    NOT NULL,
-		uuid          TEXT    NOT NULL UNIQUE,
-		disabled      INTEGER NOT NULL DEFAULT 0,
-		expires_at    INTEGER,
-		created_at    INTEGER NOT NULL
-	);`,
-	`ALTER TABLE users ADD COLUMN plan_id TEXT NOT NULL DEFAULT '';
-	ALTER TABLE users ADD COLUMN period_start INTEGER NOT NULL DEFAULT 0;
-	ALTER TABLE users ADD COLUMN traffic_used INTEGER NOT NULL DEFAULT 0;
-	UPDATE users SET period_start = created_at;
-	CREATE TABLE orders (
-		id           TEXT    PRIMARY KEY,
-		user_id      INTEGER NOT NULL REFERENCES users(id),
-		plan_id      TEXT    NOT NULL,
-		amount_cents INTEGER NOT NULL,
-		method       TEXT    NOT NULL,
-		status       TEXT    NOT NULL DEFAULT 'pending',
-		trade_no     TEXT    NOT NULL DEFAULT '',
-		created_at   INTEGER NOT NULL,
-		paid_at      INTEGER
-	);
-	CREATE INDEX orders_user ON orders(user_id, created_at);
-	CREATE TABLE traffic_daily (
-		user_id INTEGER NOT NULL REFERENCES users(id),
-		day     TEXT    NOT NULL,
-		up      INTEGER NOT NULL DEFAULT 0,
-		down    INTEGER NOT NULL DEFAULT 0,
-		PRIMARY KEY (user_id, day)
-	);`,
-	`ALTER TABLE users ADD COLUMN ref_code TEXT NOT NULL DEFAULT '';
-	ALTER TABLE users ADD COLUMN invited_by INTEGER NOT NULL DEFAULT 0;
-	CREATE UNIQUE INDEX users_ref_code ON users(ref_code) WHERE ref_code <> '';`,
-	`CREATE TABLE settings (
-		key        TEXT    PRIMARY KEY,
-		value      TEXT    NOT NULL,
-		updated_at INTEGER NOT NULL
-	);
-	ALTER TABLE users ADD COLUMN note TEXT NOT NULL DEFAULT '';
-	CREATE INDEX orders_status ON orders(status, created_at);`,
-	// Device-based accounts: make email/password optional and add a stable
-	// per-device identity. SQLite can't drop NOT NULL in place, so rebuild
-	// the users table (FK enforcement is disabled around the migration run;
-	// user ids are preserved so orders/traffic references stay valid).
-	`CREATE TABLE users_new (
-		id            INTEGER PRIMARY KEY AUTOINCREMENT,
-		email         TEXT    UNIQUE COLLATE NOCASE,
-		password_hash TEXT    NOT NULL DEFAULT '',
-		uuid          TEXT    NOT NULL UNIQUE,
-		disabled      INTEGER NOT NULL DEFAULT 0,
-		expires_at    INTEGER,
-		created_at    INTEGER NOT NULL,
-		plan_id       TEXT    NOT NULL DEFAULT '',
-		period_start  INTEGER NOT NULL DEFAULT 0,
-		traffic_used  INTEGER NOT NULL DEFAULT 0,
-		ref_code      TEXT    NOT NULL DEFAULT '',
-		invited_by    INTEGER NOT NULL DEFAULT 0,
-		note          TEXT    NOT NULL DEFAULT '',
-		device_id     TEXT,
-		platform      TEXT    NOT NULL DEFAULT ''
-	);
-	INSERT INTO users_new (id, email, password_hash, uuid, disabled, expires_at, created_at,
-		plan_id, period_start, traffic_used, ref_code, invited_by, note)
-		SELECT id, email, password_hash, uuid, disabled, expires_at, created_at,
-			plan_id, period_start, traffic_used, ref_code, invited_by, note FROM users;
-	DROP TABLE users;
-	ALTER TABLE users_new RENAME TO users;
-	CREATE UNIQUE INDEX users_ref_code ON users(ref_code) WHERE ref_code <> '';
-	CREATE UNIQUE INDEX users_device_id ON users(device_id) WHERE device_id IS NOT NULL;`,
-	// Multi-device: a device can follow another account's subscription,
-	// joined with a short-lived link code shown as text / QR on the primary.
-	`ALTER TABLE users ADD COLUMN primary_id INTEGER NOT NULL DEFAULT 0;
-	CREATE INDEX users_primary ON users(primary_id) WHERE primary_id <> 0;
-	CREATE TABLE link_codes (
-		code       TEXT    PRIMARY KEY,
-		user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-		expires_at INTEGER NOT NULL
-	);
-	CREATE INDEX link_codes_user ON link_codes(user_id);`,
-	// App releases for in-app update checks and the download site.
-	`CREATE TABLE releases (
-		id          INTEGER PRIMARY KEY AUTOINCREMENT,
-		platform    TEXT    NOT NULL,             -- android | ios
-		version     TEXT    NOT NULL,             -- display version, e.g. 1.1.0
-		build       INTEGER NOT NULL,             -- monotonically increasing build number
-		notes       TEXT    NOT NULL DEFAULT '',
-		file        TEXT    NOT NULL DEFAULT '',  -- stored package name under download_dir/releases
-		url         TEXT    NOT NULL DEFAULT '',  -- external link (App Store / TestFlight / other host)
-		size        INTEGER NOT NULL DEFAULT 0,
-		sha256      TEXT    NOT NULL DEFAULT '',
-		bundle_id   TEXT    NOT NULL DEFAULT '',  -- iOS IPA, for the itms-services manifest
-		force       INTEGER NOT NULL DEFAULT 0,   -- users below this build must update
-		published   INTEGER NOT NULL DEFAULT 1,
-		created_at  INTEGER NOT NULL
-	);
-	CREATE UNIQUE INDEX releases_platform_build ON releases(platform, build);`,
-	// Downloadable app language packs (Chinese is built into the app).
-	`CREATE TABLE lang_packs (
-		code        TEXT    PRIMARY KEY,          -- en, es, pt-BR, ar ...
-		name        TEXT    NOT NULL DEFAULT '',  -- Chinese name for the admin
-		native_name TEXT    NOT NULL DEFAULT '',
-		rtl         INTEGER NOT NULL DEFAULT 0,
-		enabled     INTEGER NOT NULL DEFAULT 1,
-		version     INTEGER NOT NULL,
-		strings     TEXT    NOT NULL DEFAULT '{}', -- {"中文原文": "译文"}
-		updated_at  INTEGER NOT NULL,
-		sort        INTEGER NOT NULL DEFAULT 0
-	);`,
-}
+// Ping checks the connection.
+func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
 
-func (s *Store) migrate() error {
-	var v int
-	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
-		return err
-	}
-	if v >= len(migrations) {
-		return nil
-	}
-	// Some migrations rebuild tables referenced by foreign keys (orders,
-	// traffic_daily -> users). FK enforcement can't be toggled inside a
-	// transaction, so disable it for the whole migration run and re-check
-	// integrity afterwards. MaxOpenConns is 1, so these pragmas apply to the
-	// same connection the migrations use.
-	if _, err := s.db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
-		return err
-	}
-	defer s.db.Exec(`PRAGMA foreign_keys = ON`)
-
-	for ; v < len(migrations); v++ {
-		tx, err := s.db.Begin()
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec(migrations[v]); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("migration %d: %w", v+1, err)
-		}
-		if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, v+1)); err != nil {
-			tx.Rollback()
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-	}
-
-	// Fail loudly if a rebuild left a dangling reference.
-	rows, err := s.db.Query(`PRAGMA foreign_key_check`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	if rows.Next() {
-		return fmt.Errorf("foreign_key_check failed after migration")
-	}
-	return rows.Err()
-}
-
-const userCols = `id, email, password_hash, uuid, disabled, expires_at, created_at, plan_id, period_start, traffic_used, ref_code, invited_by, note, device_id, platform, primary_id`
+const userCols = `id, uid, email, password_hash, uuid, disabled, expires_at, created_at, plan_id, period_start, traffic_used, ref_code, invited_by, note, device_id, platform, primary_id`
 
 func scanUser(row interface{ Scan(...any) error }) (*User, error) {
 	var (
@@ -275,7 +193,7 @@ func scanUser(row interface{ Scan(...any) error }) (*User, error) {
 		createdAt   int64
 		periodStart int64
 	)
-	if err := row.Scan(&u.ID, &email, &u.PasswordHash, &u.UUID, &disabled, &expiresAt, &createdAt,
+	if err := row.Scan(&u.ID, &u.UID, &email, &u.PasswordHash, &u.UUID, &disabled, &expiresAt, &createdAt,
 		&u.PlanID, &periodStart, &u.TrafficUsed, &u.RefCode, &u.InvitedBy, &u.Note, &deviceID, &u.Platform, &u.PrimaryID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -294,31 +212,63 @@ func scanUser(row interface{ Scan(...any) error }) (*User, error) {
 	return &u, nil
 }
 
-func (s *Store) CreateUser(ctx context.Context, email, passwordHash string) (*User, error) {
-	id, err := NewUUID()
+func scanUsers(rows *sql.Rows, err error) ([]*User, error) {
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now()
-	ref, err := newRefCode()
-	if err != nil {
-		return nil, err
-	}
-	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO users (email, password_hash, uuid, created_at, period_start, ref_code) VALUES (?, ?, ?, ?, ?, ?)`,
-		email, passwordHash, id, now.Unix(), now.Unix(), ref)
-	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint failed: users.email") {
-			return nil, ErrEmailTaken
+	defer rows.Close()
+	out := []*User{}
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
 		}
-		return nil, err
+		out = append(out, u)
 	}
-	uid, _ := res.LastInsertId()
-	return s.UserByID(ctx, uid)
+	return out, rows.Err()
+}
+
+// newUserIDs returns a fresh uid, VLESS uuid and invite code.
+func newUserIDs() (uid, vless, ref string, err error) {
+	if uid, err = NewUUID(); err != nil {
+		return
+	}
+	if vless, err = NewUUID(); err != nil {
+		return
+	}
+	ref, err = newRefCode()
+	return
+}
+
+func (s *Store) CreateUser(ctx context.Context, email, passwordHash string) (*User, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	for attempt := 0; ; attempt++ {
+		uid, vless, ref, err := newUserIDs()
+		if err != nil {
+			return nil, err
+		}
+		now := time.Now().Unix()
+		id, err := insertID(ctx, s.db, s.d,
+			`INSERT INTO users (uid, email, password_hash, uuid, created_at, period_start, ref_code, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			uid, email, passwordHash, vless, now, now, ref, now)
+		if isUnique(err) {
+			if _, e := s.UserByEmail(ctx, email); e == nil {
+				return nil, ErrEmailTaken
+			}
+			if attempt < 3 { // random invite code collided; try another
+				continue
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+		return s.UserByID(ctx, id)
+	}
 }
 
 func (s *Store) UserByEmail(ctx context.Context, email string) (*User, error) {
-	return scanUser(s.db.QueryRowContext(ctx, `SELECT `+userCols+` FROM users WHERE email = ?`, email))
+	return scanUser(s.db.QueryRowContext(ctx, `SELECT `+userCols+` FROM users WHERE email = ?`,
+		strings.ToLower(strings.TrimSpace(email))))
 }
 
 func (s *Store) UserByDeviceID(ctx context.Context, deviceID string) (*User, error) {
@@ -328,26 +278,28 @@ func (s *Store) UserByDeviceID(ctx context.Context, deviceID string) (*User, err
 // CreateDeviceUser creates an account tied to a stable device identity, with no
 // email or password. platform is informational ("ios"/"android").
 func (s *Store) CreateDeviceUser(ctx context.Context, deviceID, platform string) (*User, error) {
-	id, err := NewUUID()
-	if err != nil {
-		return nil, err
-	}
-	now := time.Now()
-	ref, err := newRefCode()
-	if err != nil {
-		return nil, err
-	}
-	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO users (uuid, created_at, period_start, ref_code, device_id, platform) VALUES (?, ?, ?, ?, ?, ?)`,
-		id, now.Unix(), now.Unix(), ref, deviceID, platform)
-	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint failed: users.device_id") {
-			return nil, ErrDeviceTaken
+	for attempt := 0; ; attempt++ {
+		uid, vless, ref, err := newUserIDs()
+		if err != nil {
+			return nil, err
 		}
-		return nil, err
+		now := time.Now().Unix()
+		id, err := insertID(ctx, s.db, s.d,
+			`INSERT INTO users (uid, uuid, created_at, period_start, ref_code, device_id, platform, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			uid, vless, now, now, ref, deviceID, platform, now)
+		if isUnique(err) {
+			if _, e := s.UserByDeviceID(ctx, deviceID); e == nil {
+				return nil, ErrDeviceTaken
+			}
+			if attempt < 3 {
+				continue
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+		return s.UserByID(ctx, id)
 	}
-	uid, _ := res.LastInsertId()
-	return s.UserByID(ctx, uid)
 }
 
 // DeviceUser returns the account for deviceID, creating it on first contact.
@@ -374,24 +326,12 @@ func (s *Store) UserByID(ctx context.Context, id int64) (*User, error) {
 
 // EnabledUsers returns all users that are not banned. Plan / quota checks are done by the caller.
 func (s *Store) EnabledUsers(ctx context.Context) ([]*User, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+userCols+` FROM users WHERE disabled = 0`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []*User
-	for rows.Next() {
-		u, err := scanUser(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, u)
-	}
-	return out, rows.Err()
+	return scanUsers(s.db.QueryContext(ctx, `SELECT `+userCols+` FROM users WHERE disabled = 0`))
 }
 
 func (s *Store) updateByEmail(ctx context.Context, email, set string, args ...any) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE users SET `+set+` WHERE email = ?`, append(args, email)...)
+	args = append(args, time.Now().Unix(), strings.ToLower(strings.TrimSpace(email)))
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET `+set+`, updated_at = ? WHERE email = ?`, args...)
 	if err != nil {
 		return err
 	}
@@ -403,11 +343,7 @@ func (s *Store) updateByEmail(ctx context.Context, email, set string, args ...an
 
 // SetDisabled enables/disables a user (admin CLI).
 func (s *Store) SetDisabled(ctx context.Context, email string, disabled bool) error {
-	v := 0
-	if disabled {
-		v = 1
-	}
-	return s.updateByEmail(ctx, email, `disabled = ?`, v)
+	return s.updateByEmail(ctx, email, `disabled = ?`, b2i(disabled))
 }
 
 // SetExpiry sets the paid-plan expiry (nil = never) (admin CLI).
@@ -452,19 +388,30 @@ func (s *Store) GrantPlan(ctx context.Context, email, planID string, days int) e
 	return tx.Commit()
 }
 
-func grantPlanTx(ctx context.Context, tx *sql.Tx, userID int64, planID string, days int, now time.Time) error {
-	u, err := scanUser(tx.QueryRowContext(ctx, `SELECT `+userCols+` FROM users WHERE id = ?`, userID))
+// lockUser reads a user inside a transaction, locking the row on MySQL /
+// PostgreSQL (SQLite transactions already hold the write lock).
+func lockUser(ctx context.Context, tx *txx, id int64) (*User, error) {
+	q := `SELECT ` + userCols + ` FROM users WHERE id = ?`
+	if tx.d.name != DriverSQLite {
+		q += ` FOR UPDATE`
+	}
+	return scanUser(tx.QueryRowContext(ctx, q, id))
+}
+
+func grantPlanTx(ctx context.Context, tx *txx, userID int64, planID string, days int, now time.Time) error {
+	u, err := lockUser(ctx, tx, userID)
 	if err != nil {
 		return err
 	}
 	add := time.Duration(days) * 24 * time.Hour
 	if u.PaidPlanActive(now) && u.PlanID == planID {
-		_, err = tx.ExecContext(ctx, `UPDATE users SET expires_at = ? WHERE id = ?`, u.ExpiresAt.Add(add).Unix(), userID)
+		_, err = tx.ExecContext(ctx, `UPDATE users SET expires_at = ?, updated_at = ? WHERE id = ?`,
+			u.ExpiresAt.Add(add).Unix(), now.Unix(), userID)
 		return err
 	}
 	_, err = tx.ExecContext(ctx,
-		`UPDATE users SET plan_id = ?, expires_at = ?, traffic_used = 0, period_start = ? WHERE id = ?`,
-		planID, now.Add(add).Unix(), now.Unix(), userID)
+		`UPDATE users SET plan_id = ?, expires_at = ?, traffic_used = 0, period_start = ?, updated_at = ? WHERE id = ?`,
+		planID, now.Add(add).Unix(), now.Unix(), now.Unix(), userID)
 	return err
 }
 
@@ -475,26 +422,32 @@ type Traffic struct{ Up, Down int64 }
 // AddTraffic records usage reported by a node. A user's period counter is
 // reset first if their period has ended. Unknown user IDs are ignored.
 func (s *Store) AddTraffic(ctx context.Context, usage map[int64]Traffic, now time.Time, period time.Duration) error {
+	if len(usage) == 0 {
+		return nil
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	day := now.Format("2006-01-02")
-	ps := int64(period / time.Second)
+	ps, ts := int64(period/time.Second), now.Unix()
+	updUser := `
+		UPDATE users SET
+			traffic_used = CASE WHEN period_start + ? <= ? THEN ? ELSE traffic_used + ? END,
+			period_start = CASE WHEN period_start + ? <= ?
+			                    THEN period_start + ` + s.d.idiv("? - period_start", "?") + ` * ? ELSE period_start END
+		WHERE id = ?`
+	updDay := s.d.upsert("traffic_daily", []string{"user_id", "day", "up", "down", "updated_at"}, []string{"user_id", "day"},
+		"up = traffic_daily.up + NEW(up)", "down = traffic_daily.down + NEW(down)", "updated_at = NEW(updated_at)")
 	for id, t := range usage {
 		if t.Up < 0 || t.Down < 0 {
 			continue
 		}
 		total := t.Up + t.Down
-		res, err := tx.ExecContext(ctx, `
-			UPDATE users SET
-				traffic_used = CASE WHEN period_start + ? <= ? THEN ? ELSE traffic_used + ? END,
-				period_start = CASE WHEN period_start + ? <= ?
-				                    THEN period_start + ((? - period_start) / ?) * ? ELSE period_start END
-			WHERE id = ?`,
-			ps, now.Unix(), total, total,
-			ps, now.Unix(), now.Unix(), ps, ps,
+		res, err := tx.ExecContext(ctx, updUser,
+			ps, ts, total, total,
+			ps, ts, ts, ps, ps,
 			id)
 		if err != nil {
 			return err
@@ -502,10 +455,7 @@ func (s *Store) AddTraffic(ctx context.Context, usage map[int64]Traffic, now tim
 		if n, _ := res.RowsAffected(); n == 0 {
 			continue
 		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO traffic_daily (user_id, day, up, down) VALUES (?, ?, ?, ?)
-			ON CONFLICT (user_id, day) DO UPDATE SET up = up + excluded.up, down = down + excluded.down`,
-			id, day, t.Up, t.Down); err != nil {
+		if _, err := tx.ExecContext(ctx, updDay, id, day, t.Up, t.Down, ts); err != nil {
 			return err
 		}
 	}
@@ -585,8 +535,8 @@ func (s *Store) CreateOrder(ctx context.Context, userID int64, planID string, am
 		Status: "pending", CreatedAt: now,
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO orders (id, user_id, plan_id, amount_cents, method, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		o.ID, o.UserID, o.PlanID, o.AmountCents, o.Method, now.Unix())
+		`INSERT INTO orders (id, user_id, plan_id, amount_cents, method, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		o.ID, o.UserID, o.PlanID, o.AmountCents, o.Method, now.Unix(), now.Unix())
 	return o, err
 }
 
@@ -621,15 +571,19 @@ func (s *Store) MarkPaid(ctx context.Context, orderID, tradeNo string, durationD
 		return false, err
 	}
 	defer tx.Rollback()
-	o, err := scanOrder(tx.QueryRowContext(ctx, `SELECT `+orderCols+` FROM orders WHERE id = ?`, orderID))
+	q := `SELECT ` + orderCols + ` FROM orders WHERE id = ?`
+	if s.d.name != DriverSQLite {
+		q += ` FOR UPDATE` // two notifications at once must not both grant
+	}
+	o, err := scanOrder(tx.QueryRowContext(ctx, q, orderID))
 	if err != nil {
 		return false, err
 	}
 	if o.Status == "paid" {
 		return false, nil
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE orders SET status = 'paid', trade_no = ?, paid_at = ? WHERE id = ?`,
-		tradeNo, now.Unix(), orderID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE orders SET status = 'paid', trade_no = ?, paid_at = ?, updated_at = ? WHERE id = ?`,
+		tradeNo, now.Unix(), now.Unix(), orderID); err != nil {
 		return false, err
 	}
 	if err := grantPlanTx(ctx, tx, o.UserID, o.PlanID, durationDays, now); err != nil {
@@ -649,11 +603,21 @@ func NewUUID() (string, error) {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 
-// SnapshotTo writes a consistent copy of the database to path (VACUUM INTO),
-// safe while the server is running.
+// SnapshotTo writes a consistent SQLite copy of the database to path, safe
+// while the server is running. For MySQL / PostgreSQL the data is copied
+// into a fresh SQLite file, so backups and clones always carry one format.
 func (s *Store) SnapshotTo(ctx context.Context, path string) error {
 	_ = os.Remove(path)
-	_, err := s.db.ExecContext(ctx, `VACUUM INTO ?`, path)
+	if s.d.name == DriverSQLite {
+		_, err := s.db.ExecContext(ctx, `VACUUM INTO ?`, path)
+		return err
+	}
+	dst, err := Open(path)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+	_, err = Sync(ctx, s, dst, SyncOptions{Full: true})
 	return err
 }
 
@@ -689,8 +653,8 @@ func ApplyPendingRestore(dbPath string) (bool, error) {
 	return true, nil
 }
 
-// ValidateDB opens a candidate database file read-only and checks it is a
-// healthy database of this system (has the users table, passes integrity_check).
+// ValidateDB opens a candidate SQLite database file read-only and checks it is
+// a healthy database of this system (has the users table, passes integrity_check).
 func ValidateDB(path string) error {
 	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
 	if err != nil {
@@ -708,8 +672,8 @@ func ValidateDB(path string) error {
 	if err := db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
 		return err
 	}
-	if v > len(migrations) {
-		return fmt.Errorf("备份来自更新版本的系统（数据库版本 %d，本系统支持 %d），请先升级本系统", v, len(migrations))
+	if v > len(sqliteMigrations) {
+		return fmt.Errorf("备份来自更新版本的系统（数据库版本 %d，本系统支持 %d），请先升级本系统", v, len(sqliteMigrations))
 	}
 	var n int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='users'`).Scan(&n); err != nil || n == 0 {

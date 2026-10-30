@@ -37,6 +37,9 @@ type Server struct {
 	mock      *payment.Mock
 	monitor   *monitor.Monitor
 	nodeUsers nodeUserCache
+	risk      riskState    // blocked IPs / users (risk.go)
+	ips       ipRecorder   // buffered IP records (risk.go)
+	segCache  segmentCache // user segmentation (segments.go)
 }
 
 func New(cfg *config.API, live *config.LiveCatalog, st *store.Store, issuer *auth.Issuer, mon *monitor.Monitor) (*Server, error) {
@@ -96,7 +99,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /internal/v1/traffic", s.handleTraffic)
 
 	s.registerAdmin(mux)
-	return withRecover(mux)
+	return withRecover(s.withRiskIP(mux))
 }
 
 // ---- app endpoints ----
@@ -262,6 +265,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) respondToken(w http.ResponseWriter, r *http.Request, u *store.User) {
+	if _, blocked := s.blockedUser(r.Context(), u); blocked {
+		writeErr(w, http.StatusForbidden, "account_blocked", "账号已被限制使用，请联系客服")
+		return
+	}
+	s.recordIP(u.ID, s.clientIP(r), "api", "", 1)
 	tok, exp, err := s.issuer.Issue(u.ID)
 	if err != nil {
 		s.internal(w, err)
@@ -398,12 +406,17 @@ func (s *Server) handleNodeUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	cat, now := s.cat(), time.Now()
 	out := make([]nodeUser, 0, len(users))
+	s.riskFresh(r.Context())
+	blocked := s.blockedUserIDs()
 	if !node.Frozen { // a frozen node serves nobody
 		byID := make(map[int64]*store.User, len(users))
 		for _, u := range users {
 			byID[u.ID] = u
 		}
 		for _, u := range users {
+			if blocked[u.ID] || (u.Linked() && blocked[u.PrimaryID]) {
+				continue // risk control: blocked account (or its owner)
+			}
 			holder := u
 			if u.Linked() {
 				// Members use their owner's plan; a banned / deleted owner cuts them off.
@@ -420,7 +433,11 @@ func (s *Server) handleNodeUsers(w http.ResponseWriter, r *http.Request) {
 	if s.monitor != nil {
 		s.monitor.Heartbeat(node.ID, len(out))
 	}
-	body, err := json.Marshal(map[string]any{"users": out, "bandwidth_mbps": node.BandwidthMbps})
+	blockedIPs := s.nodeBlockedIPs()
+	if blockedIPs == nil {
+		blockedIPs = []string{}
+	}
+	body, err := json.Marshal(map[string]any{"users": out, "bandwidth_mbps": node.BandwidthMbps, "blocked_ips": blockedIPs})
 	if err != nil {
 		s.internal(w, err)
 		return
@@ -501,6 +518,11 @@ func (s *Server) authed(h func(http.ResponseWriter, *http.Request, *store.User))
 			s.internal(w, err)
 			return
 		}
+		if _, blocked := s.blockedUser(r.Context(), u); blocked {
+			writeErr(w, http.StatusForbidden, "account_blocked", "账号已被限制使用，请联系客服")
+			return
+		}
+		s.recordIP(u.ID, s.clientIP(r), "api", "", 1)
 		h(w, r, u)
 	}
 }

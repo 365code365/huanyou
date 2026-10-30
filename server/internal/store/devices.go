@@ -100,20 +100,7 @@ func (s *Store) LinkCodeOwner(ctx context.Context, code string) (int64, error) {
 
 // Members returns the devices following primaryID, oldest first.
 func (s *Store) Members(ctx context.Context, primaryID int64) ([]*User, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+userCols+` FROM users WHERE primary_id = ? ORDER BY id`, primaryID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []*User{}
-	for rows.Next() {
-		u, err := scanUser(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, u)
-	}
-	return out, rows.Err()
+	return scanUsers(s.db.QueryContext(ctx, `SELECT `+userCols+` FROM users WHERE primary_id = ? ORDER BY id`, primaryID))
 }
 
 // LinkDevice makes memberID follow primaryID, allowing at most maxMembers
@@ -128,8 +115,14 @@ func (s *Store) LinkDevice(ctx context.Context, memberID, primaryID int64, maxMe
 	}
 	defer tx.Rollback()
 
+	// Lock the primary's row so two devices joining at once can't both pass the
+	// member limit (SQLite transactions already hold the write lock).
+	lock := ""
+	if s.d.name != DriverSQLite {
+		lock = " FOR UPDATE"
+	}
 	var primaryOf int64
-	if err := tx.QueryRowContext(ctx, `SELECT primary_id FROM users WHERE id = ?`, primaryID).Scan(&primaryOf); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT primary_id FROM users WHERE id = ?`+lock, primaryID).Scan(&primaryOf); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -158,7 +151,7 @@ func (s *Store) LinkDevice(ctx context.Context, memberID, primaryID int64, maxMe
 	if count >= maxMembers {
 		return ErrDeviceLimit
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE users SET primary_id = ? WHERE id = ?`, primaryID, memberID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE users SET primary_id = ?, updated_at = ? WHERE id = ?`, primaryID, time.Now().Unix(), memberID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -171,7 +164,8 @@ func (s *Store) UnlinkDevice(ctx context.Context, memberID int64) error {
 
 // RevokeMember detaches memberID only if it currently follows primaryID.
 func (s *Store) RevokeMember(ctx context.Context, primaryID, memberID int64) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE users SET primary_id = 0 WHERE id = ? AND primary_id = ?`, memberID, primaryID)
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET primary_id = 0, updated_at = ? WHERE id = ? AND primary_id = ?`,
+		time.Now().Unix(), memberID, primaryID)
 	if err != nil {
 		return err
 	}

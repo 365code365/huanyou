@@ -109,6 +109,11 @@ export interface User {
   plan_id: string
   expires_at: string | null
   entitlement: Entitlement
+  tier: string // segment value tier key, see Segment
+  tags: string[] // segment behaviour tag keys
+  blocked: string // risk-control block reason
+  is_blocked: boolean
+  blocked_by: number // user id carrying the block (self or multi-device owner)
 }
 
 export interface Order {
@@ -135,6 +140,8 @@ export interface UserDetail {
   usage: DailyUsage[]
   orders: Order[]
   invited_count: number
+  ips: IPRecord[]
+  ip_total: number
 }
 
 export interface ReferralSettings {
@@ -281,6 +288,7 @@ export interface Release {
   bundle_id: string
   force: boolean
   published: boolean
+  abi: string // Android CPU type: arm64-v8a | armeabi-v7a | x86_64 | "" (universal)
   created_at: string
   download_url: string
 }
@@ -337,3 +345,170 @@ export interface LangList {
   suggested: SuggestedLang[]
   ai: AIStatus
 }
+
+// ---- risk control ----
+
+export interface IPRecord {
+  user_id: number
+  recharge_code: string
+  ip: string
+  source: 'api' | 'node'
+  node_id: string
+  node_name: string
+  hits: number
+  first_seen: string
+  last_seen: string
+  class: 'cn' | 'abroad' | 'private' | ''
+  blocked: boolean
+}
+
+export interface RiskConfig {
+  record_api: boolean | null
+  record_node: boolean | null
+  retention_days: number
+  max_ips_per_user: number
+  max_users_per_ip: number
+}
+
+export interface SuspectUser {
+  user_id: number
+  recharge_code: string
+  ips: number
+  nodes: number
+  last_seen: string
+  plan_id: string
+  expires_at: string | null
+  blocked: boolean
+  disabled: boolean
+}
+
+export interface SuspectIP {
+  ip: string
+  users: number
+  hits: number
+  last_seen: string
+  user_ids: number[]
+  recharge_codes: string[]
+  class: string
+  blocked: boolean
+}
+
+export interface Suspicious {
+  hours: number
+  multi_ip_users: SuspectUser[]
+  shared_ips: SuspectIP[]
+  config: RiskConfig
+}
+
+export interface RiskRule {
+  kind: 'ip' | 'user'
+  value: string
+  reason: string
+  expires_at: string | null
+  created_at: string
+  updated_at: string
+  active: boolean
+  recharge_code?: string
+}
+
+export interface GeoLocation {
+  ip: string
+  country: string
+  country_code: string
+  region: string
+  city: string
+}
+
+// ---- segmentation ----
+
+export interface SegmentStat {
+  key: string
+  label: string
+  group: 'tier' | 'tag'
+  color: string
+  desc: string
+  advice: string
+  users: number
+  share: number
+  revenue_cents: number
+  avg_ltv_cents: number
+  paying_users: number
+  avg_bytes_30: number
+  active_share: number
+}
+
+export interface SegmentConfig {
+  high_value_cents: number
+  low_value_cents: number
+  loyal_orders: number
+  active_days: number
+  promoter_invites: number
+  churn_days: number
+}
+
+export interface SegmentReport {
+  generated_at: string
+  totals: {
+    users: number
+    accounts: number
+    paying: number
+    paid_active: number
+    conversion: number
+    repurchase_rate: number
+    arppu_cents: number
+    revenue_cents: number
+    revenue_30_cents: number
+    active_7: number
+  }
+  tiers: SegmentStat[]
+  tags: SegmentStat[]
+  plan_mix: { plan_id: string; name: string; orders: number; revenue_cents: number; buyers: number }[]
+  config: SegmentConfig
+}
+
+export interface SegmentUser {
+  id: number
+  recharge_code: string
+  tier: string
+  tags: string[]
+  plan_id: string
+  expires_at: string | null
+  platform: string
+  created_at: string
+  ltv_cents: number
+  paid_orders: number
+  max_order_cents: number
+  last_paid_at: string | null
+  bytes_30: number
+  active_days_30: number
+  last_active_day: string
+  invites: number
+}
+
+// ---- database ----
+
+export type DBDriver = 'sqlite' | 'mysql' | 'postgres'
+
+export interface TableResult {
+  table: string
+  upserted: number
+  deleted: number
+}
+
+export interface DBInfo {
+  driver: DBDriver
+  dsn: string
+  schema_version: number
+  counts: Record<string, number>
+  ping_ms: number
+  ping_error?: string
+  sqlite_path: string
+  env_override: boolean
+  marks: Record<string, { at: number; full: boolean; seconds: number; result: TableResult[] }>
+}
+
+export type DBSyncEvent =
+  | { type: 'start'; full: boolean; since: number }
+  | { type: 'progress'; table: string; rows: number }
+  | { type: 'done'; result: { started_at: number; tables: TableResult[]; seconds: number } }
+  | { type: 'error'; message: string }

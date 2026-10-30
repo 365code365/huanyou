@@ -5,6 +5,7 @@ import 'core/config.dart';
 import 'features/shell/main_shell.dart';
 import 'state/app_controller.dart';
 import 'state/app_scope.dart';
+import 'core/prefs.dart';
 import 'i18n/i18n.dart';
 import 'theme/app_theme.dart';
 import 'theme/appearance.dart';
@@ -19,10 +20,17 @@ import 'widgets/bootstrap_gate.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Cached choices only (no network), so the first frame is already in the
-  // right language and palette.
-  await Future.wait([I18n.instance.load(), Appearance.instance.load()]);
+  // One secure-storage read for everything (no network), so the first frame
+  // is already in the right language and palette.
+  await Prefs.load();
+  I18n.instance.load();
+  Appearance.instance.load();
   AppColors.dark = Appearance.instance.isDark;
+  // Decoded-image budget: the app shows a handful of small icons / QR codes;
+  // Flutter's default (100 MB, 1000 images) is sized for galleries.
+  PaintingBinding.instance.imageCache
+    ..maximumSizeBytes = 24 << 20
+    ..maximumSize = 200;
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(statusBarColor: Colors.transparent));
   runApp(VpnApp(controller: AppController()));
 }
@@ -88,7 +96,10 @@ class _VpnAppState extends State<VpnApp> with WidgetsBindingObserver {
         debugShowCheckedModeBanner: false,
         theme: AppTheme.current(),
         // Material's own strings stay built in; layout direction follows the pack (ar/fa/he are RTL).
-        builder: (context, child) => Directionality(textDirection: I18n.instance.direction, child: child!),
+        builder: (context, child) => Directionality(
+          textDirection: I18n.instance.direction,
+          child: _Adaptive(child: child!),
+        ),
         home: const _Root(),
       ),
     );
@@ -111,7 +122,11 @@ class _RootState extends State<_Root> {
   @override
   void initState() {
     super.initState();
-    Future.delayed(const Duration(milliseconds: 1300), () {
+    // First launch plays the full intro while the account is provisioned.
+    // Returning users (token on file) only see a brief brand frame: their
+    // home screen is ready from the cached snapshot right away.
+    final returning = Prefs.get('token') != null;
+    Future.delayed(Duration(milliseconds: returning ? 350 : 1300), () {
       if (mounted) setState(() => _introDone = true);
     });
   }
@@ -147,5 +162,34 @@ class _RootState extends State<_Root> {
               onRetry: app.deviceSignIn,
             ),
     );
+  }
+}
+
+/// Keeps layouts sane on unusual screens: very large system font sizes are
+/// capped (beyond 1.35x the fixed-size controls overflow), and on tablets /
+/// landscape the phone-first UI is centered at a readable width.
+class _Adaptive extends StatelessWidget {
+  const _Adaptive({required this.child});
+  final Widget child;
+
+  static const maxWidth = 600.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    Widget out = MediaQuery.withClampedTextScaling(minScaleFactor: 0.85, maxScaleFactor: 1.35, child: child);
+    final w = mq.size.width;
+    if (w > maxWidth + 80) {
+      final side = (w - maxWidth) / 2;
+      out = ColoredBox(
+        color: AppColors.canvas,
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: side),
+          // The child keeps the full height and safe-area insets.
+          child: MediaQuery(data: mq.copyWith(size: Size(maxWidth, mq.size.height)), child: out),
+        ),
+      );
+    }
+    return out;
   }
 }

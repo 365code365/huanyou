@@ -296,6 +296,9 @@ func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 			Up    int64  `json:"up"`
 			Down  int64  `json:"down"`
 		} `json:"traffic"`
+		// Source addresses of connections per user since the last report
+		// (email -> ip -> new connections), sent by node agents >= this version.
+		IPs map[string]map[string]int64 `json:"ips"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 16<<20)
 	if !decodeBody(w, r, &body) {
@@ -318,6 +321,19 @@ func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 		usage[id] = store.Traffic{Up: cur.Up + t.Up, Down: cur.Down + t.Down}
 	}
 	active := len(usage)
+	for email, ips := range body.IPs {
+		id, ok := store.ParseXrayEmail(strings.TrimSpace(email))
+		if !ok {
+			continue
+		}
+		n := 0
+		for ip, hits := range ips {
+			if n++; n > 64 { // bound per report
+				break
+			}
+			s.recordIP(id, ip, "node", node.ID, max(hits, 0))
+		}
+	}
 	// 流量倍率: bill traffic on this node at its rate (raw bytes stay in node stats).
 	if r := node.Rate; r > 0 && r != 1 {
 		for id, t := range usage {

@@ -18,6 +18,16 @@ class Device {
     }
   }
 
+  /// Primary CPU ABI on Android ("arm64-v8a", "armeabi-v7a", …); "" elsewhere.
+  static Future<String> abi() async {
+    if (!Platform.isAndroid) return '';
+    try {
+      return await _ch.invokeMethod<String>('abi') ?? '';
+    } catch (_) {
+      return '';
+    }
+  }
+
   static String get platform {
     if (Platform.isIOS) return 'ios';
     if (Platform.isAndroid) return 'android';

@@ -133,4 +133,13 @@ func SetMemoryLimit(mib int64) {
 	debug.SetGCPercent(10)
 }
 
+// SetSoftMemoryLimit asks the Go runtime to keep the heap under mib MiB by
+// collecting more often as it gets close (GOGC stays at its default, so idle
+// tunnels cost no extra CPU). Android calls this before Start: without it the
+// heap of a busy tunnel can grow to twice the live data and memory freed after
+// a large download is returned to the OS only slowly.
+func SetSoftMemoryLimit(mib int64) {
+	debug.SetMemoryLimit(mib << 20)
+}
+
 func Version() string { return core.Version() }

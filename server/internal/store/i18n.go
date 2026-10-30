@@ -86,14 +86,18 @@ func (s *Store) SaveLangPack(ctx context.Context, p *LangPack) (*LangPack, error
 		return nil, err
 	}
 	now := time.Now()
+	var sort int
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(sort), 0) + 1 FROM lang_packs`).Scan(&sort); err != nil {
+		return nil, err
+	}
 	// Version must strictly increase even for two saves in one second.
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO lang_packs (code, name, native_name, rtl, enabled, version, strings, updated_at, sort)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort), 0) + 1 FROM lang_packs))
-		ON CONFLICT (code) DO UPDATE SET name = excluded.name, native_name = excluded.native_name, rtl = excluded.rtl,
-			enabled = excluded.enabled, strings = excluded.strings, updated_at = excluded.updated_at,
-			version = MAX(lang_packs.version + 1, excluded.version)`,
-		p.Code, p.Name, p.NativeName, b2i(p.RTL), b2i(p.Enabled), now.Unix(), string(b), now.Unix())
+	q := s.d.upsert("lang_packs",
+		[]string{"code", "name", "native_name", "rtl", "enabled", "version", "strings", "updated_at", "sort"}, []string{"code"},
+		"name = NEW(name)", "native_name = NEW(native_name)", "rtl = NEW(rtl)", "enabled = NEW(enabled)",
+		"strings = NEW(strings)", "updated_at = NEW(updated_at)",
+		"version = "+s.d.greatest("lang_packs.version + 1", "NEW(version)"))
+	_, err = s.db.ExecContext(ctx, q,
+		p.Code, p.Name, p.NativeName, b2i(p.RTL), b2i(p.Enabled), now.Unix(), string(b), now.Unix(), sort)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +118,7 @@ func (s *Store) DeleteLangPack(ctx context.Context, code string) error {
 // Setting reads a JSON value from the settings table into v; found=false if absent.
 func (s *Store) Setting(ctx context.Context, key string, v any) (bool, error) {
 	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, key).Scan(&raw)
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE skey = ?`, key).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -129,9 +133,12 @@ func (s *Store) PutSetting(ctx context.Context, key string, v any) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-		ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-		key, string(b), time.Now().Unix())
+	return s.putSettingRaw(ctx, key, string(b))
+}
+
+func (s *Store) putSettingRaw(ctx context.Context, key, value string) error {
+	q := s.d.upsert("settings", []string{"skey", "value", "updated_at"}, []string{"skey"},
+		"value = NEW(value)", "updated_at = NEW(updated_at)")
+	_, err := s.db.ExecContext(ctx, q, key, value, time.Now().Unix())
 	return err
 }

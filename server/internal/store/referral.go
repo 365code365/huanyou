@@ -44,7 +44,7 @@ func (s *Store) EnsureRefCodes(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			_, err = s.db.ExecContext(ctx, `UPDATE users SET ref_code = ? WHERE id = ?`, code, id)
+			_, err = s.db.ExecContext(ctx, `UPDATE users SET ref_code = ?, updated_at = ? WHERE id = ?`, code, time.Now().Unix(), id)
 			if err == nil {
 				break
 			}
@@ -90,7 +90,7 @@ func (s *Store) ApplyReferral(ctx context.Context, newUserID, inviterID int64,
 
 	// Link only if not already linked (prevents double rewards).
 	res, err := tx.ExecContext(ctx,
-		`UPDATE users SET invited_by = ? WHERE id = ? AND invited_by = 0`, inviterID, newUserID)
+		`UPDATE users SET invited_by = ?, updated_at = ? WHERE id = ? AND invited_by = 0`, inviterID, now.Unix(), newUserID)
 	if err != nil {
 		return nil, err
 	}

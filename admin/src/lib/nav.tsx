@@ -7,6 +7,9 @@ import {
   CustomerServiceOutlined,
   DashboardOutlined,
   ProfileOutlined,
+  SafetyOutlined,
+  PieChartOutlined,
+  HddOutlined,
   TranslationOutlined,
   SettingOutlined,
   TagsOutlined,
@@ -22,6 +25,8 @@ export const nav: { path: string; title: string; icon: ReactNode }[] = [
   { path: '/', title: '概览', icon: <DashboardOutlined /> },
   { path: '/users', title: '用户', icon: <UserOutlined /> },
   { path: '/orders', title: '订单', icon: <ProfileOutlined /> },
+  { path: '/segments', title: '用户分群', icon: <PieChartOutlined /> },
+  { path: '/risk', title: '风控', icon: <SafetyOutlined /> },
   { path: '/plans', title: '套餐', icon: <TagsOutlined /> },
   { path: '/nodes', title: '节点', icon: <ApiOutlined /> },
   { path: '/monitor', title: '监控预警', icon: <BellOutlined /> },
@@ -30,6 +35,7 @@ export const nav: { path: string; title: string; icon: ReactNode }[] = [
   { path: '/releases', title: '版本发布', icon: <CloudUploadOutlined /> },
   { path: '/i18n', title: '多语言', icon: <TranslationOutlined /> },
   { path: '/system', title: '备份与克隆', icon: <DatabaseOutlined /> },
+  { path: '/database', title: '数据库', icon: <HddOutlined /> },
   { path: '/settings', title: '系统设置', icon: <SettingOutlined /> },
 ]
 

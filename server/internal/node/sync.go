@@ -31,6 +31,7 @@ type Syncer struct {
 	client  http.Client
 	current map[string]string // email -> uuid
 	etag    string            // last user list version; the API answers 304 if unchanged
+	blocked string            // last applied blocked-source list (joined), to skip no-op updates
 }
 
 func (s *Syncer) Run(ctx context.Context) {
@@ -90,7 +91,8 @@ func (s *Syncer) do(ctx context.Context, method, path string, body any, out any)
 
 func (s *Syncer) reportTraffic(ctx context.Context) error {
 	usage := s.Stats.Drain()
-	if len(usage) == 0 {
+	ips := s.Stats.DrainIPs()
+	if len(usage) == 0 && len(ips) == 0 {
 		return nil
 	}
 	type item struct {
@@ -102,7 +104,8 @@ func (s *Syncer) reportTraffic(ctx context.Context) error {
 	for email, u := range usage {
 		items = append(items, item{email, u.Up, u.Down})
 	}
-	if err := s.do(ctx, http.MethodPost, "/internal/v1/traffic", map[string]any{"traffic": items}, nil); err != nil {
+	// ips: {email: {source ip: new connections}} — source addresses only.
+	if err := s.do(ctx, http.MethodPost, "/internal/v1/traffic", map[string]any{"traffic": items, "ips": ips}, nil); err != nil {
 		s.Stats.Restore(usage) // retry next round
 		return err
 	}
@@ -113,6 +116,7 @@ func (s *Syncer) syncUsers(ctx context.Context) error {
 	var body struct {
 		Users         []remoteUser `json:"users"`
 		BandwidthMbps int          `json:"bandwidth_mbps"`
+		BlockedIPs    []string     `json:"blocked_ips"` // risk control: drop traffic from these sources
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(s.APIURL, "/")+"/internal/v1/users", nil)
 	if err != nil {
@@ -140,6 +144,14 @@ func (s *Syncer) syncUsers(ctx context.Context) error {
 	}
 	if s.Fair != nil {
 		s.Fair.SetBandwidth(body.BandwidthMbps)
+	}
+	if key := strings.Join(body.BlockedIPs, ","); key != s.blocked {
+		if err := s.Xray.SetBlockedSources(body.BlockedIPs); err != nil {
+			slog.Warn("apply blocked sources", "err", err)
+		} else {
+			s.blocked = key
+			slog.Info("blocked sources updated", "count", len(body.BlockedIPs))
+		}
 	}
 	want := make(map[string]remoteUser, len(body.Users))
 	for _, u := range body.Users {

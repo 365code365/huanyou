@@ -25,23 +25,6 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  Timer? _clock;
-
-  @override
-  void initState() {
-    super.initState();
-    // Redraw the elapsed-time label once a second while connected.
-    _clock = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted && AppScope.read(context).connectedAt != null) setState(() {});
-    });
-  }
-
-  @override
-  void dispose() {
-    _clock?.cancel();
-    super.dispose();
-  }
-
   Future<void> _handle(Future<ConnectResult?> f) async {
     final r = await f;
     if (r == ConnectResult.needPlan && mounted) {
@@ -152,18 +135,45 @@ class _TopBar extends StatelessWidget {
   }
 }
 
+/// "已连接 00:12:34": the only part of the home screen that changes every
+/// second, so only this text rebuilds on the clock tick.
+class _Elapsed extends StatefulWidget {
+  const _Elapsed({required this.since, required this.style});
+  final DateTime since;
+  final TextStyle style;
+  @override
+  State<_Elapsed> createState() => _ElapsedState();
+}
+
+class _ElapsedState extends State<_Elapsed> {
+  Timer? _t;
+
+  @override
+  void initState() {
+    super.initState();
+    _t = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _t?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final d = DateTime.now().difference(widget.since);
+    String two(int n) => n.toString().padLeft(2, '0');
+    final hms = '${two(d.inHours)}:${two(d.inMinutes % 60)}:${two(d.inSeconds % 60)}';
+    return Text(tr('已连接 {0}', [hms]), style: widget.style);
+  }
+}
+
 class _Headline extends StatelessWidget {
   const _Headline({required this.app});
   final AppController app;
-
-  String _elapsed() {
-    final t = app.connectedAt;
-    if (t == null) return '00:00:00';
-    final d = DateTime.now().difference(t);
-    String two(int n) => n.toString().padLeft(2, '0');
-    return '${two(d.inHours)}:${two(d.inMinutes % 60)}:${two(d.inSeconds % 60)}';
-  }
-
   @override
   Widget build(BuildContext context) {
     final (title, color) = switch (app.status) {
@@ -173,8 +183,13 @@ class _Headline extends StatelessWidget {
       VpnStatus.error => (tr('连接失败'), AppColors.danger),
       VpnStatus.disconnected => (tr('未连接'), AppColors.ink),
     };
+    final subStyle = TextStyle(
+      fontSize: 14,
+      color: AppColors.sub,
+      fontFeatures: [FontFeature.tabularFigures()],
+    );
     final sub = switch (app.status) {
-      VpnStatus.connected => tr('已连接 {0}', [_elapsed()]),
+      VpnStatus.connected => '',
       VpnStatus.connecting => app.statusHint ?? tr('正在建立加密通道…'),
       VpnStatus.disconnecting => ' ',
       _ => tr('轻点下方按钮开始'),
@@ -187,12 +202,10 @@ class _Headline extends StatelessWidget {
             style: TextStyle(fontSize: 34, height: 1.1, fontWeight: FontWeight.w800, color: color, letterSpacing: -0.5)),
       ),
       const SizedBox(height: 6),
-      Text(sub,
-          style: TextStyle(
-            fontSize: 14,
-            color: AppColors.sub,
-            fontFeatures: [FontFeature.tabularFigures()],
-          )),
+      if (app.status == VpnStatus.connected && app.connectedAt != null)
+        _Elapsed(since: app.connectedAt!, style: subStyle)
+      else
+        Text(sub, style: subStyle),
     ]);
   }
 }

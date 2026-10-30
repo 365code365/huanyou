@@ -15,6 +15,8 @@ import (
 	cserial "github.com/xtls/xray-core/common/serial"
 	core "github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/inbound"
+	"github.com/xtls/xray-core/features/routing"
+	"github.com/xtls/xray-core/infra/conf"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	"github.com/xtls/xray-core/proxy"
 	"github.com/xtls/xray-core/proxy/vless"
@@ -50,7 +52,9 @@ func BuildServerConfig(c *config.NodeAgent) ([]byte, error) {
 	// inbound. Unauthenticated probes see the real target site.
 	visionSettings := map[string]any{"clients": []any{}, "decryption": "none"}
 	if c.XHTTPPath != "" {
-		visionSettings["fallbacks"] = []any{map[string]any{"dest": c.XHTTPInternal, "xver": 0}}
+		// xver 1: the fallback prepends a PROXY header so the internal XHTTP
+		// inbound sees the client's real address instead of loopback.
+		visionSettings["fallbacks"] = []any{map[string]any{"dest": c.XHTTPInternal, "xver": 1}}
 	}
 	visionStream := map[string]any{"network": "raw", "security": "reality", "realitySettings": reality}
 	if c.AcceptProxyProtocol {
@@ -73,6 +77,8 @@ func BuildServerConfig(c *config.NodeAgent) ([]byte, error) {
 			"streamSettings": map[string]any{
 				"network": "xhttp", "security": "none",
 				"xhttpSettings": map[string]any{"path": c.XHTTPPath},
+				// Only the fallback above connects here, always with a PROXY header.
+				"sockopt": map[string]any{"acceptProxyProtocol": true},
 			},
 			"sniffing": sniff,
 		})
@@ -106,6 +112,8 @@ func BuildServerConfig(c *config.NodeAgent) ([]byte, error) {
 			"bufferSize": 64,
 			// Makes Xray wrap each user's traffic with our counters (traffic stats + speed limit).
 			"statsUserUplink": true, "statsUserDownlink": true,
+			// Per-user source addresses for the API's IP records (see Stats.DrainIPs).
+			"statsUserOnline": true,
 		}}},
 		"routing": map[string]any{
 			// Resolve domains so the private-range rule also catches e.g. "localhost.example" -> 127.0.0.1.
@@ -176,6 +184,38 @@ func StartXray(c *config.NodeAgent, st *Stats) (*Xray, error) {
 }
 
 func (x *Xray) Close() error { return x.inst.Close() }
+
+// riskRuleTag marks the routing rule that drops traffic from blocked sources.
+const riskRuleTag = "risk-ip"
+
+type ruleEditor interface {
+	AddRule(config *cserial.TypedMessage, shouldAppend bool) error
+	RemoveRule(tag string) error
+}
+
+// SetBlockedSources replaces the list of client IPs / CIDRs whose traffic is
+// dropped (blackholed), without restarting Xray. Existing connections from a
+// newly blocked address stop passing traffic at their next request.
+func (x *Xray) SetBlockedSources(cidrs []string) error {
+	r, ok := x.inst.GetFeature(routing.RouterType()).(ruleEditor)
+	if !ok {
+		return fmt.Errorf("xray router does not support rule updates")
+	}
+	_ = r.RemoveRule(riskRuleTag) // no-op when absent
+	if len(cidrs) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(map[string]any{"type": "field", "ruleTag": riskRuleTag, "source": cidrs, "outboundTag": "block"})
+	if err != nil {
+		return err
+	}
+	rc := &conf.RouterConfig{RuleList: []json.RawMessage{raw}}
+	pb, err := rc.Build()
+	if err != nil {
+		return fmt.Errorf("blocked sources: %w", err)
+	}
+	return r.AddRule(cserial.ToTypedMessage(pb), true)
+}
 
 func (x *Xray) userManager(ctx context.Context, tag string) (proxy.UserManager, error) {
 	h, err := x.ihm.GetHandler(ctx, tag)

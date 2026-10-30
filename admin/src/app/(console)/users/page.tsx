@@ -1,6 +1,6 @@
 'use client'
 import { PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
-import { App, Button, Form, Input, InputNumber, Modal, Progress, Segmented, Space, Table, Tag } from 'antd'
+import { App, Button, Form, Input, InputNumber, Modal, Progress, Segmented, Select, Space, Table, Tag } from 'antd'
 import { useState } from 'react'
 import { PageCard } from '@/components/PageCard'
 import { PlanSelect } from '@/components/PlanSelect'
@@ -8,6 +8,7 @@ import { useAction, useAsync } from '@/hooks/useAsync'
 import { usePaged } from '@/hooks/usePaged'
 import { api, type User } from '@/lib/api'
 import { bytes, date } from '@/lib/format'
+import { segmentMeta } from '@/lib/segments'
 import { UserDrawer } from './UserDrawer'
 
 const platformName = (p: string) => (p === 'ios' ? 'iPhone' : p === 'android' ? 'Android' : '未知')
@@ -16,7 +17,7 @@ export const who = (u: User) => (u.email ? `${u.recharge_code}（${u.email}）` 
 
 export default function UsersPage() {
   const { modal } = App.useApp()
-  const t = usePaged(api.users.list, { q: '', status: '' })
+  const t = usePaged(api.users.list, { q: '', status: '', segment: '' })
   const { data: planPage } = useAsync(api.plans.list)
   const plans = planPage?.items ?? []
   const paidPlans = plans.filter((p) => !p.free)
@@ -79,6 +80,14 @@ export default function UsersPage() {
               { label: '已停用', value: 'disabled' },
             ]}
           />
+          <Select
+            allowClear
+            placeholder="用户分群"
+            style={{ width: 140 }}
+            value={t.filters.segment || undefined}
+            onChange={(v) => t.setFilter('segment', v ?? '')}
+            options={Object.entries(segmentMeta).map(([value, m]) => ({ value, label: m.label }))}
+          />
           <div className="spacer" />
           <Button icon={<ReloadOutlined />} onClick={t.reload}>刷新</Button>
           <Button
@@ -100,7 +109,7 @@ export default function UsersPage() {
           loading={t.loading}
           dataSource={t.items}
           pagination={t.pagination}
-          scroll={{ x: 1000 }}
+          scroll={{ x: 1170 }}
           onRow={(u) => ({ onClick: () => setDetailId(u.id) })}
           columns={[
             {
@@ -150,6 +159,18 @@ export default function UsersPage() {
                   </>
                 )
               },
+            },
+            {
+              title: '分群',
+              width: 170,
+              render: (_, u) => (
+                <Space size={[2, 2]} wrap>
+                  {u.is_blocked && <Tag color="error">已封禁</Tag>}
+                  {[u.tier, ...(u.tags ?? [])].filter((k) => k && k !== 'free').slice(0, 3).map((k) => (
+                    <Tag key={k} bordered={false} color={segmentMeta[k]?.color}>{segmentMeta[k]?.label ?? k}</Tag>
+                  ))}
+                </Space>
+              ),
             },
             { title: '邀请码', dataIndex: 'ref_code', width: 110, render: (v) => <span className="mono">{v}</span> },
             { title: '创建时间', width: 120, render: (_, u) => date(u.created_at) },

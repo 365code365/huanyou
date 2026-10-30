@@ -1,6 +1,6 @@
 'use client'
 import { AndroidFilled, AppleFilled, CloudUploadOutlined, InboxOutlined, LinkOutlined, ReloadOutlined } from '@ant-design/icons'
-import { Alert, App, Button, Form, Input, InputNumber, Modal, Progress, Segmented, Space, Switch, Table, Tag, Upload } from 'antd'
+import { Alert, App, Button, Form, Input, InputNumber, Modal, Progress, Segmented, Select, Space, Switch, Table, Tag, Upload } from 'antd'
 import type { UploadFile } from 'antd'
 import { useMemo, useState } from 'react'
 import { PageCard } from '@/components/PageCard'
@@ -9,6 +9,16 @@ import { api, type Release } from '@/lib/api'
 import { bytes, date, errMsg } from '@/lib/format'
 
 type Platform = 'android' | 'ios'
+
+const abiOptions = [
+  { value: 'arm64-v8a', label: '64 位（arm64-v8a，绝大多数手机）' },
+  { value: 'armeabi-v7a', label: '32 位（armeabi-v7a，老款手机）' },
+  { value: '', label: '通用（包含所有架构）' },
+  { value: 'x86_64', label: 'x86_64（模拟器 / 少数平板）' },
+]
+const abiShort: Record<string, string> = { 'arm64-v8a': '64 位', 'armeabi-v7a': '32 位', x86_64: 'x86_64', '': '通用' }
+/** Flutter --split-per-abi output names end in -<abi>-release.apk. */
+const abiFromName = (name: string) => ['arm64-v8a', 'armeabi-v7a', 'x86_64'].find((a) => name.includes(a)) ?? ''
 
 /** Next version suggestion: 1.2.3 -> 1.2.4. */
 const bump = (v?: string) => {
@@ -46,6 +56,7 @@ export default function ReleasesPage() {
       notes: '',
       force: false,
       bundle_id: p === 'ios' ? (l?.bundle_id || 'app.cygnus6152.artichoke66') : '',
+      abi: p === 'android' ? 'arm64-v8a' : '',
     })
     setOpen(true)
   }
@@ -61,6 +72,7 @@ export default function ReleasesPage() {
     fd.append('notes', v.notes ?? '')
     fd.append('force', String(!!v.force))
     if (platform === 'ios') fd.append('bundle_id', v.bundle_id ?? '')
+    if (platform === 'android') fd.append('abi', v.abi ?? '')
     if (source === 'url') fd.append('url', v.url.trim())
     else fd.append('file', file[0].originFileObj as Blob, file[0].name)
     setProgress(0)
@@ -121,6 +133,7 @@ export default function ReleasesPage() {
                   <div>
                     <div style={{ fontWeight: 600 }}>
                       {r.version} <span className="muted">build {r.build}</span>
+                      {r.platform === 'android' && <Tag bordered={false} style={{ marginLeft: 6 }}>{abiShort[r.abi ?? ''] ?? r.abi}</Tag>}
                       {latest(r.platform)?.id === r.id && r.published && <Tag color="success" bordered={false} style={{ marginLeft: 6 }}>最新</Tag>}
                     </div>
                     <div className="muted" style={{ maxWidth: 360, whiteSpace: 'pre-line' }}>{r.notes || '—'}</div>
@@ -179,13 +192,22 @@ export default function ReleasesPage() {
             <Form.Item
               name="build"
               label="构建号"
-              tooltip="与 pubspec.yaml 里 version 的 + 后面一致（1.2.0+5 的 5），必须比上一版大"
+              tooltip="与 pubspec.yaml 里 version 的 + 后面一致（1.2.0+5 的 5）。新版本要比上一版大；同一版本的不同 CPU 架构用相同构建号"
               rules={[{ required: true, message: '必填' }]}
             >
               <InputNumber min={1} style={{ width: 130 }} />
             </Form.Item>
           </Space>
 
+          {platform === 'android' && (
+            <Form.Item
+              name="abi"
+              label="CPU 架构"
+              extra="用 flutter build apk --split-per-abi 打出的每个 APK 分别发布一次（同一构建号）；App 会按手机的 CPU 自动拿到对应的包"
+            >
+              <Select options={abiOptions} />
+            </Form.Item>
+          )}
           <Form.Item label="安装包来源">
             <Segmented
               value={source}
@@ -211,7 +233,11 @@ export default function ReleasesPage() {
                     }
                     return false // upload on submit, with the form fields
                   }}
-                  onChange={({ fileList }) => setFile(fileList.slice(-1))}
+                  onChange={({ fileList }) => {
+                    const f = fileList.slice(-1)
+                    setFile(f)
+                    if (platform === 'android' && f[0]) form.setFieldValue('abi', abiFromName(f[0].name))
+                  }}
                   disabled={uploading}
                 >
                   <p className="ant-upload-drag-icon"><InboxOutlined /></p>

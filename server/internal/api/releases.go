@@ -29,6 +29,9 @@ const maxPackageBytes = 600 << 20 // 600 MB
 
 var versionPattern = regexp.MustCompile(`^\d{1,4}(\.\d{1,4}){0,3}$`)
 
+// androidABIs are the CPU types Flutter's --split-per-abi produces ("" = universal APK).
+var androidABIs = map[string]string{"": "通用", "arm64-v8a": "64 位", "armeabi-v7a": "32 位", "x86_64": "x86_64"}
+
 func (s *Server) releaseDir() string { return filepath.Join(s.cfg.DownloadDir, "releases") }
 
 // releaseURL is where a client downloads / installs the release.
@@ -129,9 +132,14 @@ func (s *Server) adminCreateRelease(w http.ResponseWriter, r *http.Request) {
 			rel.BundleID = v
 		case "url":
 			rel.URL = v
+		case "abi":
+			rel.ABI = v
 		}
 	}
-
+	if _, ok := androidABIs[rel.ABI]; !ok || (rel.ABI != "" && rel.Platform != "android") {
+		writeErr(w, http.StatusBadRequest, "bad_abi", "CPU 架构只能是 arm64-v8a、armeabi-v7a、x86_64 或留空（通用）")
+		return
+	}
 	switch {
 	case rel.Platform != "android" && rel.Platform != "ios":
 		writeErr(w, http.StatusBadRequest, "bad_platform", "平台只能是 android 或 ios")
@@ -155,16 +163,20 @@ func (s *Server) adminCreateRelease(w http.ResponseWriter, r *http.Request) {
 	if tmp != "" {
 		ext := map[string]string{"android": ".apk", "ios": ".ipa"}[rel.Platform]
 		rel.File = fmt.Sprintf("huanyou-%s-%s-%d%s", rel.Platform, rel.Version, rel.Build, ext)
+		if rel.ABI != "" {
+			rel.File = fmt.Sprintf("huanyou-%s-%s-%d-%s%s", rel.Platform, rel.Version, rel.Build, rel.ABI, ext)
+		}
 		rel.URL = ""
 	}
-	if latest, err := s.store.LatestRelease(r.Context(), rel.Platform); err == nil && rel.Build <= latest.Build {
+	// The same build may be uploaded once per ABI; otherwise builds must grow.
+	if latest, err := s.store.LatestRelease(r.Context(), rel.Platform, ""); err == nil && rel.Build < latest.Build {
 		writeErr(w, http.StatusConflict, "build_not_newer",
-			fmt.Sprintf("构建号必须大于当前最新的 %d（%s）", latest.Build, latest.Version))
+			fmt.Sprintf("构建号不能小于当前最新的 %d（%s）", latest.Build, latest.Version))
 		return
 	}
 	created, err := s.store.CreateRelease(r.Context(), rel)
 	if errors.Is(err, store.ErrBuildExists) {
-		writeErr(w, http.StatusConflict, "build_exists", "该平台已存在这个构建号")
+		writeErr(w, http.StatusConflict, "build_exists", "这个构建号（同一 CPU 架构）已经发布过")
 		return
 	} else if err != nil {
 		s.internal(w, err)
@@ -235,6 +247,7 @@ func (s *Server) adminPatchRelease(w http.ResponseWriter, r *http.Request) {
 		Notes     *string `json:"notes"`
 		Force     *bool   `json:"force"`
 		Published *bool   `json:"published"`
+		ABI       *string `json:"abi"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -248,7 +261,14 @@ func (s *Server) adminPatchRelease(w http.ResponseWriter, r *http.Request) {
 	if body.Published != nil {
 		cur.Published = *body.Published
 	}
-	if err := s.store.UpdateRelease(r.Context(), id, cur.Notes, cur.Force, cur.Published); err != nil {
+	if body.ABI != nil {
+		if _, ok := androidABIs[*body.ABI]; !ok || (*body.ABI != "" && cur.Platform != "android") {
+			writeErr(w, http.StatusBadRequest, "bad_abi", "CPU 架构只能是 arm64-v8a、armeabi-v7a、x86_64 或留空（通用）")
+			return
+		}
+		cur.ABI = *body.ABI
+	}
+	if err := s.store.UpdateRelease(r.Context(), id, cur.Notes, cur.Force, cur.Published, cur.ABI); err != nil {
 		s.adminStoreErr(w, err)
 		return
 	}
@@ -277,7 +297,7 @@ func (s *Server) adminDeleteRelease(w http.ResponseWriter, r *http.Request) {
 
 // ---- app ----
 
-// handleAppUpdate: GET /api/v1/app/update?platform=android&build=3
+// handleAppUpdate: GET /api/v1/app/update?platform=android&build=3&abi=arm64-v8a
 func (s *Server) handleAppUpdate(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	platform := q.Get("platform")
@@ -286,7 +306,11 @@ func (s *Server) handleAppUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	build, _ := strconv.ParseInt(q.Get("build"), 10, 64)
-	latest, err := s.store.LatestRelease(r.Context(), platform)
+	abi := q.Get("abi")
+	if _, ok := androidABIs[abi]; !ok {
+		abi = ""
+	}
+	latest, err := s.store.LatestRelease(r.Context(), platform, abi)
 	if errors.Is(err, store.ErrNotFound) {
 		writeJSON(w, http.StatusOK, map[string]any{"has_update": false})
 		return
@@ -316,7 +340,7 @@ func (s *Server) handleAppUpdate(w http.ResponseWriter, r *http.Request) {
 
 // ---- files ----
 
-var releaseFile = regexp.MustCompile(`^huanyou-(android|ios)-[0-9.]+-\d+\.(apk|ipa)$`)
+var releaseFile = regexp.MustCompile(`^huanyou-(android|ios)-[0-9.]+-\d+(-(arm64-v8a|armeabi-v7a|x86_64))?\.(apk|ipa)$`)
 
 // handleReleaseFile: GET /dl/releases/{name}
 func (s *Server) handleReleaseFile(w http.ResponseWriter, r *http.Request) {

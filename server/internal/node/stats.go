@@ -2,9 +2,11 @@ package node
 
 import (
 	"context"
+	"net/netip"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/features/stats"
@@ -22,6 +24,9 @@ type Stats struct {
 	mu       sync.Mutex
 	counters map[string]*counter
 	users    map[string]*userMeter
+
+	omu    sync.Mutex
+	online map[string]*onlineMap // "user>>>{email}>>>online"
 }
 
 type userMeter struct {
@@ -173,13 +178,162 @@ func (s *Stats) GetCounter(name string) stats.Counter {
 	return nil
 }
 
-func (s *Stats) RegisterOnlineMap(string) (stats.OnlineMap, error) { return nil, common.ErrNoClue }
-func (s *Stats) UnregisterOnlineMap(string) error                  { return nil }
-func (s *Stats) GetOnlineMap(string) stats.OnlineMap               { return nil }
-func (s *Stats) RegisterChannel(string) (stats.Channel, error)     { return nil, common.ErrNoClue }
-func (s *Stats) UnregisterChannel(string) error                    { return nil }
-func (s *Stats) GetChannel(string) stats.Channel                   { return nil }
-func (s *Stats) GetAllOnlineUsers() []string                       { return nil }
+// Online maps: with policy statsUserOnline, Xray's dispatcher calls AddIP /
+// RemoveIP on "user>>>{email}>>>online" for every connection's source
+// address. They are kept here so the agent can report which addresses each
+// account connects from (risk control). Only source IPs are kept, never
+// destinations.
+
+func (s *Stats) RegisterOnlineMap(name string) (stats.OnlineMap, error) {
+	s.omu.Lock()
+	defer s.omu.Unlock()
+	if s.online == nil {
+		s.online = map[string]*onlineMap{}
+	}
+	if m, ok := s.online[name]; ok {
+		return m, nil
+	}
+	m := &onlineMap{live: map[string]int{}, seen: map[string]int64{}}
+	s.online[name] = m
+	return m, nil
+}
+
+func (s *Stats) UnregisterOnlineMap(name string) error {
+	s.omu.Lock()
+	delete(s.online, name)
+	s.omu.Unlock()
+	return nil
+}
+
+func (s *Stats) GetOnlineMap(name string) stats.OnlineMap {
+	s.omu.Lock()
+	defer s.omu.Unlock()
+	if m, ok := s.online[name]; ok {
+		return m
+	}
+	return nil // untyped nil: GetOrRegisterOnlineMap then registers one
+}
+
+func (s *Stats) GetAllOnlineUsers() []string {
+	s.omu.Lock()
+	defer s.omu.Unlock()
+	var out []string
+	for name, m := range s.online {
+		if m.Count() > 0 {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// DrainIPs returns, per user email, the addresses seen since the last call:
+// new connections (count) plus addresses that still have an open connection
+// (count 0) so long-lived sessions keep their last-seen time fresh.
+func (s *Stats) DrainIPs() map[string]map[string]int64 {
+	s.omu.Lock()
+	maps := make(map[string]*onlineMap, len(s.online))
+	for name, m := range s.online {
+		maps[name] = m
+	}
+	s.omu.Unlock()
+	out := map[string]map[string]int64{}
+	for name, m := range maps {
+		parts := strings.Split(name, ">>>")
+		if len(parts) != 3 || parts[0] != "user" || parts[2] != "online" {
+			continue
+		}
+		if ips := m.drain(); len(ips) > 0 {
+			out[parts[1]] = ips
+		}
+	}
+	return out
+}
+
+func (s *Stats) RegisterChannel(string) (stats.Channel, error) { return nil, common.ErrNoClue }
+func (s *Stats) UnregisterChannel(string) error                { return nil }
+func (s *Stats) GetChannel(string) stats.Channel               { return nil }
+
+// onlineMap implements stats.OnlineMap with per-IP connection counts.
+type onlineMap struct {
+	mu   sync.Mutex
+	live map[string]int   // ip -> open connections
+	seen map[string]int64 // ip -> connections opened since the last drain
+	at   map[string]time.Time
+}
+
+func usableIP(ip string) bool {
+	a, err := netip.ParseAddr(ip)
+	// Loopback / unspecified means the real source is unknown (an internal hop).
+	return err == nil && !a.IsLoopback() && !a.IsUnspecified()
+}
+
+func (m *onlineMap) AddIP(ip string) {
+	if !usableIP(ip) {
+		return
+	}
+	m.mu.Lock()
+	m.live[ip]++
+	m.seen[ip]++
+	if m.at == nil {
+		m.at = map[string]time.Time{}
+	}
+	m.at[ip] = time.Now()
+	m.mu.Unlock()
+}
+
+func (m *onlineMap) RemoveIP(ip string) {
+	m.mu.Lock()
+	if n := m.live[ip]; n <= 1 {
+		delete(m.live, ip)
+		delete(m.at, ip)
+	} else {
+		m.live[ip] = n - 1
+	}
+	m.mu.Unlock()
+}
+
+func (m *onlineMap) Count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.live)
+}
+
+func (m *onlineMap) List() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, 0, len(m.live))
+	for ip := range m.live {
+		out = append(out, ip)
+	}
+	return out
+}
+
+func (m *onlineMap) IPTimeMap() map[string]time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]time.Time, len(m.at))
+	for ip, t := range m.at {
+		out[ip] = t
+	}
+	return out
+}
+
+func (m *onlineMap) drain() map[string]int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.seen) == 0 && len(m.live) == 0 {
+		return nil
+	}
+	out := make(map[string]int64, len(m.seen)+len(m.live))
+	for ip := range m.live {
+		out[ip] = 0
+	}
+	for ip, n := range m.seen {
+		out[ip] = n
+	}
+	m.seen = map[string]int64{}
+	return out
+}
 
 type counter struct {
 	v      atomic.Int64

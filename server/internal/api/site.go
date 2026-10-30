@@ -24,13 +24,33 @@ type siteBuild struct {
 	Size    string
 	Notes   []string
 	URL     string
+	Others  []siteVariant // other CPU builds of the same version (Android)
+}
+
+type siteVariant struct {
+	Label, Size, URL string
+}
+
+var variantLabel = map[string]string{
+	"": "通用版", "arm64-v8a": "64 位版", "armeabi-v7a": "32 位版（老款手机）", "x86_64": "x86 版（模拟器 / 平板）",
 }
 
 // latestBuild resolves what the site offers for a platform, in priority:
 // the latest published release, the share-settings link, the legacy APK.
 func (s *Server) latestBuild(ctx context.Context, platform string) *siteBuild {
-	if r, err := s.store.LatestRelease(ctx, platform); err == nil {
+	if r, err := s.store.LatestRelease(ctx, platform, ""); err == nil {
 		b := &siteBuild{Version: r.Version, Build: r.Build, Date: r.CreatedAt.Format("2006-01-02"), URL: s.releaseURL(r)}
+		if all, err := s.store.LatestBuilds(ctx, platform); err == nil {
+			for _, x := range all {
+				if x.ID != r.ID && x.Build == r.Build {
+					v := siteVariant{Label: variantLabel[x.ABI], URL: s.releaseURL(x)}
+					if x.Size > 0 {
+						v.Size = humanBytes(x.Size)
+					}
+					b.Others = append(b.Others, v)
+				}
+			}
+		}
 		if r.Size > 0 {
 			b.Size = humanBytes(r.Size)
 		}
@@ -136,6 +156,7 @@ h1{font-size:32px;font-weight:800;letter-spacing:4px}
 .pkg h3{font-size:16px;display:flex;justify-content:space-between;align-items:baseline}
 .pkg h3 span{font-size:12px;color:#8f8e8a;font-weight:500}
 .meta{margin-top:4px;color:#8f8e8a;font-size:12px}
+.alt{display:block;margin-top:10px;text-align:center;color:#6e6f73;font-size:13px}
 .pkg ul{margin:10px 0 0 18px;color:#c9c8c2;font-size:13px;line-height:1.7}
 .btn{display:flex;align-items:center;justify-content:center;height:50px;margin-top:12px;border-radius:14px;
  font-size:15.5px;font-weight:700;text-decoration:none;border:0;width:100%}
@@ -161,6 +182,7 @@ footer{width:100%;max-width:440px;margin:26px 0 30px;color:#66656a;font-size:11.
   {{with .Android}}<div class="meta">{{if .Date}}更新于 {{.Date}}{{end}}{{if .Size}} · {{.Size}}{{end}}</div>
    {{if .Notes}}<ul>{{range .Notes}}<li>{{.}}</li>{{end}}</ul>{{end}}
    <a class="btn primary" href="{{.URL}}" onclick="cp()">下载 Android 安装包</a>
+   {{range .Others}}<a class="alt" href="{{.URL}}" onclick="cp()">下载{{.Label}}{{if .Size}} · {{.Size}}{{end}}</a>{{end}}
   {{else}}<a class="btn primary disabled">暂未提供</a>{{end}}
  </div>
  <div class="pkg">

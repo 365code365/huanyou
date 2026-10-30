@@ -1,6 +1,17 @@
 // One function per admin endpoint. Pages import from here, never call fetch directly.
-import { download, http, stream, upload } from './http'
+import { download, downloadGet, http, stream, upload } from './http'
 import type {
+  DBDriver,
+  DBInfo,
+  DBSyncEvent,
+  GeoLocation,
+  IPRecord,
+  RiskConfig,
+  RiskRule,
+  SegmentConfig,
+  SegmentReport,
+  SegmentUser,
+  Suspicious,
   AIStatus,
   BackupInfo,
   LangList,
@@ -47,6 +58,7 @@ function catalog<T extends { id: string }>(path: string): CatalogApi<T> {
 }
 
 export interface ListQuery {
+  segment?: string
   q?: string
   status?: string
   page: number
@@ -116,6 +128,34 @@ export const api = {
     translate: (code: string, name: string, keys: string[]) =>
       http.post<{ strings: Record<string, string> }>('/i18n/translate', { code, name, keys }),
     saveAI: (c: { base_url: string; model: string; api_key: string }) => http.put<AIStatus>('/i18n/ai', c),
+  },
+
+  risk: {
+    ips: (q: { user?: string; ip?: string; source?: string; days?: number; page: number; size: number }) =>
+      http.get<Page<IPRecord>>('/risk/ips', { ...q }),
+    suspicious: (hours: number) => http.get<Suspicious>('/risk/suspicious', { hours }),
+    rules: () => http.get<{ items: RiskRule[] }>('/risk/rules'),
+    addRule: (r: { kind: 'ip' | 'user'; value: string; reason: string; days: number }) => http.post<{ ok: true }>('/risk/rules', r),
+    removeRule: (kind: string, value: string) =>
+      http.del<{ ok: true }>(`/risk/rules?kind=${encodeURIComponent(kind)}&value=${encodeURIComponent(value)}`),
+    config: () => http.get<RiskConfig>('/risk/config'),
+    saveConfig: (c: RiskConfig) => http.put<RiskConfig>('/risk/config', c),
+    geo: (ip: string) => http.get<GeoLocation>('/risk/geo', { ip }),
+  },
+
+  segments: {
+    report: (refresh = false) => http.get<SegmentReport>('/segments', refresh ? { refresh: 1 } : undefined),
+    users: (key: string, q: { page: number; size: number; sort?: string }) => http.get<Page<SegmentUser>>(`/segments/${key}/users`, { ...q }),
+    exportCsv: (key: string) => downloadGet(`/segments/${key}/export`, `segment-${key}.csv`),
+    saveConfig: (c: SegmentConfig) => http.put<SegmentConfig>('/segments/config', c),
+  },
+
+  database: {
+    info: () => http.get<DBInfo>('/database'),
+    test: (driver: DBDriver, dsn: string) =>
+      http.post<{ ok: boolean; ms: number; counts: Record<string, number>; empty: boolean; message: string }>('/database/test', { driver, dsn }),
+    sync: (driver: DBDriver, dsn: string, full: boolean, onEvent: (e: DBSyncEvent) => void) => stream('/database/sync', { driver, dsn, full }, onEvent),
+    switchTo: (driver: DBDriver, dsn: string) => http.post<{ ok: boolean; message: string }>('/database/switch', { driver, dsn }),
   },
 
   settings: {

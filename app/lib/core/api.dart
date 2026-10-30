@@ -359,8 +359,8 @@ class ApiClient {
     return (j['invitee_days'] as num?)?.toInt() ?? 0;
   }
 
-  Future<AppUpdate> appUpdate(String platform, int build) async =>
-      AppUpdate.fromJson(await _send('GET', '/api/v1/app/update', query: {'platform': platform, 'build': '$build'}));
+  Future<AppUpdate> appUpdate(String platform, int build, {String abi = ''}) async => AppUpdate.fromJson(
+      await _send('GET', '/api/v1/app/update', query: {'platform': platform, 'build': '$build', if (abi.isNotEmpty) 'abi': abi}));
 
   // ---- multi-device ----
   Future<DeviceShare> devices() async => DeviceShare.fromJson(await _send('GET', '/api/v1/devices'));
@@ -382,6 +382,9 @@ class ApiClient {
   }
 
   Future<User> me() async => User.fromJson(await _send('GET', '/api/v1/me'));
+
+  /// Raw GET for callers that cache the response body.
+  Future<Map<String, dynamic>> getJson(String path) => _send('GET', path);
 
   Future<List<Node>> nodes() async {
     final j = await _send('GET', '/api/v1/nodes');

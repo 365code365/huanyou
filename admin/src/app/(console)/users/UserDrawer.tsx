@@ -1,12 +1,14 @@
 'use client'
-import { App, Button, DatePicker, Descriptions, Drawer, Form, Input, Space, Spin, Table, Tag, Typography } from 'antd'
+import { Alert, App, Button, DatePicker, Descriptions, Drawer, Form, Input, Space, Spin, Table, Tag, Typography } from 'antd'
 import dayjs, { type Dayjs } from 'dayjs'
 import { useCallback, useEffect, useState } from 'react'
 import { BarChart } from '@/components/BarChart'
+import { IPTable, useBlockDialog } from '@/components/risk'
 import { PlanSelect } from '@/components/PlanSelect'
 import { useAction } from '@/hooks/useAsync'
 import { api, type Order, type Plan, type UserDetail, type UserPatch } from '@/lib/api'
 import { bytes, date, dateTime, errMsg, speed, yuan } from '@/lib/format'
+import { segmentMeta } from '@/lib/segments'
 import { colors } from '@/lib/theme'
 
 interface EditForm {
@@ -54,6 +56,11 @@ export function UserDrawer({ id, plans, onClose, onChanged }: { id?: number; pla
       load()
     }
   }
+
+  const block = useBlockDialog(() => {
+    onChanged()
+    load()
+  })
 
   const confirmAct = (title: string, content: string, fn: () => Promise<unknown>, ok: string, danger = false) =>
     modal.confirm({ title, content, okButtonProps: { danger }, onOk: () => act(fn, ok) })
@@ -106,7 +113,23 @@ export function UserDrawer({ id, plans, onClose, onChanged }: { id?: number; pla
               <Descriptions.Item label="UUID" span={2}>
                 <Typography.Text className="mono" copyable>{u.uuid}</Typography.Text>
               </Descriptions.Item>
+              <Descriptions.Item label="用户分群" span={2}>
+                <Space size={[4, 4]} wrap>
+                  {[u.tier, ...(u.tags ?? [])].filter(Boolean).map((k) => (
+                    <Tag key={k} bordered={false} color={segmentMeta[k]?.color}>{segmentMeta[k]?.label ?? k}</Tag>
+                  ))}
+                </Space>
+              </Descriptions.Item>
             </Descriptions>
+            {u.is_blocked && (
+              <Alert
+                type="error"
+                showIcon
+                style={{ marginTop: 12 }}
+                message={`${u.blocked_by === u.id ? '该用户' : `主账号 VP-${String(u.blocked_by).padStart(5, '0')}`} 已被风控封禁${u.blocked ? `：${u.blocked}` : ''}`}
+                action={<Button size="small" onClick={() => act(() => api.risk.removeRule('user', String(u.blocked_by)), '已解除封禁')}>解除</Button>}
+              />
+            )}
 
             <Typography.Title level={5} style={{ marginTop: 24 }}>编辑</Typography.Title>
             <Form form={form} labelCol={{ span: 5 }}>
@@ -134,6 +157,9 @@ export function UserDrawer({ id, plans, onClose, onChanged }: { id?: number; pla
               <Button danger={!u.disabled} onClick={() => act(() => api.users.patch(u.id, { disabled: !u.disabled }), u.disabled ? '已启用' : '已停用')}>
                 {u.disabled ? '启用账号' : '停用账号'}
               </Button>
+              {!u.is_blocked && (
+                <Button danger onClick={() => block({ kind: 'user', value: u.recharge_code })}>风控封禁</Button>
+              )}
               <Button onClick={() => confirmAct('清空流量', '清空该用户本周期的已用流量？', () => api.users.resetTraffic(u.id), '流量已清零')}>清空流量</Button>
               <Button onClick={() => confirmAct('更换 UUID', '更换后该用户需在 App 里重新连接一次，继续？', () => api.users.rotateUUID(u.id), 'UUID 已更换')}>更换 UUID</Button>
               <Button
@@ -161,6 +187,11 @@ export function UserDrawer({ id, plans, onClose, onChanged }: { id?: number; pla
 
             <Typography.Title level={5} style={{ marginTop: 24 }}>近 30 天流量</Typography.Title>
             <BarChart points={usagePoints} color={colors.violet} format={bytes} height={110} />
+
+            <Typography.Title level={5} style={{ marginTop: 24 }}>
+              IP 记录 <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>共 {d.ip_total} 条{d.ip_total > d.ips.length && `，显示最近 ${d.ips.length} 条`}</span>
+            </Typography.Title>
+            <IPTable items={d.ips ?? []} showUser={false} onBlock={(ip) => block({ kind: 'ip', value: ip, reason: `${u.recharge_code} 使用` })} />
 
             <Typography.Title level={5} style={{ marginTop: 24 }}>订单</Typography.Title>
             <Table<Order>

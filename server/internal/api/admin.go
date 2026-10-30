@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -85,6 +86,9 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	a("POST /admin/api/backup", s.adminBackup)
 	a("POST /admin/api/backup/restore", s.adminRestore)
 	a("POST /admin/api/clone", s.adminClone)
+
+	s.registerAdminRisk(a)
+	s.registerAdminDB(a)
 
 	a("GET /admin/api/settings", s.adminGetSettings)
 	a("PUT /admin/api/settings", s.adminPutSettings)
@@ -195,9 +199,31 @@ type adminUser struct {
 	PlanID       string      `json:"plan_id"`    // stored paid plan (may be expired)
 	ExpiresAt    *time.Time  `json:"expires_at"` // stored expiry
 	Entitlement  Entitlement `json:"entitlement"`
+	Tier         string      `json:"tier"`    // segmentation value tier (segments.go)
+	Tags         []string    `json:"tags"`    // segmentation behaviour tags
+	Blocked      string      `json:"blocked"` // risk-control block reason ("" = not blocked)
+	IsBlocked    bool        `json:"is_blocked"`
+	BlockedBy    int64       `json:"blocked_by"` // user id carrying the block rule (this user, or its multi-device owner)
 }
 
 func (s *Server) adminUserView(u *store.User) adminUser {
+	v := s.adminUserBase(u)
+	ctx := context.Background()
+	v.Tier, v.Tags = s.segOf(ctx, u.ID)
+	if v.Tags == nil {
+		v.Tags = []string{}
+	}
+	v.Blocked, v.IsBlocked = s.blockedUser(ctx, u)
+	if v.IsBlocked {
+		v.BlockedBy = u.ID
+		if !s.blockedUserIDs()[u.ID] && u.PrimaryID != 0 {
+			v.BlockedBy = u.PrimaryID
+		}
+	}
+	return v
+}
+
+func (s *Server) adminUserBase(u *store.User) adminUser {
 	return adminUser{
 		ID: u.ID, Email: u.Email, RechargeCode: rechargeCode(u.ID),
 		DeviceID: u.DeviceID, Platform: u.Platform, PrimaryID: u.PrimaryID,
@@ -210,6 +236,10 @@ func (s *Server) adminUserView(u *store.User) adminUser {
 
 func (s *Server) adminListUsers(w http.ResponseWriter, r *http.Request) {
 	limit, offset := pageParams(r)
+	if seg := r.URL.Query().Get("segment"); seg != "" {
+		s.adminListSegmentUsers(w, r, seg, limit, offset)
+		return
+	}
 	users, total, err := s.store.ListUsers(r.Context(), store.UserFilter{
 		Query: r.URL.Query().Get("q"), Status: r.URL.Query().Get("status"), Limit: limit, Offset: offset,
 	})
@@ -294,8 +324,14 @@ func (s *Server) adminGetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	invited, _ := s.store.CountInvited(r.Context(), id)
+	ips, err := s.store.UserIPs(r.Context(), store.IPFilter{UserID: id, Limit: 100})
+	if err != nil {
+		s.internal(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"user": s.adminUserView(u), "usage": usage, "orders": orders, "invited_count": invited,
+		"ips": s.ipViews(r, ips.Items), "ip_total": ips.Total,
 	})
 }
 
@@ -673,4 +709,38 @@ func (s *Server) adminTestAlert(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// adminListSegmentUsers lists users of one segment through the regular user list.
+func (s *Server) adminListSegmentUsers(w http.ResponseWriter, r *http.Request, seg string, limit, offset int) {
+	if _, ok := segByKey[seg]; !ok {
+		writeErr(w, http.StatusBadRequest, "bad_segment", "分群不存在")
+		return
+	}
+	_, byID, err := s.segments(r.Context(), false)
+	if err != nil {
+		s.internal(w, err)
+		return
+	}
+	var ids []int64
+	for id, us := range byID {
+		if hasSeg(us, seg) {
+			ids = append(ids, id)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] > ids[j] })
+	total := len(ids)
+	ids = ids[min(offset, total):min(offset+limit, total)]
+	users, err := s.store.UsersByIDs(r.Context(), ids)
+	if err != nil {
+		s.internal(w, err)
+		return
+	}
+	items := make([]adminUser, 0, len(ids))
+	for _, id := range ids {
+		if u := users[id]; u != nil {
+			items = append(items, s.adminUserView(u))
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total})
 }

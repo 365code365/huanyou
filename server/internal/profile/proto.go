@@ -73,3 +73,6 @@ func CompileJSON(js string) (string, error) {
 	}
 	return base64.StdEncoding.EncodeToString(b), nil
 }
+
+// CNGeoIPData is the embedded mainland-China + private ranges list (Xray geoip.dat format).
+func CNGeoIPData() []byte { return cnGeoIP }

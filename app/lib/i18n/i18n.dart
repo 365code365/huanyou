@@ -2,9 +2,9 @@ import 'dart:convert';
 import 'dart:ui' as ui;
 
 import 'package:flutter/widgets.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../core/api.dart';
+import '../core/prefs.dart';
 
 /// Translates a UI string. The Chinese source text is the key; packs map it
 /// to the target language and anything missing falls back to Chinese.
@@ -45,7 +45,6 @@ class I18n extends ChangeNotifier {
   static const base = 'zh';
   static const system = 'system';
   static const baseInfo = LangInfo(code: base, name: '简体中文', nativeName: '简体中文');
-  static const _storage = FlutterSecureStorage();
   static const _kPref = 'lang_pref';
   static const _kCatalog = 'lang_catalog';
   static const _kPack = 'lang_pack'; // {code, version, rtl, strings}
@@ -68,15 +67,15 @@ class I18n extends ChangeNotifier {
 
   TextDirection get direction => _rtl ? TextDirection.rtl : TextDirection.ltr;
 
-  /// Restores the cached preference and pack. Called before runApp.
-  Future<void> load() async {
+  /// Restores the cached preference and pack from [Prefs] (already loaded).
+  void load() {
     try {
-      _pref = await _storage.read(key: _kPref) ?? system;
-      final c = await _storage.read(key: _kCatalog);
+      _pref = Prefs.get(_kPref) ?? system;
+      final c = Prefs.get(_kCatalog);
       if (c != null) {
         catalog = [for (final e in jsonDecode(c) as List) LangInfo.fromJson(e as Map<String, dynamic>)];
       }
-      final p = await _storage.read(key: _kPack);
+      final p = Prefs.get(_kPack);
       if (p != null) _apply(jsonDecode(p) as Map<String, dynamic>);
       // Cached pack no longer matches the preference (e.g. system language changed).
       final want = _resolve();
@@ -94,7 +93,7 @@ class I18n extends ChangeNotifier {
       final changed = encoded != jsonEncode([for (final l in catalog) l.toJson()]);
       catalog = list;
       if (changed) {
-        await _storage.write(key: _kCatalog, value: encoded);
+        await Prefs.set(_kCatalog, encoded);
         notifyListeners(); // the language picker lists the new catalog
       }
     } catch (e) {
@@ -117,10 +116,10 @@ class I18n extends ChangeNotifier {
       }
     } else if (want == base) {
       _useBase();
-      await _storage.delete(key: _kPack);
+      await Prefs.remove(_kPack);
     }
     _pref = pref;
-    await _storage.write(key: _kPref, value: pref);
+    await Prefs.set(_kPref, pref);
     notifyListeners();
   }
 
@@ -150,7 +149,7 @@ class I18n extends ChangeNotifier {
     if (code == base) {
       if (_active != base) {
         _useBase();
-        await _storage.delete(key: _kPack);
+        await Prefs.remove(_kPack);
         notifyListeners();
       }
       return;
@@ -168,7 +167,7 @@ class I18n extends ChangeNotifier {
   Future<void> _download(ApiClient api, String code) async {
     final pack = await api.languagePack(code);
     _apply(pack);
-    await _storage.write(key: _kPack, value: jsonEncode(pack));
+    await Prefs.set(_kPack, jsonEncode(pack));
   }
 
   void _apply(Map<String, dynamic> pack) {

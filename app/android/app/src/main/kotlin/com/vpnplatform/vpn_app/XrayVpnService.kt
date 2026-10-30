@@ -105,6 +105,8 @@ class XrayVpnService : VpnService() {
 
             val pfd = builder.establish() ?: throw IllegalStateException("VPN 权限被拒绝")
             tun = pfd
+            // Keep the Go heap of the tunnel bounded (see vpncore.SetSoftMemoryLimit).
+            Vpncore.setSoftMemoryLimit(48)
             Vpncore.start(config, pfd.fd, assetDir, object : Protector {
                 override fun protect(fd: Int): Boolean = this@XrayVpnService.protect(fd)
             })

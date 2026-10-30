@@ -19,7 +19,7 @@ class Updater {
     final platform = Device.platform;
     if (platform.isEmpty) return null;
     final build = buildOf(await info());
-    return api.appUpdate(platform, build);
+    return api.appUpdate(platform, build, abi: await Device.abi());
   }
 
   /// Opens the release in the system browser, which downloads the APK and

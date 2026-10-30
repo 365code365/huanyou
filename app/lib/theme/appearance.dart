@@ -1,7 +1,7 @@
 import 'dart:ui' as ui;
 
 import 'package:flutter/widgets.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../core/prefs.dart';
 
 import 'app_theme.dart';
 
@@ -10,21 +10,16 @@ class Appearance extends ChangeNotifier {
   Appearance._();
   static final Appearance instance = Appearance._();
 
-  static const _storage = FlutterSecureStorage();
   static const _kMode = 'appearance';
 
   AppearanceMode mode = AppearanceMode.system;
 
-  Future<void> load() async {
-    try {
-      mode = AppearanceMode.parse(await _storage.read(key: _kMode));
-    } catch (_) {}
-  }
+  void load() => mode = AppearanceMode.parse(Prefs.get(_kMode));
 
   Future<void> set(AppearanceMode m) async {
     mode = m;
     notifyListeners();
-    await _storage.write(key: _kMode, value: m.id);
+    await Prefs.set(_kMode, m.id);
   }
 
   /// Whether the dark palette should be active right now.
