@@ -415,3 +415,46 @@ rm -f /tmp/vpn-node.bin /tmp/vpn-node.json /tmp/vpn-node.service /tmp/vpn-instal
 echo "::installed"
 `, port)
 }
+
+// Upgrade replaces the vpn-node binary on an installed node and restarts it,
+// keeping its config. Used to roll out fixes (e.g. the no-access-log change).
+func Upgrade(ctx context.Context, t Target, binaries map[string][]byte, log io.Writer) (string, error) {
+	client, err := t.dial(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer client.Close()
+	arch := probe(ctx, client, "uname -m")
+	bin := binaries[arch]
+	if bin == nil {
+		return arch, fmt.Errorf("没有适用于 %q 架构的 vpn-node 程序", arch)
+	}
+	fmt.Fprintf(log, "架构 %s，上传新程序（%s）…\n", arch, humanSize(len(bin)))
+	if err := upload(ctx, client, "/tmp/vpn-node.bin", bin); err != nil {
+		return arch, err
+	}
+	script := `#!/bin/bash
+set -e
+test -f /etc/vpn/node.json || { echo "::fail no /etc/vpn/node.json"; exit 1; }
+cp -f /usr/local/bin/vpn-node /usr/local/bin/vpn-node.prev 2>/dev/null || true
+install -m 0755 -o root -g root /tmp/vpn-node.bin /usr/local/bin/vpn-node
+rm -f /tmp/vpn-node.bin /tmp/vpn-upgrade.sh
+systemctl restart vpn-node
+echo "::upgraded"
+`
+	if err := upload(ctx, client, "/tmp/vpn-upgrade.sh", []byte(script)); err != nil {
+		return arch, err
+	}
+	out, _ := runScript(ctx, client, "bash /tmp/vpn-upgrade.sh")
+	io.WriteString(log, out)
+	for i := 0; i < 10; i++ {
+		if probe(ctx, client, "systemctl is-active vpn-node") == "active" {
+			fmt.Fprint(log, "vpn-node 已重启并运行\n")
+			return arch, nil
+		}
+		time.Sleep(time.Second)
+	}
+	jl, _ := runScript(ctx, client, "journalctl -u vpn-node -n 20 --no-pager")
+	io.WriteString(log, jl)
+	return arch, fmt.Errorf("升级后 vpn-node 未能运行（已保留旧程序 /usr/local/bin/vpn-node.prev）")
+}

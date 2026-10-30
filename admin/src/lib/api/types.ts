@@ -152,6 +152,7 @@ export interface Settings {
   monitor: MonitorSettings
   ai_domains: string[]
   share: ShareSettings
+  multi_device: { max_devices: number; min_plan_days: number }
 }
 
 export interface SystemInfo {

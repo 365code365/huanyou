@@ -63,6 +63,7 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	a("GET /admin/api/nodes/{id}/install", s.adminNodeInstall)
 	a("POST /admin/api/nodes/{id}/rotate-token", s.adminNodeRotateToken)
 	a("POST /admin/api/nodes/precheck", s.adminPrecheckNode)
+	a("POST /admin/api/nodes/{id}/upgrade", s.adminUpgradeNode)
 	a("POST /admin/api/nodes/provision", s.adminProvisionNode)
 	a("GET /admin/api/geoip", s.adminGeoIP)
 
@@ -563,16 +564,17 @@ func (s *Server) adminNodeRotateToken(w http.ResponseWriter, r *http.Request) {
 // ---- settings ----
 
 type settingsView struct {
-	FreePlan          string                `json:"free_plan"`
-	TrafficPeriodDays int                   `json:"traffic_period_days"`
-	Referral          config.ReferralConfig `json:"referral"`
-	Monitor           config.MonitorConfig  `json:"monitor"`
-	AIDomains         []string              `json:"ai_domains"`
-	Share             config.ShareConfig    `json:"share"`
+	FreePlan          string                   `json:"free_plan"`
+	TrafficPeriodDays int                      `json:"traffic_period_days"`
+	Referral          config.ReferralConfig    `json:"referral"`
+	Monitor           config.MonitorConfig     `json:"monitor"`
+	AIDomains         []string                 `json:"ai_domains"`
+	Share             config.ShareConfig       `json:"share"`
+	MultiDevice       config.MultiDeviceConfig `json:"multi_device"`
 }
 
 func settingsOf(c *config.Catalog) settingsView {
-	return settingsView{c.FreePlan, c.TrafficPeriodDays, c.Referral, c.Monitor, c.AIDomains, c.Share}
+	return settingsView{c.FreePlan, c.TrafficPeriodDays, c.Referral, c.Monitor, c.AIDomains, c.Share, c.MultiDevice}
 }
 
 func (s *Server) adminGetSettings(w http.ResponseWriter, _ *http.Request) {
@@ -606,6 +608,7 @@ func (s *Server) adminPutSettings(w http.ResponseWriter, r *http.Request) {
 		c.Referral = in.Referral
 		c.Monitor = in.Monitor
 		c.AIDomains = compactStrings(in.AIDomains)
+		c.MultiDevice = in.MultiDevice
 		c.Share = config.ShareConfig{AndroidURL: strings.TrimSpace(in.Share.AndroidURL), IOSURL: strings.TrimSpace(in.Share.IOSURL), Slogan: strings.TrimSpace(in.Share.Slogan)}
 		return nil
 	}, s.saveCatalog(r))

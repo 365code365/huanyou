@@ -23,7 +23,7 @@ export default function SettingsPage() {
   const save = async () => {
     const v = await form.validateFields()
     // Monitor settings are edited on the 监控预警 page; keep them as stored.
-    const body: Settings = { ...settings, ...v, free_plan: v.free_plan ?? '', referral: { ...settings.referral, ...v.referral }, share: { ...settings.share, ...v.share }, monitor: settings.monitor }
+    const body: Settings = { ...settings, ...v, free_plan: v.free_plan ?? '', referral: { ...settings.referral, ...v.referral }, share: { ...settings.share, ...v.share }, multi_device: { ...settings.multi_device, ...v.multi_device }, monitor: settings.monitor }
     let saved: Settings | undefined
     if (await run(async () => (saved = await api.settings.save(body)), '设置已保存，立即生效')) {
       setData([{ settings: saved!, system: sys }, { items: plans, total: plans.length }])
@@ -60,6 +60,16 @@ export default function SettingsPage() {
           </div>
         </PageCard>
 
+        <PageCard title="多设备共享">
+          <div style={{ maxWidth: 640 }}>
+            <Form.Item name={['multi_device', 'max_devices']} label="每个订阅设备数" extra="含主设备；会员在 App「我的 → 多设备」生成令牌 / 二维码，其它设备扫码或输入令牌即可共用">
+              <InputNumber min={1} max={20} suffix="台" />
+            </Form.Item>
+            <Form.Item name={['multi_device', 'min_plan_days']} label="套餐最短时长" extra="只有有效期不少于这个天数的付费套餐能共享，默认 30 天（月度会员及以上）">
+              <InputNumber min={1} suffix="天" />
+            </Form.Item>
+          </div>
+        </PageCard>
         <PageCard title="下载与分享">
           <div style={{ maxWidth: 640 }}>
             <Form.Item name={['share', 'slogan']} label="宣传语" extra="显示在邀请海报和下载页，留空为「一键连接，畅游全球」">

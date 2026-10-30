@@ -8,6 +8,7 @@ import '../../core/format.dart';
 import '../../state/app_scope.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/section_card.dart';
+import '../devices/devices_page.dart';
 import '../plans/plans_page.dart';
 import '../referral/referral_page.dart';
 import 'contacts_section.dart';
@@ -90,6 +91,17 @@ class _MePageState extends State<MePage> {
                   color: AppColors.violet,
                   title: '邀请好友送时长',
                   onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ReferralPage())),
+                ),
+                const Divider(indent: 66),
+                MenuRow(
+                  key: const Key('menu-devices'),
+                  icon: Icons.devices_rounded,
+                  title: '多设备',
+                  value: u != null && u.linked ? '使用 ${u.ownerCode}' : '扫码 / 令牌',
+                  onTap: () async {
+                    await Navigator.push(context, MaterialPageRoute(builder: (_) => const DevicesPage()));
+                    _load();
+                  },
                 ),
                 const Divider(indent: 66),
                 MenuRow(
@@ -178,7 +190,9 @@ class _MemberCard extends StatelessWidget {
                   style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
               const SizedBox(height: 2),
               Text(
-                e.paid && e.expiresAt != null ? '${formatDate(e.expiresAt!)} 到期' : '免费体验中',
+                user.linked
+                    ? '共享 ${user.ownerCode} 的订阅${e.paid && e.expiresAt != null ? ' · ${formatDate(e.expiresAt!)} 到期' : ''}'
+                    : e.paid && e.expiresAt != null ? '${formatDate(e.expiresAt!)} 到期' : '免费体验中',
                 style: const TextStyle(color: dim, fontSize: 12.5),
               ),
             ]),
@@ -193,8 +207,8 @@ class _MemberCard extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 18),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
-              onPressed: onUpgrade,
-              child: Text(e.paid ? '续费' : '开通会员', style: const TextStyle(fontWeight: FontWeight.w700)),
+              onPressed: user.linked ? null : onUpgrade,
+              child: Text(user.linked ? '共享中' : e.paid ? '续费' : '开通会员', style: const TextStyle(fontWeight: FontWeight.w700)),
             ),
           ),
         ]),

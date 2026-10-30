@@ -59,6 +59,31 @@ export default function NodesPage() {
     if (saved && c.mode === 'create') showInstall(saved)
   }
 
+  // Push the API server's current vpn-node binary to this node over SSH.
+  const [upgrading, setUpgrading] = useState<VpnNode>()
+  const [upForm] = Form.useForm()
+  const [upBusy, setUpBusy] = useState(false)
+  const [upLog, setUpLog] = useState('')
+  const openUpgrade = (n: VpnNode) => {
+    upForm.setFieldsValue({ user: 'root', port: 22, password: '' })
+    setUpLog('')
+    setUpgrading(n)
+  }
+  const doUpgrade = async () => {
+    const v = await upForm.validateFields()
+    setUpBusy(true)
+    setUpLog('')
+    try {
+      const r = await api.nodes.upgrade(upgrading!.id, v)
+      setUpLog(r.log)
+      message.success('节点程序已升级并重启')
+    } catch (e) {
+      message.error(errMsg(e))
+    } finally {
+      setUpBusy(false)
+    }
+  }
+
   const rotateToken = (n: VpnNode) =>
     modal.confirm({
       title: '重置 Token',
@@ -118,11 +143,12 @@ export default function NodesPage() {
                     trigger={['click']}
                     menu={{
                       items: [
+                        { key: 'upgrade', label: '升级节点程序' },
                         { key: 'token', label: '重置 Token' },
                         { type: 'divider' },
                         { key: 'delete', label: '删除节点', danger: true },
                       ],
-                      onClick: ({ key }) => (key === 'delete' ? c.remove(n) : rotateToken(n)),
+                      onClick: ({ key }) => (key === 'delete' ? c.remove(n) : key === 'upgrade' ? openUpgrade(n) : rotateToken(n)),
                     }}
                   >
                     <Button type="link" size="small">更多 <DownOutlined /></Button>
@@ -201,6 +227,28 @@ export default function NodesPage() {
           )}
         </Form>
       </Drawer>
+
+      <Modal
+        open={!!upgrading}
+        title={`升级节点程序 · ${upgrading?.name ?? ''}`}
+        onCancel={() => !upBusy && setUpgrading(undefined)}
+        onOk={doUpgrade}
+        okText="开始升级"
+        confirmLoading={upBusy}
+        destroyOnHidden
+      >
+        <p className="muted">把后台当前版本的 vpn-node 上传到 {upgrading?.address} 并重启，配置保持不变（连接会中断几秒）。</p>
+        <Form form={upForm} layout="vertical">
+          <Space size={12}>
+            <Form.Item name="user" label="SSH 用户"><Input style={{ width: 120 }} /></Form.Item>
+            <Form.Item name="port" label="SSH 端口"><InputNumber min={1} max={65535} style={{ width: 110 }} /></Form.Item>
+          </Space>
+          <Form.Item name="password" label="SSH 密码" rules={[{ required: true, message: '请填写 SSH 密码' }]}>
+            <Input.Password autoComplete="new-password" />
+          </Form.Item>
+        </Form>
+        {upLog && <pre className="provision-log" style={{ height: 160 }}>{upLog}</pre>}
+      </Modal>
 
       <ProvisionModal open={provisionOpen} onClose={() => setProvisionOpen(false)} onDone={() => c.load(true)} />
 

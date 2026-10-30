@@ -26,11 +26,15 @@ class User {
         email = j['email'] as String? ?? '',
         rechargeCode = j['recharge_code'] as String? ?? '',
         hasAccount = j['has_account'] as bool? ?? false,
+        linked = j['linked'] as bool? ?? false,
+        ownerCode = j['owner_code'] as String? ?? '',
         entitlement = Entitlement.fromJson(j['entitlement'] as Map<String, dynamic>);
   final int id;
   final String email; // "" for device-only accounts
   final String rechargeCode; // short top-up id, e.g. "VP-00001"
   final bool hasAccount; // email bound (cross-device) vs device-only
+  final bool linked; // uses another account's subscription (multi-device member)
+  final String ownerCode; // that account's recharge ID, "" if not linked
   final Entitlement entitlement;
 
   /// A short display name when there is no email (device-only account).
@@ -144,6 +148,63 @@ class Node {
   final int port;
   final double uptime; // 0..1 over the last hour
   final int load; // users currently moving traffic
+}
+
+/// One device on a shared subscription.
+class SharedDevice {
+  SharedDevice.fromJson(Map<String, dynamic> j)
+      : id = (j['id'] as num).toInt(),
+        rechargeCode = j['recharge_code'] as String? ?? '',
+        platform = j['platform'] as String? ?? '',
+        createdAt = _date(j['created_at']),
+        self = j['self'] as bool? ?? false,
+        owner = j['owner'] as bool? ?? false;
+  final int id;
+  final String rechargeCode;
+  final String platform;
+  final DateTime? createdAt;
+  final bool self;
+  final bool owner;
+}
+
+/// Multi-device sharing state for the current device.
+class DeviceShare {
+  DeviceShare.fromJson(Map<String, dynamic> j)
+      : role = j['role'] as String? ?? 'owner',
+        eligible = j['eligible'] as bool? ?? false,
+        reason = j['reason'] as String? ?? '',
+        maxDevices = (j['max_devices'] as num?)?.toInt() ?? 5,
+        ownerCode = j['owner_code'] as String? ?? '',
+        devices = [for (final d in (j['devices'] as List? ?? [])) SharedDevice.fromJson(d as Map<String, dynamic>)],
+        code = j['code'] as String?,
+        codeDisplay = j['code_display'] as String?,
+        codeExpiresAt = _date(j['code_expires_at']),
+        link = j['link'] as String?;
+  final String role; // owner | member
+  final bool eligible; // the subscription may be shared
+  final String reason; // why not, if !eligible
+  final int maxDevices; // total, owner included
+  final String ownerCode;
+  final List<SharedDevice> devices; // owner first
+  final String? code; // active link code (owner only)
+  final String? codeDisplay; // "ABCD-EFGH"
+  final DateTime? codeExpiresAt;
+  final String? link; // https://…/l/CODE, encoded in the QR
+
+  bool get isMember => role == 'member';
+}
+
+/// A freshly created link code.
+class LinkCode {
+  LinkCode.fromJson(Map<String, dynamic> j)
+      : code = j['code'] as String,
+        display = j['code_display'] as String? ?? j['code'] as String,
+        expiresAt = _date(j['expires_at'])!,
+        link = j['link'] as String? ?? '';
+  final String code;
+  final String display;
+  final DateTime expiresAt;
+  final String link;
 }
 
 /// A customer-service or social channel configured in the admin panel.
@@ -275,6 +336,15 @@ class ApiClient {
     final j = await _send('POST', '/api/v1/referral/bind', body: {'code': code.trim().toUpperCase()});
     return (j['invitee_days'] as num?)?.toInt() ?? 0;
   }
+
+  // ---- multi-device ----
+  Future<DeviceShare> devices() async => DeviceShare.fromJson(await _send('GET', '/api/v1/devices'));
+  Future<LinkCode> createLinkCode() async => LinkCode.fromJson(await _send('POST', '/api/v1/devices/code'));
+  Future<User> joinDevice(String code) async =>
+      User.fromJson((await _send('POST', '/api/v1/devices/join', body: {'code': code}))['user'] as Map<String, dynamic>);
+  Future<User> leaveDevice() async =>
+      User.fromJson((await _send('POST', '/api/v1/devices/leave'))['user'] as Map<String, dynamic>);
+  Future<void> removeDevice(int id) => _send('DELETE', '/api/v1/devices/$id');
 
   Future<List<Contact>> contacts() async {
     final j = await _send('GET', '/api/v1/contacts');

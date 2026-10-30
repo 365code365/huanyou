@@ -318,3 +318,36 @@ func newNodeID(region string) (string, error) {
 	}
 	return fmt.Sprintf("%s-%s", prefix, hex.EncodeToString(b[:])), nil
 }
+
+// adminUpgradeNode pushes the API server's current vpn-node binary to an
+// installed node over SSH and restarts it. POST /admin/api/nodes/{id}/upgrade
+func (s *Server) adminUpgradeNode(w http.ResponseWriter, r *http.Request) {
+	n := s.cat().NodeByID(r.PathValue("id"))
+	if n == nil {
+		writeErr(w, http.StatusNotFound, "not_found", "节点不存在")
+		return
+	}
+	var body provisionBody
+	if !decode(w, r, &body) {
+		return
+	}
+	if body.Password == "" && strings.TrimSpace(body.PrivateKey) == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "请填写 SSH 密码或私钥")
+		return
+	}
+	body.Host = n.Address
+	bins, err := s.loadNodeBinaries()
+	if err != nil {
+		writeErr(w, http.StatusFailedDependency, "no_binary", err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	defer cancel()
+	var log strings.Builder
+	arch, err := provision.Upgrade(ctx, body.target(), bins, &log)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": "upgrade_failed", "message": err.Error(), "log": log.String()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "arch": arch, "log": log.String()})
+}
