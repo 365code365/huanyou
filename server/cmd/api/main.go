@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -136,6 +137,22 @@ func serveTLS(ctx context.Context, srv *http.Server, cfg *config.API) {
 		<-ctx.Done()
 		_ = redirect.Close()
 	}()
+	if p := cfg.TLS.Passthrough; p != "" {
+		// :443 is shared with a VPN node on this server: route by SNI.
+		ln, err := net.Listen("tcp", ":443")
+		if err != nil {
+			fatal("listen :443", err)
+		}
+		go func() {
+			<-ctx.Done()
+			_ = ln.Close()
+		}()
+		slog.Info("api listening (tls, shared with node)", "domain", cfg.TLS.Domain, "node", p)
+		if err := srv.ServeTLS(sniRouter(ln, cfg.TLS.Domain, p), "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			fatal("serve tls", err)
+		}
+		return
+	}
 	slog.Info("api listening (tls)", "domain", cfg.TLS.Domain)
 	if err := srv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fatal("serve tls", err)

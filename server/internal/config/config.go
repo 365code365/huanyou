@@ -54,6 +54,11 @@ type TLSConfig struct {
 	Domain   string `json:"domain"`    // e.g. vpn.example.com ("" = plain HTTP on Listen)
 	Email    string `json:"email"`     // optional Let's Encrypt contact
 	CacheDir string `json:"cache_dir"` // certificate cache, default <db dir>/acme
+	// Passthrough: host:port of a VPN node on the same server. :443 is then
+	// shared: connections whose TLS SNI is Domain go to the API, all others
+	// are relayed to the node with a PROXY protocol header (the node must
+	// set accept_proxy_protocol).
+	Passthrough string `json:"passthrough"`
 }
 
 // AdminConfig secures the web admin panel. Password can come from env VPN_ADMIN_PASSWORD.

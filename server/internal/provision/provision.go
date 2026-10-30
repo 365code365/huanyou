@@ -14,6 +14,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -566,8 +567,48 @@ func Clone(ctx context.Context, t Target, in CloneInstall) (*CloneResult, error)
 	r := parseReport(out)
 	out80, _ := runScript(ctx, client, "bash /tmp/vpn-check.sh 80")
 	r80 := parseReport(out80)
+	// A VPN node of ours on :443 can stay: it moves to a local port and the
+	// API routes :443 by SNI (its own domain to itself, the rest to the node).
+	var nodeCfg []byte // rewritten /etc/vpn/node.json, nil = no co-located node
+	nodePort := 0
+	if !r.PortFree && r.PortUser == "vpn-node" {
+		raw, _ := runScript(ctx, client, "cat /etc/vpn/node.json")
+		var nc map[string]any
+		if err := json.Unmarshal([]byte(raw), &nc); err != nil {
+			runScript(ctx, client, "rm -f /tmp/vpn-check.sh")
+			return nil, fmt.Errorf("443 端口被本系统节点 vpn-node 占用，但读取 /etc/vpn/node.json 失败：%v", err)
+		}
+		nodePort = 4443
+		if o, _ := runScript(ctx, client, "bash /tmp/vpn-check.sh 4443"); !parseReport(o).PortFree {
+			nodePort = parseReport(o).SuggestPort
+		}
+		if nodePort == 0 {
+			runScript(ctx, client, "rm -f /tmp/vpn-check.sh")
+			return nil, fmt.Errorf("没有找到可供节点使用的本地端口")
+		}
+		nc["listen"] = "127.0.0.1"
+		nc["vision_port"] = nodePort
+		nc["accept_proxy_protocol"] = true
+		nodeCfg, _ = json.MarshalIndent(nc, "", "  ")
+		var ac map[string]any
+		if err := json.Unmarshal(in.APIConfig, &ac); err != nil {
+			runScript(ctx, client, "rm -f /tmp/vpn-check.sh")
+			return nil, fmt.Errorf("api config: %w", err)
+		}
+		tlsCfg, _ := ac["tls"].(map[string]any)
+		if tlsCfg == nil {
+			tlsCfg = map[string]any{}
+		}
+		tlsCfg["passthrough"] = fmt.Sprintf("127.0.0.1:%d", nodePort)
+		ac["tls"] = tlsCfg
+		in.APIConfig, _ = json.MarshalIndent(ac, "", "  ")
+		r.PortFree = true
+	}
 	runScript(ctx, client, "rm -f /tmp/vpn-check.sh")
 	fmt.Fprintf(log, "系统：%s · %s · 内存 %d MB · 磁盘空闲 %d GB\n", r.OS, r.Arch, r.RAMMB, r.DiskFreeGB)
+	if nodeCfg != nil {
+		fmt.Fprintf(log, "这台服务器上运行着节点（vpn-node 占用 443）：节点改为监听 127.0.0.1:%d，由 vpn-api 按域名分流 443，节点继续可用（切换时中断约几秒）\n", nodePort)
+	}
 	switch {
 	case r.Arch != "x86_64":
 		return nil, fmt.Errorf("目标服务器架构为 %q，目前克隆只支持 x86_64", r.Arch)
@@ -614,6 +655,12 @@ func Clone(ctx context.Context, t Target, in CloneInstall) (*CloneResult, error)
 		{"/tmp/vpn-api.db", in.Database},
 		{"/tmp/vpn-api.service", []byte(apiUnit)},
 	}
+	if nodeCfg != nil {
+		files = append(files, struct {
+			path string
+			data []byte
+		}{"/tmp/vpn-node.json", nodeCfg})
+	}
 	if b := in.NodeBinaries["x86_64"]; b != nil {
 		files = append(files, struct {
 			path string
@@ -653,6 +700,14 @@ if command -v firewall-cmd >/dev/null 2>&1; then firewall-cmd --permanent --add-
 echo "::step start"
 systemctl daemon-reload
 systemctl enable vpn-api >/dev/null 2>&1 || true
+if [ -f /tmp/vpn-node.json ]; then
+  echo "::step move node behind the API"
+  cp -a /etc/vpn/node.json /etc/vpn/node.json.bak-pre-clone
+  cat /tmp/vpn-node.json > /etc/vpn/node.json   # keeps owner and mode
+  rm -f /tmp/vpn-node.json
+  systemctl restart vpn-node
+  for i in $(seq 1 20); do ss -ltnH 'sport = :443' | grep -q . || break; sleep 0.5; done
+fi
 systemctl restart vpn-api
 echo "::cloned"
 `
@@ -673,7 +728,21 @@ echo "::cloned"
 	if !ok {
 		jl, _ := runScript(ctx, client, "journalctl -u vpn-api -n 30 --no-pager")
 		io.WriteString(log, jl)
+		if nodeCfg != nil {
+			// Give :443 back to the node so its users keep working.
+			runScript(ctx, client, "systemctl stop vpn-api; systemctl disable vpn-api >/dev/null 2>&1; [ -f /etc/vpn/node.json.bak-pre-clone ] && cp -a /etc/vpn/node.json.bak-pre-clone /etc/vpn/node.json; systemctl restart vpn-node")
+			fmt.Fprint(log, "已恢复节点原来的配置（重新独占 443）。\n")
+		}
 		return nil, fmt.Errorf("新系统的 vpn-api 没有运行起来，请查看上面的日志")
+	}
+	if nodeCfg != nil {
+		if probe(ctx, client, "systemctl is-active vpn-node") != "active" {
+			jl, _ := runScript(ctx, client, "journalctl -u vpn-node -n 20 --no-pager")
+			io.WriteString(log, jl)
+			fmt.Fprint(log, "⚠ 节点 vpn-node 没有运行，请在新后台「节点」页检查。\n")
+		} else {
+			fmt.Fprintf(log, "节点已改为 127.0.0.1:%d，经 443 分流继续可用 ✓\n", nodePort)
+		}
 	}
 	if in.Migrate && !pointed {
 		// The domain still reaches the old server; check the new one locally.
