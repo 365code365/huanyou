@@ -11,6 +11,8 @@ server/node.json
 app/android/app/libs/vpncore*.aar
 app/android/app/libs/vpncore*.jar
 app/ios/Frameworks/Vpncore.xcframework/
+app/windows/core/huanyou-core.exe
+app/macos/core/huanyou-core
 
 .DS_Store
 

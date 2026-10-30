@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/api.dart';
+import '../../core/desktop_updater.dart';
 import '../../core/format.dart';
 import '../../core/updater.dart';
 import '../../theme/app_theme.dart';
@@ -25,6 +26,42 @@ class _UpdateDialog extends StatefulWidget {
 class _UpdateDialogState extends State<_UpdateDialog> {
   String? _error;
   bool _opened = false;
+
+  /// Desktop: download, verify and install in the app ("" = possible).
+  late final String _desktopBlocker = DesktopUpdater.supported ? DesktopUpdater.blocker() : 'n/a';
+  bool get _inApp => _desktopBlocker.isEmpty;
+  double? _progress; // downloading (0..1)
+  bool _installing = false;
+
+  Future<void> _update() async {
+    if (!_inApp) return _install();
+    setState(() {
+      _error = null;
+      _progress = 0;
+    });
+    try {
+      Analytics.track('update_download');
+      final pkg = await DesktopUpdater.download(widget.update, (p) {
+        if (mounted) setState(() => _progress = p);
+      });
+      if (!mounted) return;
+      setState(() => _installing = true);
+      Analytics.track('update_install');
+      await Analytics.flush();
+      await DesktopUpdater.installAndRestart(pkg); // quits the app
+    } on UpdateException catch (e) {
+      if (mounted) setState(() => _error = e.message);
+    } catch (e) {
+      if (mounted) setState(() => _error = tr('更新失败：{0}', [e]));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _progress = null;
+          _installing = false;
+        });
+      }
+    }
+  }
 
   /// Opens the download in the system browser (the reliable install path).
   Future<void> _install() async {
@@ -75,9 +112,28 @@ class _UpdateDialogState extends State<_UpdateDialog> {
           ),
         Padding(
           padding: EdgeInsets.only(top: 10),
-          child: Text(tr('将在浏览器中打开下载，下载完成后点击安装包即可安装。'),
+          child: Text(
+              _inApp
+                  ? tr('下载完成后自动安装并重新打开，期间会断开 VPN。')
+                  : DesktopUpdater.supported
+                      ? _desktopBlocker
+                      : tr('将在浏览器中打开下载，下载完成后点击安装包即可安装。'),
               style: TextStyle(color: AppColors.sub, fontSize: 13, height: 1.5)),
         ),
+        if (_progress != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              LinearProgressIndicator(value: _installing ? null : _progress, color: AppColors.signal, minHeight: 4),
+              const SizedBox(height: 6),
+              Text(
+                _installing
+                    ? tr('正在安装，App 将自动重新打开…')
+                    : tr('正在下载 {0}%', [((_progress ?? 0) * 100).toStringAsFixed(0)]),
+                style: TextStyle(color: AppColors.sub, fontSize: 12),
+              ),
+            ]),
+          ),
         if (_opened)
           Padding(
             padding: EdgeInsets.only(top: 8),
@@ -90,11 +146,13 @@ class _UpdateDialogState extends State<_UpdateDialog> {
           ),
       ]),
       actions: [
-        if (!u.force) TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('稍后'))),
+        if (_inApp && _error != null)
+          TextButton(onPressed: _install, child: Text(tr('浏览器下载'))),
+        if (!u.force && _progress == null) TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('稍后'))),
         FilledButton(
           key: const Key('update-now'),
-          onPressed: _install,
-          child: Text(_error != null ? tr('重试') : tr('去浏览器下载')),
+          onPressed: _progress != null ? null : _update,
+          child: Text(_error != null ? tr('重试') : _inApp ? tr('立即更新') : tr('去浏览器下载')),
         ),
       ],
     );

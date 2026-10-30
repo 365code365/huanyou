@@ -4,6 +4,7 @@
 Sources:
   app/lib/**/*.dart              string literals containing Chinese (tr() keys, enum labels)
   server/internal/api/*.go       user-facing error messages (writeErr(..., "中文")), admin files / handlers excluded
+  server/internal/api/site_landing.html + site_i18n.go   public site text
 
 The server embeds the result: the admin panel shows it as the translation
 template and the AI translator works from it. Re-run after changing app text:
@@ -50,6 +51,19 @@ def dart_literals(src):
         i += 1
 
 
+def site_keys():
+    """Public site strings: $t.T / $t.TC / I("…") in site_landing.html and siteGoKeys in site_i18n.go."""
+    api = os.path.join(ROOT, 'server/internal/api')
+    keys = set()
+    html = open(os.path.join(api, 'site_landing.html'), encoding='utf-8').read()
+    for m in re.finditer(r'\.TC? "((?:[^"\\]|\\.)*)"|\bI\("((?:[^"\\]|\\.)*)"\)', html):
+        keys.add(json.loads('"%s"' % (m.group(1) or m.group(2))))
+    go = open(os.path.join(api, 'site_i18n.go'), encoding='utf-8').read()
+    block = re.search(r'var siteGoKeys = \[\]string\{(.*?)\n\}', go, re.S).group(1)
+    keys.update(json.loads('"%s"' % s) for s in re.findall(r'"((?:[^"\\]|\\.)*)"', block))
+    return {k for k in keys if CJK.search(k)}
+
+
 def main():
     keys = set()
     for f in glob.glob(os.path.join(ROOT, 'app/lib/**/*.dart'), recursive=True):
@@ -71,6 +85,7 @@ def main():
             s = json.loads('"%s"' % m.group(1))
             if CJK.search(s):
                 keys.add(s)
+    keys |= site_keys()
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, 'w', encoding='utf-8') as fh:
         json.dump(sorted(keys), fh, ensure_ascii=False, indent=1)

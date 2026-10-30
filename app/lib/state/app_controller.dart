@@ -29,7 +29,7 @@ enum ConnectMode {
 }
 
 /// Result of a connect attempt, for the UI to react to.
-enum ConnectResult { ok, needPlan, failed }
+enum ConnectResult { ok, needPlan, failed, cancelled }
 
 /// Single source of truth for app state: auth, user, nodes, chosen mode/node
 /// and the VPN tunnel. Widgets read it via AppScope.of(context) and call its
@@ -115,6 +115,17 @@ class AppController extends ChangeNotifier {
   }
 
   bool get busy => status == VpnStatus.connecting || status == VpnStatus.disconnecting;
+
+  /// The connect in progress can be stopped (tap the button again).
+  bool get canCancel => status == VpnStatus.connecting && !cancelling;
+
+  /// True between "cancel" and the tunnel being fully down.
+  bool cancelling = false;
+
+  // Incremented by every connect and every cancel / disconnect; a connect
+  // attempt that sees a newer value has been cancelled and stops quietly.
+  int _attempt = 0;
+  int? _nativeAttempt; // the attempt that has started the native tunnel
   bool get active => status == VpnStatus.connected || status == VpnStatus.connecting;
 
   Future<void> init() async {
@@ -217,6 +228,13 @@ class AppController extends ChangeNotifier {
     final prev = status;
     status = e.$1;
     statusHint = e.$1 == VpnStatus.connecting ? e.$2 : null;
+    if (e.$1 == VpnStatus.disconnected || e.$1 == VpnStatus.error) cancelling = false;
+    // After a cancel, errors from the half-started tunnel are not news.
+    if (cancelling && e.$1 == VpnStatus.error) {
+      status = VpnStatus.disconnected;
+      notifyListeners();
+      return;
+    }
     if (e.$1 == VpnStatus.error) message = e.$2 ?? tr('连接失败');
     if (e.$1 == VpnStatus.connected && prev != VpnStatus.connected) Analytics.track('vpn_connected');
     if (e.$1 == VpnStatus.error && prev == VpnStatus.connecting) Analytics.track('vpn_connect_failed');
@@ -405,9 +423,55 @@ class AppController extends ChangeNotifier {
 
   // ---- tunnel ----
 
-  Future<ConnectResult?> toggle() => active ? disconnect().then((_) => null) : connect();
+  /// The power button: connect, cancel a connect in progress, or disconnect.
+  Future<ConnectResult?> toggle() async {
+    if (status == VpnStatus.connecting) {
+      await cancelConnect();
+      return ConnectResult.cancelled;
+    }
+    if (active) {
+      await disconnect();
+      return null;
+    }
+    return connect();
+  }
+
+  /// Stops a connect in progress. Before the tunnel is started (still loading
+  /// the profile) nothing native has happened yet, so it is instant.
+  Future<void> cancelConnect() async {
+    if (status != VpnStatus.connecting) return;
+    Analytics.track('vpn_connect_cancel');
+    final startedNative = _nativeAttempt == _attempt;
+    _attempt++;
+    _wantConnected = false;
+    _wasConnected = false;
+    _reconnectTimer?.cancel();
+    _reconnectAttempt = 0;
+    message = null;
+    if (!startedNative) {
+      status = VpnStatus.disconnected;
+      notifyListeners();
+      return;
+    }
+    cancelling = true;
+    status = VpnStatus.disconnecting;
+    notifyListeners();
+    try {
+      await Vpn.disconnect();
+    } on PlatformException {
+      // reported as stopped below
+    }
+    if (status != VpnStatus.disconnected) {
+      await _waitFor(VpnStatus.disconnected, const Duration(seconds: 6));
+    }
+    cancelling = false;
+    status = VpnStatus.disconnected;
+    notifyListeners();
+  }
 
   Future<ConnectResult> reconnect() async {
+    // Desktop switches inside the running tunnel: no disconnect in between.
+    if (Vpn.canSwitchLive && status == VpnStatus.connected) return connect(switching: true);
     if (active) {
       await disconnect();
       await _waitFor(VpnStatus.disconnected, const Duration(seconds: 6));
@@ -417,14 +481,14 @@ class AppController extends ChangeNotifier {
 
   /// Connects. [auto] marks a background reconnect attempt: on failure it
   /// schedules the next attempt instead of giving up.
-  Future<ConnectResult> connect({bool auto = false}) async {
+  Future<ConnectResult> connect({bool auto = false, bool switching = false}) async {
     if (!auto) Analytics.track('vpn_connect');
     if (!auto) {
       _reconnectAttempt = 0;
       _reconnectTimer?.cancel();
     }
     _wantConnected = true;
-    final r = await _connectOnce();
+    final r = await _connectOnce(switching: switching);
     if (r == ConnectResult.needPlan) {
       _wantConnected = false;
     } else if (r == ConnectResult.failed) {
@@ -438,12 +502,19 @@ class AppController extends ChangeNotifier {
     return r;
   }
 
-  Future<ConnectResult> _connectOnce() async {
+  /// [switching]: the tunnel is up and only gets another node / mode (desktop).
+  Future<ConnectResult> _connectOnce({bool switching = false}) async {
+    final attempt = ++_attempt;
+    // A cancel while switching stops the running tunnel.
+    if (switching) _nativeAttempt = attempt;
+    bool cancelled() => attempt != _attempt;
     status = VpnStatus.connecting;
+    cancelling = false;
     message = null;
     notifyListeners();
     // Nodes never loaded (e.g. first launch was offline): load them before connecting.
     if (nodes.isEmpty || user == null) await refresh();
+    if (cancelled()) return ConnectResult.cancelled;
     try {
       Profile profile;
       // Cluster and AI 优先 let the server choose (AI picks the most stable nodes).
@@ -462,10 +533,17 @@ class AppController extends ChangeNotifier {
         if (e.code != 'network' || !sameTarget) rethrow;
         profile = cached;
       }
+      if (cancelled()) return ConnectResult.cancelled;
+      // From here a cancel has to stop the native tunnel (on mobile it keeps
+      // connecting after Vpn.connect returns).
+      _nativeAttempt = attempt;
       await Vpn.connect(profile.config, name: profile.node.name);
+      if (cancelled()) return ConnectResult.cancelled;
       return ConnectResult.ok;
     } on ApiException catch (e) {
-      status = VpnStatus.disconnected;
+      if (cancelled()) return ConnectResult.cancelled;
+      // Switching failed before touching the tunnel: the old line keeps working.
+      status = switching ? VpnStatus.connected : VpnStatus.disconnected;
       message = e.message;
       notifyListeners();
       if (e.status == 402) {
@@ -474,6 +552,7 @@ class AppController extends ChangeNotifier {
       }
       return ConnectResult.failed;
     } on PlatformException catch (e) {
+      if (cancelled() || e.code == 'cancelled') return ConnectResult.cancelled;
       status = VpnStatus.disconnected;
       message = e.message ?? tr('无法启动 VPN');
       notifyListeners();
@@ -482,7 +561,9 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> disconnect() async {
+    if (status == VpnStatus.connecting) return cancelConnect();
     Analytics.track('vpn_disconnect');
+    _attempt++;
     _wantConnected = false;
     _wasConnected = false;
     _reconnectTimer?.cancel();

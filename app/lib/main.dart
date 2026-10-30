@@ -14,6 +14,7 @@ import 'i18n/i18n.dart';
 import 'theme/app_theme.dart';
 import 'theme/appearance.dart';
 import 'widgets/bootstrap_gate.dart';
+import 'widgets/desktop_frame.dart';
 
 // App structure (see README "App 架构"):
 //   core/      API client, session storage, native VPN bridge, formatting
@@ -40,7 +41,7 @@ Future<void> _main() async {
   };
   // One secure-storage read for everything (no network), so the first frame
   // is already in the right language and palette.
-  await Prefs.load();
+  await Future.wait([Prefs.load(), DesktopFrame.init()]);
   I18n.instance.load();
   Appearance.instance.load();
   AppColors.dark = Appearance.instance.isDark;
@@ -125,7 +126,7 @@ class _VpnAppState extends State<VpnApp> with WidgetsBindingObserver {
         // Material's own strings stay built in; layout direction follows the pack (ar/fa/he are RTL).
         builder: (context, child) => Directionality(
           textDirection: I18n.instance.direction,
-          child: _Adaptive(child: child!),
+          child: DesktopFrame(child: _Adaptive(child: child!)),
         ),
         home: const _Root(),
       ),

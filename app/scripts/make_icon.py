@@ -152,7 +152,31 @@ def splash():
         save(Image.new("RGBA", (px, px), (0, 0, 0, 0)), os.path.join(d, name))
 
 
+def windows():
+    """Windows exe / taskbar icon: rounded tile, all standard sizes in one .ico."""
+    sizes = [16, 20, 24, 32, 40, 48, 64, 128, 256]
+    img = draw_mark(256, radius_frac=0.22)
+    path = os.path.join(ROOT, "windows/runner/resources/app_icon.ico")
+    img.save(path, format="ICO", sizes=[(s, s) for s in sizes])
+    print("wrote", os.path.relpath(path, ROOT))
+
+
+def macos():
+    """macOS app icon: Apple's grid puts the rounded tile at 824/1024 of the
+    canvas (transparent margin), corner radius ~22.5 % of the tile."""
+    d = os.path.join(ROOT, "macos/Runner/Assets.xcassets/AppIcon.appiconset")
+    for px in (16, 32, 64, 128, 256, 512, 1024):
+        tile = max(1, round(px * 824 / 1024))
+        canvas = Image.new("RGBA", (px, px), (0, 0, 0, 0))
+        mark = draw_mark(tile, radius_frac=0.225)
+        off = (px - tile) // 2
+        canvas.alpha_composite(mark, (off, off))
+        save(canvas, os.path.join(d, f"app_icon_{px}.png"))
+
+
 if __name__ == "__main__":
-    android()
-    ios()
-    splash()
+    import sys
+    steps = {"android": android, "ios": ios, "splash": splash, "windows": windows, "macos": macos}
+    # python3 scripts/make_icon.py [android|ios|splash|windows ...]; no args = all
+    for name in sys.argv[1:] or steps:
+        steps[name]()

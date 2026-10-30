@@ -118,7 +118,7 @@ server/                Go
   internal/monitor     节点探测、心跳、预警
   internal/payment     支付宝 / 易支付 / 模拟支付
 admin/                 管理后台前端：Next.js 16 + React 19 + Ant Design 6（见 admin/README.md）
-mobile/                Go：vpncore，gomobile 编译成 Android AAR / iOS xcframework；cmd/huanyou-core 是 Windows 版核心
+mobile/                Go：vpncore，gomobile 编译成 Android AAR / iOS xcframework；cmd/huanyou-core 是桌面版（Windows / macOS）核心
 app/                   Flutter App
 ```
 
@@ -281,6 +281,7 @@ App 内置简体中文，界面文字以中文原文为 key（`tr('剩余 {0} �
 - 新增 / 修改 App 文字后运行 `python3 scripts/i18n-extract.py`，更新 `server/internal/i18n/base.json`（翻译模板），再重新编译 API。
 - 翻译方式：后台填 OpenAI 兼容接口后点「AI 自动翻译」；或点「复制 AI 提示词」贴到任意 AI 对话，把返回的 JSON 贴回来；也可以上传 JSON 文件或逐条校对。占位符 `{0}` 不一致会提示。
 - 英语包的源文件在 `docs/i18n/en.json`。
+- 官网（`/`、`/download`、`/i/{邀请码}`，模板 `server/internal/api/site_landing.html`）同样以中文原文为 key。右上角可切换语言（`?lang=xx`，记在 cookie 里）；没选过时按浏览器语言匹配，匹配不到用简体中文。译文优先取后台已启用的同名语言包，其次取内置的 `site_i18n.json`（英语、繁体中文、西班牙语、日语、韩语）。官网文字也会进 `base.json`，所以在后台新增语言并 AI 翻译后，官网会自动多出这门语言。
 
 外观：「我的 → 外观」可选跟随系统 / 浅色 / 深色，颜色都在 `app/lib/theme/app_theme.dart` 的 `AppPalette`。
 
@@ -293,28 +294,44 @@ PacketTunnel 扩展 target 已经通过 `app/ios/scripts/setup_packet_tunnel.rb`
 3. 在 Xcode 里打开 `ios/Runner.xcworkspace`，给 Runner 和 PacketTunnel 两个 target 都选上你的 Team。如果要改 Bundle ID，两个都要改，扩展的 ID 必须是 `<App ID>.PacketTunnel`。
 4. 注意：国区 App Store 不允许上架 VPN 类 App，需要上架到其他地区。
 
-### Windows 版
+### 桌面版（Windows / macOS）
 
-Windows 版和手机版是同一套 Flutter 代码（`app/windows/`）。连接用的是 `huanyou-core.exe`（`mobile/cmd/huanyou-core`，也基于 Xray-core），以**系统代理模式**工作：
+桌面版和手机版是同一套 Flutter 代码（`app/windows/`、`app/macos/`）。连接用的是 `huanyou-core`（`mobile/cmd/huanyou-core`，同样基于 Xray-core），以**系统代理模式**工作：
 
-- App 启动核心进程，通过标准输入把 API 下发的配置交给它。核心在 `127.0.0.1` 的随机端口开一个 HTTP + SOCKS5 混合代理，并把 Windows 系统代理（设置 → 网络 → 代理）指向这个端口。路由规则（大陆直连 / AI / 全局 / 集群）和手机版相同。
-- 不需要管理员权限，也不需要安装 TUN 驱动。浏览器和大多数遵循系统代理的软件会自动走代理。不读系统代理的程序（部分游戏、命令行工具）不会经过代理。
-- 断开或退出 App 时会恢复用户原来的代理设置。核心被强制结束时（任务管理器、断电），下次打开 App 会自动恢复。
-- 设备标识用 Windows 的 MachineGuid，重装 App 不会变成新账号。
-- Windows 版没有扫码绑定（`mobile_scanner` 不支持 Windows），可以用「输入令牌」。
-
-打包需要一台装了 Flutter 和 Visual Studio 2022（勾选「使用 C++ 的桌面开发」）的 Windows 电脑：
+- App 启动核心进程，通过标准输入把 API 下发的配置交给它。核心在 `127.0.0.1` 的随机端口开一个 HTTP + SOCKS5 混合代理，并把系统代理指向这个端口。路由规则（大陆直连 / AI / 全局 / 集群）和手机版相同。
+  - Windows：修改「设置 → 网络 → 代理」，不需要管理员权限，也不用装驱动。
+  - macOS：用 `networksetup` 修改每个已启用网络服务的 HTTP / HTTPS / SOCKS 代理。需要管理员账户（Mac 的第一个账户默认就是），标准账户会提示失败。
+- 浏览器和大多数遵循系统代理的软件会自动走代理。不读系统代理的程序（部分游戏、命令行工具）不会经过代理。
+- 断开或退出 App 时会恢复用户原来的代理设置。核心被强制结束时，下次打开 App 会自动恢复（备份在 `%LocalAppData%\Huanyou` / `~/Library/Caches/Huanyou`）。
+- 设备标识：Windows 用 MachineGuid，macOS 用硬件 IOPlatformUUID，重装 App 不会变成新账号。
+- 桌面版没有扫码绑定，可以用「输入令牌」。
+- 应用内更新：启动时和「我的 → 设置 → 检查更新」会检查新版本。桌面版点「立即更新」后在 App 里下载（断线自动续传）、校验 SHA-256，然后退出 App，用一个小脚本把新版本替换到原来的安装位置（macOS 替换 `.app`，Windows 覆盖 Huanyou.exe 所在文件夹）并重新打开（`app/lib/core/desktop_updater.dart`）。macOS 上从 DMG 里直接运行、或安装目录没有写入权限时，会提示改用浏览器下载。
+- 标题栏和应用融为一体（`app/lib/widgets/desktop_frame.dart`，基于 `window_manager`）：系统标题栏隐藏，页面背景一直画到窗口顶部，标题栏高度像手机状态栏一样加在顶部安全区里。macOS 保留左上角的红黄绿按钮；Windows 在右上角画最小化 / 最大化 / 关闭按钮，并跟随深浅色。顶部空白处可以拖动窗口。窗口固定为 420×820，不能缩放、最大化或全屏（屏幕太矮时自动降低高度）；Windows 只允许运行一个实例。
 
 ```bash
-# 1) 编译核心（纯 Go，在 macOS / Linux / Windows 上都能编译）
-cd mobile && ./build.sh windows        # -> app/windows/core/huanyou-core.exe
+# 1) 编译核心
+cd mobile
+./build.sh windows   # -> app/windows/core/huanyou-core.exe（纯 Go，任何系统都能编译）
+./build.sh macos     # -> app/macos/core/huanyou-core（arm64 + x86_64 通用，需要 Mac）
 
-# 2) 在 Windows 上打包，生成 app/build/dist/huanyou-windows-<版本>-<构建号>.zip
+# 2a) Windows：在装了 Flutter 和 Visual Studio 2022（「使用 C++ 的桌面开发」）的 Windows 上
 cd app
 powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1 -ApiBaseUrls https://api.example.com
+#    -> app/build/dist/huanyou-windows-<版本>-<构建号>.zip
+
+# 2b) macOS：在 Mac 上（Xcode + CocoaPods）
+cd app
+SIGN_IDENTITY="Developer ID Application: 名称 (TEAMID)" NOTARY_PROFILE=<公证配置> \
+  scripts/build_macos.sh https://api.example.com
+#    -> app/build/dist/huanyou-macos-<版本>-<构建号>.dmg（安装包：打开后把「环游」拖进「应用程序」，通用二进制）
 ```
 
-`-ApiBaseUrls` 对应手机版的 `--dart-define=API_BASE_URLS=...`。然后在后台「版本发布 → 发布 Windows 版本」上传这个 zip。下载页会多出 Windows 下载入口，App 内检查更新会在浏览器里打开下载链接。
+- `-ApiBaseUrls` / 第一个参数对应手机版的 `--dart-define=API_BASE_URLS=...`。
+- macOS 不设 `SIGN_IDENTITY` 时用临时签名（ad-hoc），可以在本机和测试机运行，但别人第一次打开要右键点 App 选「打开」。对外分发请用 Developer ID 签名并公证（`xcrun notarytool store-credentials` 先保存一次公证配置）。App 不使用沙盒，所以只能在 App Store 之外分发。
+- macOS 的 Xcode 工程里有一个「Embed VPN core」构建步骤（`app/macos/scripts/add_core_phase.rb`，可以重复运行），负责把核心复制进 `.app` 并签名。
+- `build_macos.sh` 会把 arm64 和 x86_64 分别编译再用 lipo 合并，因为 Xcode 27 的 lipo 不接受 Flutter 通用编译时的 `-verify_arch arm64 x86_64` 写法。
+
+然后在后台「版本发布」选「发布 Windows 版本」上传 zip，或「发布 macOS 版本」上传 dmg。不用填版本号：服务端（`server/internal/pkginfo`）会从安装包里读出版本号、构建号和支持的芯片（Windows 读 Huanyou.exe 的版本信息和 CPU 类型；macOS 直接解析 DMG 里的 Info.plist 和程序头），并检查 VPN 核心是否打包进去。macOS 通用包（Apple 芯片 + Intel）记为「通用」，也可以另外发布只含 Apple 芯片或 Intel 的包，App 会按电脑的芯片拿到对应的包；ARM 电脑没有专用包时使用 x64 / Intel 包。下载页会多出对应的下载入口，App 内检查更新会在浏览器里打开下载链接。
 
 ---
 

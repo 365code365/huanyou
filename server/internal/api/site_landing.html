@@ -1,0 +1,546 @@
+{{$t := .L}}<!doctype html>
+<html lang="{{.HTMLLang}}"{{if .Lang.RTL}} dir="rtl"{{end}}><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#05070a">
+<title>{{.Brand}} · {{$t.T "隐于无形，畅游全球"}}</title>
+<style>
+:root{--bg:#05070a;--ink:#eef2ef;--mute:#8a9390;--dim:#5b6461;--g:#16c264;--g2:#12a150;--c:#2de2e6;--line:rgba(255,255,255,.08);--card:rgba(255,255,255,.035);--red:#ff5d5d}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+body{background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;overflow-x:hidden;line-height:1.6}
+a{color:inherit;text-decoration:none}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.wrap{width:100%;max-width:1180px;margin:0 auto;padding:0 24px}
+/* ambient background */
+.grid-bg{position:fixed;inset:0;z-index:-2;pointer-events:none;
+ background-image:linear-gradient(rgba(255,255,255,.028) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.028) 1px,transparent 1px);
+ background-size:56px 56px;mask-image:radial-gradient(ellipse 80% 60% at 50% 30%,#000 30%,transparent 80%);-webkit-mask-image:radial-gradient(ellipse 80% 60% at 50% 30%,#000 30%,transparent 80%)}
+.glow{position:fixed;z-index:-1;border-radius:50%;filter:blur(90px);opacity:.5;pointer-events:none}
+.glow.a{width:620px;height:620px;left:-180px;top:-200px;background:radial-gradient(circle,#0e6b3d,transparent 65%)}
+.glow.b{width:560px;height:560px;right:-160px;top:30vh;background:radial-gradient(circle,#0b4e5a,transparent 65%)}
+/* nav */
+nav{position:fixed;top:0;left:0;right:0;z-index:50;transition:.3s;border-bottom:1px solid transparent}
+nav.solid{background:rgba(5,7,10,.72);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-color:var(--line)}
+nav .wrap{display:flex;align-items:center;height:64px;gap:28px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:18px;letter-spacing:3px}
+.brand svg{width:30px;height:30px}
+.links{display:flex;gap:26px;margin-left:auto;font-size:14px;color:var(--mute)}
+.links a:hover{color:var(--ink)}
+.nav-cta{padding:8px 16px;border-radius:999px;background:var(--ink);color:#05070a;font-size:13.5px;font-weight:700}
+/* hero */
+.hero{position:relative;overflow:hidden;min-height:min(100vh,980px);display:flex;align-items:center;padding:96px 0 60px}
+.globe{position:absolute;right:-6vw;top:50%;transform:translateY(-50%);width:min(820px,72vw);height:min(820px,72vw);pointer-events:none}
+#globe{opacity:0;transition:opacity 1.6s ease}#globe.on{opacity:1}
+.hero .wrap{position:relative;z-index:2}
+.badge{display:inline-flex;align-items:center;gap:8px;padding:6px 14px 6px 8px;border-radius:999px;border:1px solid rgba(22,194,100,.35);background:rgba(22,194,100,.08);color:#9ff0c2;font-size:12.5px}
+.badge i{width:8px;height:8px;border-radius:50%;background:var(--g);box-shadow:0 0 0 0 rgba(22,194,100,.7);animation:ping 2s infinite}
+@keyframes ping{70%{box-shadow:0 0 0 10px rgba(22,194,100,0)}100%{box-shadow:0 0 0 0 rgba(22,194,100,0)}}
+h1.title{margin-top:22px;font-size:clamp(40px,7.2vw,88px);line-height:1.05;font-weight:900;letter-spacing:-.01em}
+.grad{background:linear-gradient(100deg,#fff 10%,#9ff0c2 45%,var(--c) 75%,#fff 100%);background-size:220% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:shine 6s linear infinite}
+@keyframes shine{to{background-position:-220% 0}}
+.lead{margin-top:22px;max-width:560px;color:#b6bfbb;font-size:clamp(15px,1.6vw,18px)}
+.cta{display:flex;flex-wrap:wrap;gap:14px;margin-top:34px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:50px;padding:0 26px;border-radius:14px;font-size:15px;font-weight:700;border:0;cursor:pointer;transition:transform .2s,box-shadow .2s}
+.btn:hover{transform:translateY(-2px)}
+.btn.pri{background:linear-gradient(135deg,#1fe07a,#12a150);color:#03140a;box-shadow:0 10px 40px -10px rgba(22,194,100,.7)}
+.btn.sec{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);color:var(--ink)}
+.stats{display:grid;grid-template-columns:repeat(4,auto);gap:34px;margin-top:56px;justify-content:start}
+.stat b{display:block;font-size:26px;font-weight:800;letter-spacing:.5px}
+.stat span{font-size:12.5px;color:var(--mute)}
+/* terminal */
+.term{margin-top:46px;max-width:560px;border-radius:16px;background:rgba(8,12,14,.78);border:1px solid var(--line);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);overflow:hidden;box-shadow:0 30px 80px -30px rgba(0,0,0,.8)}
+.term-h{display:flex;gap:7px;align-items:center;padding:11px 14px;border-bottom:1px solid var(--line);font-size:12px;color:var(--dim)}
+.term-h i{width:10px;height:10px;border-radius:50%;background:#2a2f2e}
+.term-h i:nth-child(1){background:#ff5f57}.term-h i:nth-child(2){background:#febc2e}.term-h i:nth-child(3){background:#28c840}
+.term-h span{margin-left:8px}
+#tty{padding:14px 16px;min-height:212px;font-size:12.5px;line-height:1.75;color:#9fb0aa;white-space:pre-wrap;word-break:break-all}
+#tty .k{color:var(--c)}#tty .ok{color:var(--g)}#tty .w{color:#fff}#tty .d{color:var(--dim)}
+.caret{display:inline-block;width:7px;height:14px;background:var(--g);vertical-align:-2px;animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+/* cipher marquee */
+.marq{border-top:1px solid var(--line);border-bottom:1px solid var(--line);overflow:hidden;white-space:nowrap;padding:14px 0;color:#2c3a35;font-size:13px;user-select:none}
+.marq div{display:inline-block;animation:mq 60s linear infinite}
+@keyframes mq{to{transform:translateX(-50%)}}
+/* sections */
+section{position:relative;padding:120px 0}
+.eyebrow{font-size:12.5px;letter-spacing:4px;color:var(--g);text-transform:uppercase}
+h2{margin-top:12px;font-size:clamp(30px,4.4vw,52px);line-height:1.15;font-weight:900}
+.sub{margin-top:16px;max-width:640px;color:var(--mute);font-size:16px}
+.reveal{opacity:0;transform:translateY(28px);transition:opacity .9s cubic-bezier(.2,.7,.2,1),transform .9s cubic-bezier(.2,.7,.2,1)}
+.reveal.in{opacity:1;transform:none}
+/* encryption layers */
+.enc{display:grid;grid-template-columns:1.05fr 1fr;gap:56px;align-items:center;margin-top:60px}
+.stack{position:relative;height:440px;perspective:1100px}
+.layer{position:absolute;left:50%;width:300px;height:180px;margin-left:-150px;border-radius:22px;border:1px solid rgba(45,226,230,.35);
+ background:linear-gradient(135deg,rgba(45,226,230,.12),rgba(22,194,100,.05));transform-style:preserve-3d;
+ transform:rotateX(58deg) rotateZ(-38deg) translateZ(calc(var(--i)*58px));top:150px;transition:.6s;box-shadow:0 0 50px -10px rgba(45,226,230,.25) inset}
+.layer span{position:absolute;left:18px;bottom:14px;font-size:12px;letter-spacing:2px;color:#bff7f8}
+.layer:nth-child(1){--i:0;border-color:rgba(255,255,255,.18);background:rgba(255,255,255,.04)}
+.layer:nth-child(2){--i:1}.layer:nth-child(3){--i:2;border-color:rgba(22,194,100,.5)}.layer:nth-child(4){--i:3;border-color:rgba(22,194,100,.8);background:linear-gradient(135deg,rgba(22,194,100,.22),rgba(45,226,230,.06))}
+.stack:hover .layer{transform:rotateX(58deg) rotateZ(-38deg) translateZ(calc(var(--i)*84px))}
+.stack .core{position:absolute;left:50%;top:240px;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;background:#fff;box-shadow:0 0 30px 8px var(--g);animation:float 3s ease-in-out infinite}
+@keyframes float{50%{transform:translateY(-150px)}}
+.steps{display:flex;flex-direction:column;gap:14px}
+.step{display:flex;gap:16px;padding:20px 22px;border-radius:18px;background:var(--card);border:1px solid var(--line);transition:.3s}
+.step:hover{border-color:rgba(22,194,100,.45);background:rgba(22,194,100,.05)}
+.step .n{flex:none;width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-size:13px;font-weight:800;color:#03140a;background:linear-gradient(135deg,var(--c),var(--g))}
+.step h4{font-size:16.5px}
+.step p{margin-top:4px;font-size:14px;color:var(--mute)}
+.step code{font-size:12px;color:#9ff0c2;background:rgba(22,194,100,.1);padding:1px 6px;border-radius:6px}
+/* fingerprint */
+.fp{display:grid;grid-template-columns:.9fr 1.1fr;gap:56px;align-items:center;margin-top:60px}
+.fp-vis{position:relative;aspect-ratio:1;max-width:420px;width:100%;margin:0 auto}
+.fp-vis svg{width:100%;height:100%;overflow:visible}
+.fp-vis .ring{position:absolute;inset:-6%;border-radius:50%;border:1px dashed rgba(45,226,230,.25);animation:spin 40s linear infinite}
+.fp-vis .ring.r2{inset:6%;border-style:solid;border-color:rgba(22,194,100,.12);animation-duration:24s;animation-direction:reverse}
+@keyframes spin{to{transform:rotate(360deg)}}
+.fp-scan{position:absolute;left:4%;right:4%;height:3px;border-radius:3px;background:linear-gradient(90deg,transparent,var(--c),transparent);box-shadow:0 0 24px 4px rgba(45,226,230,.6);animation:scan 4.5s ease-in-out infinite}
+@keyframes scan{0%,100%{top:8%}50%{top:90%}}
+.fp-label{position:absolute;left:50%;bottom:-6px;transform:translateX(-50%);font-size:12px;letter-spacing:3px;color:var(--g);white-space:nowrap}
+.cmp{border-radius:20px;border:1px solid var(--line);background:var(--card);overflow:hidden}
+.cmp-row{display:grid;grid-template-columns:1.1fr 1fr 1fr;gap:12px;padding:14px 20px;border-top:1px solid var(--line);font-size:13.5px;align-items:center}
+.cmp-row:first-child{border-top:0;font-size:12px;letter-spacing:2px;color:var(--dim);background:rgba(255,255,255,.02)}
+.cmp-row b{font-weight:600}
+.bad{color:#ff8a8a}.bad::before{content:"✕ ";font-weight:800;color:var(--red)}
+.good{color:#9ff0c2;opacity:.25;transition:opacity .5s}.good::before{content:"✓ ";font-weight:800;color:var(--g)}
+.cmp-row.done .good{opacity:1}
+.cmp-row.scan{background:linear-gradient(90deg,rgba(45,226,230,.09),transparent)}
+.feat{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:40px}
+.fc{position:relative;padding:24px;border-radius:20px;background:var(--card);border:1px solid var(--line);overflow:hidden;transition:.35s}
+.fc::after{content:"";position:absolute;inset:0;background:radial-gradient(380px circle at var(--mx,50%) var(--my,0%),rgba(22,194,100,.14),transparent 45%);opacity:0;transition:opacity .3s;pointer-events:none}
+.fc:hover::after{opacity:1}
+.fc:hover{border-color:rgba(22,194,100,.35);transform:translateY(-3px)}
+.fc .ic{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;background:rgba(45,226,230,.1);border:1px solid rgba(45,226,230,.25);font-size:19px}
+.fc h4{margin-top:16px;font-size:16.5px}
+.fc p{margin-top:6px;color:var(--mute);font-size:14px}
+/* routing */
+.modes{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:56px}
+.mode{padding:28px;border-radius:22px;border:1px solid var(--line);background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.01))}
+.mode .tag{display:inline-block;font-size:11.5px;padding:3px 10px;border-radius:999px;border:1px solid rgba(22,194,100,.4);color:#9ff0c2}
+.mode h3{margin-top:14px;font-size:22px}
+.mode p{margin-top:8px;color:var(--mute);font-size:14px}
+.bars{display:flex;align-items:flex-end;gap:5px;height:44px;margin-top:20px}
+.bars i{flex:1;height:100%;border-radius:3px;background:linear-gradient(180deg,var(--c),var(--g2));animation:eq 1.6s ease-in-out infinite;transform-origin:bottom}
+@keyframes eq{0%,100%{transform:scaleY(.3)}50%{transform:scaleY(1)}}
+/* download */
+.dl-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;margin-top:48px}
+.pkg{display:flex;flex-direction:column;padding:24px;border-radius:22px;background:var(--card);border:1px solid var(--line)}
+.pkg h3{display:flex;justify-content:space-between;align-items:baseline;gap:10px;font-size:18px}
+.pkg h3 span{font-size:12px;color:var(--mute);font-weight:500}
+.meta{margin-top:4px;color:var(--dim);font-size:12px}
+.pkg ul{margin:12px 0 0 18px;color:#c3cbc7;font-size:13px;line-height:1.7}
+.pkg .btn{width:100%;margin-top:auto;height:auto;min-height:50px;padding:10px 16px;text-align:center;line-height:1.35}
+.pkg .sp{flex:1;min-height:16px}
+.alt{display:block;margin-top:10px;text-align:center;color:var(--mute);font-size:13px}
+.alt:hover{color:var(--ink)}
+.tip{margin-top:12px;color:var(--dim);font-size:12px;line-height:1.7}
+.disabled{opacity:.4;pointer-events:none}
+.gift{display:flex;align-items:center;gap:22px;flex-wrap:wrap;margin-top:36px;padding:20px 24px;border-radius:20px;border:1px solid rgba(22,194,100,.4);background:linear-gradient(110deg,rgba(22,194,100,.14),rgba(45,226,230,.05))}
+.gift small{color:var(--mute);font-size:12.5px}
+.gift .code{font:800 30px ui-monospace,Menlo,monospace;letter-spacing:6px}
+.gift p{color:#9ff0c2;font-size:14px}
+.notice{margin-top:22px;padding:12px 16px;border-radius:14px;background:rgba(217,130,43,.1);border:1px solid rgba(217,130,43,.38);color:#f3c27a;font-size:13px;line-height:1.7}
+.notice b{color:#ffd59a}
+footer{border-top:1px solid var(--line);padding:36px 0 48px;color:var(--dim);font-size:12.5px;line-height:1.9}
+footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
+#toast{position:fixed;left:50%;bottom:40px;transform:translateX(-50%);background:var(--ink);color:#05070a;padding:10px 18px;border-radius:12px;font-size:14px;opacity:0;transition:.25s;z-index:80;pointer-events:none}
+#wx{display:none;position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.9);color:#fff;font-size:17px;line-height:1.8;text-align:right;padding:24px 28px}
+@media (max-width:900px){
+ .links{display:none}.nav-cta{margin-left:0}.lang{margin-left:auto}
+ .lang summary span{display:none}
+ [dir=rtl] .globe{left:-30vw}
+ .globe{right:-30vw;top:30%;width:110vw;height:110vw}
+ #globe.on,#globe-fx{opacity:.6}
+ .stats{grid-template-columns:repeat(2,auto);gap:22px 40px}
+ .enc,.fp{grid-template-columns:1fr;gap:40px}
+ .stack{height:360px}.layer{top:110px}
+ .feat,.modes{grid-template-columns:1fr}
+ section{padding:84px 0}
+ #tty{font-size:11px;word-break:normal;overflow-x:auto;white-space:pre}
+ .cmp-row{grid-template-columns:1fr 1fr;padding:12px 16px}
+ .cmp-row>b{grid-column:1/-1}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}.reveal{opacity:1;transform:none}}
+
+.lang{position:relative;margin-left:auto;font-size:13px;color:var(--mute)}
+.links+.lang{margin-left:0}
+.lang summary{list-style:none;display:flex;align-items:center;gap:6px;height:34px;padding:0 12px;border-radius:999px;border:1px solid var(--line);cursor:pointer;user-select:none;white-space:nowrap}
+.lang summary::-webkit-details-marker{display:none}
+.lang summary:hover,.lang[open] summary{color:var(--ink);border-color:rgba(255,255,255,.2)}
+.lang-menu{position:absolute;top:42px;inset-inline-end:0;min-width:170px;max-height:60vh;overflow:auto;padding:6px;border-radius:14px;background:rgba(12,16,18,.96);border:1px solid var(--line);box-shadow:0 20px 60px -20px #000;backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px)}
+.lang-menu a{display:block;padding:8px 12px;border-radius:9px;color:#c9d1cd}
+.lang-menu a:hover{background:rgba(255,255,255,.06);color:var(--ink)}
+.lang-menu a.on{color:var(--g);background:rgba(22,194,100,.08)}
+.nav-cta{white-space:nowrap}
+[dir=rtl] .globe{right:auto;left:-6vw}
+[dir=rtl] .grad{background-image:linear-gradient(260deg,#fff 10%,#9ff0c2 45%,var(--c) 75%,#fff 100%)}
+</style>
+</head><body>
+<div class="grid-bg"></div><div class="glow a"></div><div class="glow b"></div>
+
+<nav id="nav"><div class="wrap">
+ <a class="brand" href="#top"><svg viewBox="0 0 100 100"><rect width="100" height="100" rx="27" fill="#15171c" stroke="rgba(255,255,255,.14)"/>
+  <path d="M 74.80 46.87 A 25 25 0 1 1 53.13 25.20" fill="none" stroke="#fff" stroke-width="9.5" stroke-linecap="round"/>
+  <circle cx="67.68" cy="32.32" r="7.5" fill="#12a150"/></svg>{{.Brand}}</a>
+ <div class="links"><a href="#crypto">{{$t.T "加密引擎"}}</a><a href="#fingerprint">{{$t.T "指纹抹除"}}</a><a href="#route">{{$t.T "智能线路"}}</a><a href="#download">{{$t.T "下载"}}</a></div>
+ <details class="lang" id="lang"><summary aria-label="{{$t.T "语言"}}"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg><span>{{.Lang.Name}}</span></summary>
+  <div class="lang-menu">{{range .Langs}}<a href="{{$.Path}}?lang={{.Code}}"{{if eq .Code $.Lang.Code}} class="on"{{end}} lang="{{.Code}}">{{.Name}}</a>{{end}}</div>
+ </details>
+ <a class="nav-cta" href="#download">{{$t.T "立即下载"}}</a>
+</div></nav>
+
+<header class="hero" id="top">
+ <canvas id="globe" class="globe"></canvas><canvas id="globe-fx" class="globe"></canvas>
+ <div class="wrap">
+  <div class="badge"><i></i>{{.Slogan}}</div>
+  <h1 class="title"><span data-scramble>{{$t.T "隐于无形"}}</span><br><span class="grad">{{$t.T "畅游全球"}}</span></h1>
+  <p class="lead">{{$t.T "多层加密隧道 + 自研「幻影」指纹抹除引擎。在网络中，你的连接看起来与访问普通网站毫无二致，不留可被识别的代理特征。"}}</p>
+  <div class="cta"><a class="btn pri" href="#download">{{$t.T "免费下载 →"}}</a><a class="btn sec" href="#fingerprint">{{$t.T "了解指纹抹除"}}</a></div>
+  <div class="term" dir="ltr">
+   <div class="term-h"><i></i><i></i><i></i><span class="mono">huanyou — secure-handshake</span></div>
+   <div id="tty" class="mono"></div>
+  </div>
+  <div class="stats">
+   <div class="stat"><b class="mono">TLS 1.3</b><span>{{$t.T "全程加密传输"}}</span></div>
+   <div class="stat"><b class="mono">X25519</b><span>{{$t.T "每次连接独立密钥"}}</span></div>
+   <div class="stat"><b class="mono">2×</b><span>{{$t.T "双通道自动切换"}}</span></div>
+   <div class="stat"><b class="mono">4</b><span>{{$t.T "全平台客户端"}}</span></div>
+  </div>
+ </div>
+</header>
+
+<div class="marq mono" aria-hidden="true" dir="ltr"><div id="mq"></div></div>
+
+<section id="crypto"><div class="wrap">
+ <div class="reveal"><div class="eyebrow mono">// Encryption Engine</div>
+  <h2 data-scramble>{{$t.T "四层纵深加密"}}</h2>
+  <p class="sub">{{$t.T "从密钥协商到数据传输，每一层都独立防护。即使链路被完整截获，看到的也只是一段无法解读、无法归类的普通 HTTPS 流量。"}}</p></div>
+ <div class="enc">
+  <div class="stack reveal" aria-hidden="true" dir="ltr">
+   <div class="layer"><span class="mono">L1 · YOUR DATA</span></div>
+   <div class="layer"><span class="mono">L2 · X25519 ECDHE</span></div>
+   <div class="layer"><span class="mono">L3 · TLS 1.3 AEAD</span></div>
+   <div class="layer"><span class="mono">L4 · REALITY AUTH</span></div>
+   <div class="core"></div>
+  </div>
+  <div class="steps">
+   <div class="step reveal"><div class="n mono">01</div><div><h4>{{$t.T "椭圆曲线密钥交换"}}</h4><p>{{$t.TC "基于 {0} 的 ECDHE 协商，每条连接都生成全新的会话密钥，具备前向保密：即使未来某把密钥泄露，过去的流量也无法被解密。" "X25519"}}</p></div></div>
+   <div class="step reveal"><div class="n mono">02</div><div><h4>{{$t.T "TLS 1.3 认证加密"}}</h4><p>{{$t.TC "数据以 {0} / {1} AEAD 算法加密，同时校验完整性，任何篡改都会被立即发现并丢弃。" "AES-GCM" "ChaCha20-Poly1305"}}</p></div></div>
+   <div class="step reveal"><div class="n mono">03</div><div><h4>{{$t.T "REALITY 身份认证"}}</h4><p>{{$t.T "只有持有正确公钥与短 ID 的客户端才能接入。其它任何连接都会被原样转交给真实的境外网站，服务器本身对外“隐身”。"}}</p></div></div>
+   <div class="step reveal"><div class="n mono">04</div><div><h4>{{$t.T "端到端，节点不解密"}}</h4><p>{{$t.T "你访问 HTTPS 网站时，内层 TLS 由你的设备与目标网站直接建立，节点只负责转发，无法看到其中内容。"}}</p></div></div>
+  </div>
+ </div>
+</div></section>
+
+<section id="fingerprint"><div class="wrap">
+ <div class="reveal"><div class="eyebrow mono">// Phantom Fingerprint Eraser</div>
+  <h2 data-scramble>{{$t.T "幻影指纹抹除引擎"}}</h2>
+  <p class="sub">{{$t.T "识别代理靠的从来不是“内容”，而是“特征”：握手指纹、证书、包长与时序、探测反应。{0}自研的指纹抹除引擎逐项消除这些特征，让连接回归“普通浏览”。" .Brand}}</p></div>
+ <div class="fp">
+  <div class="fp-vis reveal" aria-hidden="true">
+   <div class="ring"></div><div class="ring r2"></div>
+   <svg viewBox="0 0 200 200" id="fpsvg">
+    <defs><linearGradient id="fg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2de2e6"/><stop offset="1" stop-color="#16c264"/></linearGradient></defs>
+    <g fill="none" stroke="url(#fg)" stroke-width="3.2" stroke-linecap="round" id="fplines">
+     <path d="M60 64a52 52 0 0 1 80 0"/><path d="M48 92a54 54 0 0 1 104-4"/><path d="M52 124a50 50 0 0 1 4-40"/>
+     <path d="M66 140a40 40 0 0 1-6-34a40 40 0 0 1 78-6"/><path d="M144 112a40 40 0 0 1-4 26"/>
+     <path d="M82 152a30 30 0 0 1-10-42a30 30 0 0 1 56 8c2 12-2 24-8 32"/>
+     <path d="M98 160c-6-12-10-22-8-34a12 12 0 0 1 22 2c2 10 4 18 10 26"/>
+     <path d="M100 128c2 14 8 26 16 36"/><path d="M84 36a70 70 0 0 1 32 0"/>
+    </g>
+    <g id="fpdots"></g>
+   </svg>
+   <div class="fp-scan"></div>
+   <div class="fp-label mono" id="fplabel">SCANNING…</div>
+  </div>
+  <div class="cmp reveal" id="cmp">
+   <div class="cmp-row mono"><span>{{$t.T "检测项"}}</span><span>{{$t.T "普通代理"}}</span><span>{{.Brand}}</span></div>
+   <div class="cmp-row"><b>{{$t.T "TLS 握手指纹（JA3 / JA4）"}}</b><span class="bad">{{$t.T "暴露代理程序库"}}</span><span class="good">{{$t.T "与 Chrome 浏览器一致"}}</span></div>
+   <div class="cmp-row"><b>{{$t.T "服务器证书"}}</b><span class="bad">{{$t.T "自签 / 新注册域名"}}</span><span class="good">{{$t.T "真实知名网站证书"}}</span></div>
+   <div class="cmp-row"><b>{{$t.T "TLS 套 TLS 包长时序"}}</b><span class="bad">{{$t.T "特征明显"}}</span><span class="good">{{$t.T "Vision 流控抹平"}}</span></div>
+   <div class="cmp-row"><b>{{$t.T "主动探测反应"}}</b><span class="bad">{{$t.T "异常响应"}}</span><span class="good">{{$t.T "返回真实网站页面"}}</span></div>
+   <div class="cmp-row"><b>{{$t.T "端口特征"}}</b><span class="bad">{{$t.T "非常规端口"}}</span><span class="good">{{$t.T "仅用标准 443"}}</span></div>
+   <div class="cmp-row"><b>{{$t.T "DNS 查询"}}</b><span class="bad">{{$t.T "本地泄漏 / 被污染"}}</span><span class="good">{{$t.T "经隧道远程解析"}}</span></div>
+   <div class="cmp-row"><b>{{$t.T "出口代理头"}}</b><span class="bad">Via / X-Forwarded-For</span><span class="good">{{$t.T "零附加头，原样转发"}}</span></div>
+  </div>
+ </div>
+ <div class="feat">
+  <div class="fc reveal"><div class="ic">🎭</div><h4>{{$t.T "握手拟态"}}</h4><p>{{$t.T "客户端发出的 ClientHello 与 Chrome 浏览器逐字段一致，在指纹库中被归类为“普通浏览器”。"}}</p></div>
+  <div class="fc reveal"><div class="ic">🪞</div><h4>{{$t.T "身份借用"}}</h4><p>{{$t.T "握手时呈现真实知名网站的 SNI 与完整证书链，无自签证书、无需自有域名，不留可追溯的证书指纹。"}}</p></div>
+  <div class="fc reveal"><div class="ic">〰️</div><h4>{{$t.T "流量整形"}}</h4><p>{{$t.T "XTLS-Vision 消除“TLS 套 TLS”的包长与时序规律，这正是大多数代理协议被识别的主要依据。"}}</p></div>
+  <div class="fc reveal"><div class="ic">🛡️</div><h4>{{$t.T "探测反制"}}</h4><p>{{$t.T "面对主动探测，服务器把连接交给真实网站，探测方拿到的是真证书、真页面，无从判断。"}}</p></div>
+  <div class="fc reveal"><div class="ic">🧬</div><h4>{{$t.T "出口净化"}}</h4><p>{{$t.T "节点不做二次 TLS、不改写目标、不添加代理头。目标网站看到的是一次普通直连，而非“经过代理”。"}}</p></div>
+  <div class="fc reveal"><div class="ic">🔀</div><h4>{{$t.T "双形态冗余"}}</h4><p>{{$t.T "主通道之外另备一条 HTTP/2 形态的通道，流量特征完全不同，并共用 443 端口，一条受阻自动切换。"}}</p></div>
+ </div>
+</div></section>
+
+<section id="route"><div class="wrap">
+ <div class="reveal"><div class="eyebrow mono">// Smart Routing</div>
+  <h2 data-scramble>{{$t.T "一键连接，线路自愈"}}</h2>
+  <p class="sub">{{$t.T "客户端每 60 秒探测各条通道，故障自动切换；大陆网站直连不绕路，境外流量走加密隧道。"}}</p></div>
+ <div class="modes">
+  <div class="mode reveal"><span class="tag">{{$t.T "默认"}}</span><h3>{{$t.T "直连模式"}}</h3><p>{{$t.T "连接单个节点，国内直连、境外加密，延迟最低，日常浏览与视频首选。"}}</p><div class="bars"><i style="animation-delay:-.2s"></i><i style="animation-delay:-.9s"></i><i style="animation-delay:-.4s"></i><i style="animation-delay:-1.2s"></i><i style="animation-delay:-.6s"></i><i style="animation-delay:-1s"></i></div></div>
+  <div class="mode reveal"><span class="tag">{{$t.T "高可用"}}</span><h3>{{$t.T "集群模式"}}</h3><p>{{$t.T "所有可用节点组成负载均衡池，自动选最快的一条；任一节点异常，无感切换。"}}</p><div class="bars"><i style="animation-delay:-.7s"></i><i style="animation-delay:-.1s"></i><i style="animation-delay:-1.3s"></i><i style="animation-delay:-.5s"></i><i style="animation-delay:-.8s"></i><i style="animation-delay:-.3s"></i></div></div>
+  <div class="mode reveal"><span class="tag">AI</span><h3>{{$t.T "AI 优先"}}</h3><p>{{$t.T "仅 ChatGPT、Claude、Gemini 等 AI 服务走专线，其余全部直连，从最稳定的节点中自动择优。"}}</p><div class="bars"><i style="animation-delay:-1.1s"></i><i style="animation-delay:-.6s"></i><i style="animation-delay:-.2s"></i><i style="animation-delay:-.9s"></i><i style="animation-delay:-1.4s"></i><i style="animation-delay:-.4s"></i></div></div>
+ </div>
+</div></section>
+
+<section id="download"><div class="wrap">
+ <div class="reveal"><div class="eyebrow mono">// Download</div>
+  <h2 data-scramble>{{$t.T "全平台，即刻启程"}}</h2>
+  <p class="sub">{{$t.T "iPhone、Android、Windows、Mac 一个账号通用，登录后点一下即可连接。"}}</p></div>
+ {{if .Code}}<div class="gift reveal"><div><small>{{$t.T "好友邀请码"}}</small><div class="code" dir="ltr">{{.Code}}</div></div>
+  {{if .InviteeDays}}<p>{{$t.T "安装后首次打开自动领取 {0} 天会员" .InviteeDays}}</p>{{end}}</div>{{end}}
+ <div class="dl-grid">
+  <div class="pkg reveal">
+   <h3>Android{{with .Android}}{{if .Version}}<span dir="ltr">v{{.Version}} ({{.Build}})</span>{{end}}{{end}}</h3>
+   {{with .Android}}<div class="meta">{{if .Date}}{{$t.T "更新于 {0}" .Date}}{{end}}{{if .Size}} · {{.Size}}{{end}}</div>
+    {{if .Notes}}<ul>{{range .Notes}}<li>{{.}}</li>{{end}}</ul>{{end}}
+    <div class="tip">{{$t.T "下载后点击安装包安装；如被拦截，请在系统设置里允许「安装未知应用」。"}}{{if $.Code}}{{$t.T "安装前请保持邀请码已复制，首次打开会自动识别。"}}{{end}}</div>
+    <div class="sp"></div><a class="btn pri" href="{{.URL}}" onclick="cp()">{{$t.T "下载 Android 安装包"}}</a>
+    {{range .Others}}<a class="alt" href="{{.URL}}" onclick="cp()">{{$t.T "下载 {0}" ($t.T .Label)}}{{if .Size}} · {{.Size}}{{end}}</a>{{end}}
+   {{else}}<div class="sp"></div><a class="btn sec disabled">{{$t.T "暂未提供"}}</a>{{end}}
+  </div>
+  <div class="pkg reveal">
+   <h3>iPhone{{with .IOS}}{{if .Version}}<span dir="ltr">v{{.Version}} ({{.Build}})</span>{{end}}{{end}}</h3>
+   {{with .IOS}}<div class="meta">{{if .Date}}{{$t.T "更新于 {0}" .Date}}{{end}}{{if .Size}} · {{.Size}}{{end}}</div>
+    {{if .Notes}}<ul>{{range .Notes}}<li>{{.}}</li>{{end}}</ul>{{end}}
+    <div class="tip">{{$t.T "请用 Safari 打开本页安装；仅已登记设备的测试人员可以安装。安装后如提示「未受信任的开发者」，到 设置 → 通用 → VPN 与设备管理 中信任。"}}</div>
+    <div class="sp"></div><a class="btn sec" href="{{.URL}}" onclick="cp()">{{$t.T "安装 iPhone 版"}}</a>
+   {{else}}<div class="sp"></div><a class="btn sec disabled">{{$t.T "iPhone 版暂未提供"}}</a>{{end}}
+  </div>
+  {{with .Windows}}<div class="pkg reveal">
+   <h3>Windows{{if .Version}}<span dir="ltr">v{{.Version}} ({{.Build}})</span>{{end}}</h3>
+   <div class="meta">{{if .Date}}{{$t.T "更新于 {0}" .Date}}{{end}}{{if .Size}} · {{.Size}}{{end}}</div>
+   {{if .Notes}}<ul>{{range .Notes}}<li>{{.}}</li>{{end}}</ul>{{end}}
+   <div class="tip">{{$t.T "支持 Windows 10 / 11（64 位）。下载后解压，打开文件夹里的 Huanyou.exe；请勿只单独拷出 exe。连接后通过系统代理生效，浏览器和大多数软件无需设置。"}}</div>
+   <div class="sp"></div><a class="btn sec" href="{{.URL}}" onclick="cp()">{{if .Label}}{{$t.T "下载 Windows {0}" ($t.T .Label)}}{{else}}{{$t.T "下载 Windows 版"}}{{end}}</a>
+   {{range .Others}}<a class="alt" href="{{.URL}}" onclick="cp()">{{$t.T "下载 {0}" ($t.T .Label)}}{{if .Size}} · {{.Size}}{{end}}</a>{{end}}
+  </div>{{end}}
+  {{with .Mac}}<div class="pkg reveal">
+   <h3>Mac{{if .Version}}<span dir="ltr">v{{.Version}} ({{.Build}})</span>{{end}}</h3>
+   <div class="meta">{{if .Date}}{{$t.T "更新于 {0}" .Date}}{{end}}{{if .Size}} · {{.Size}}{{end}}</div>
+   {{if .Notes}}<ul>{{range .Notes}}<li>{{.}}</li>{{end}}</ul>{{end}}
+   <div class="tip">{{$t.T "支持 macOS 12 及以上（Apple 芯片和 Intel）。下载后双击打开，把「环游」拖进「应用程序」文件夹。首次打开如提示无法验证开发者，请右键点 App 选「打开」。需要使用管理员账户，连接后通过系统代理生效。"}}</div>
+   <div class="sp"></div><a class="btn sec" href="{{.URL}}" onclick="cp()">{{if .Label}}{{$t.T "下载 Mac {0}" ($t.T .Label)}}{{else}}{{$t.T "下载 Mac 版"}}{{end}}</a>
+   {{range .Others}}<a class="alt" href="{{.URL}}" onclick="cp()">{{$t.T "下载 {0}" ($t.T .Label)}}{{if .Size}} · {{.Size}}{{end}}</a>{{end}}
+  </div>{{end}}
+ </div>
+ <div class="notice"><b>{{$t.T "内部测试应用，不开放公众使用。"}}</b>{{$t.T "本页面及安装包仅供受邀的内部测试人员使用，请勿转发或公开传播。"}}</div>
+</div></section>
+
+<footer><div class="wrap">
+ <div>{{$t.T "{0} 内部测试版 · 仅限受邀测试人员使用，不对外提供服务" .Brand}}<br>{{$t.T "© {0} {1} 测试团队" .Year .Brand}}</div>
+ <div class="mono" dir="ltr">TLS 1.3 · X25519 · REALITY · XTLS-Vision</div>
+</div></footer>
+<div id="toast"></div>
+<div id="wx">{{$t.T "点右上角 ··· "}}<br>{{$t.T "选择「在浏览器打开」"}}<br>{{$t.T "即可下载 ↗"}}</div>
+
+<script>
+var code={{.Code}},app={{.App}},TR={{.JSI}};
+function I(k){return TR[k]||k}
+function cp(){if(!code)return;var t=app+"邀请码 "+code;
+ try{navigator.clipboard.writeText(t)}catch(e){var a=document.createElement("textarea");a.value=t;document.body.appendChild(a);a.select();document.execCommand("copy");a.remove()}
+ var el=document.getElementById("toast");el.textContent=I("邀请码已复制");el.style.opacity=1;setTimeout(function(){el.style.opacity=0},1600)}
+if(/MicroMessenger|QQ\//i.test(navigator.userAgent))document.getElementById("wx").style.display="block";
+if(code||location.pathname==="/download"){setTimeout(function(){document.getElementById("download").scrollIntoView()},60)}
+document.addEventListener("click",function(e){var d=document.getElementById("lang");if(d.open&&!d.contains(e.target))d.open=false});
+
+(function(){
+var reduce=window.matchMedia&&matchMedia("(prefers-reduced-motion: reduce)").matches;
+var nav=document.getElementById("nav");
+function onScroll(){nav.className=scrollY>20?"solid":""}
+addEventListener("scroll",onScroll,{passive:true});onScroll();
+
+/* ---------- scramble ("decrypt") text ---------- */
+var glyphs="01ABCDEF#$%&*+<>/\\=?█▓▒░";
+function scramble(el){
+ if(el.dataset.done)return;el.dataset.done=1;
+ var target=el.textContent,len=target.length,frame=0,total=len*6+14;
+ (function tick(){
+  var out="";
+  for(var i=0;i<len;i++){out+=frame>i*6+10?target[i]:glyphs[Math.floor(Math.random()*glyphs.length)]}
+  el.textContent=out;
+  if(++frame<=total)setTimeout(tick,28);else el.textContent=target;
+ })();
+}
+
+/* ---------- reveal on scroll ---------- */
+var io=new IntersectionObserver(function(es){es.forEach(function(e){
+ if(!e.isIntersecting)return;e.target.classList.add("in");
+ var s=e.target.querySelectorAll("[data-scramble]");for(var i=0;i<s.length;i++)if(!reduce)scramble(s[i]);
+ if(e.target.id==="cmp")runCompare();
+ io.unobserve(e.target)})},{threshold:.15});
+document.querySelectorAll(".reveal").forEach(function(el){io.observe(el)});
+document.querySelectorAll(".hero [data-scramble]").forEach(function(el){if(!reduce)scramble(el)});
+
+/* ---------- card spotlight ---------- */
+document.querySelectorAll(".fc").forEach(function(c){c.addEventListener("pointermove",function(e){
+ var r=c.getBoundingClientRect();c.style.setProperty("--mx",(e.clientX-r.left)+"px");c.style.setProperty("--my",(e.clientY-r.top)+"px")})});
+
+/* ---------- comparison scan ---------- */
+function runCompare(){
+ var rows=document.querySelectorAll("#cmp .cmp-row"),i=1,lab=document.getElementById("fplabel");
+ (function next(){
+  if(i>1)rows[i-1].classList.remove("scan");
+  if(i>=rows.length){lab.textContent="FINGERPRINT · ERASED";lab.style.color="#2de2e6";erase();return}
+  rows[i].classList.add("scan","done");i++;setTimeout(next,reduce?0:420);
+ })();
+}
+
+/* ---------- fingerprint dissolve into particles ---------- */
+function erase(){
+ if(reduce)return;
+ var g=document.getElementById("fpdots"),ps=document.querySelectorAll("#fplines path"),ns="http://www.w3.org/2000/svg",dots=[];
+ ps.forEach(function(p){var L=p.getTotalLength();for(var d=0;d<L;d+=7){var pt=p.getPointAtLength(d),c=document.createElementNS(ns,"circle");
+  c.setAttribute("r","1.6");c.setAttribute("fill",Math.random()<.5?"#2de2e6":"#16c264");g.appendChild(c);
+  dots.push({el:c,x:pt.x,y:pt.y,vx:(Math.random()-.5)*1.2,vy:-Math.random()*1.4-.2,a:1,delay:Math.random()*40})}
+  p.style.transition="opacity 1.2s";p.style.opacity=".08"});
+ var t=0;(function step(){t++;var alive=0;
+  dots.forEach(function(d){if(t<d.delay){d.el.setAttribute("cx",d.x);d.el.setAttribute("cy",d.y);alive++;return}
+   d.x+=d.vx;d.y+=d.vy;d.vy-=.01;d.a-=.008;if(d.a>0)alive++;
+   d.el.setAttribute("cx",d.x.toFixed(1));d.el.setAttribute("cy",d.y.toFixed(1));d.el.setAttribute("opacity",Math.max(0,d.a).toFixed(2))});
+  if(alive)requestAnimationFrame(step);else{g.innerHTML="";setTimeout(function(){ps.forEach(function(p){p.style.opacity="1"});
+   setTimeout(erase,2600)},900)}})();
+}
+
+/* ---------- cipher marquee ---------- */
+var hx="0123456789abcdef",s="";for(var k=0;k<46;k++){var w="";for(var j=0;j<8;j++)w+=hx[Math.floor(Math.random()*16)];s+=w+(k%5===4?"  ▸ AEAD  ":"  ")}
+document.getElementById("mq").textContent=s+s;
+
+/* ---------- handshake terminal ---------- */
+var tty=document.getElementById("tty");
+var script=[
+ ["d","$ "],["w","huanyou connect --mode smart\n"],
+ ["k","→ "],["","ClientHello  fp=chrome  sni=www.apple.com\n"],
+ ["k","→ "],["","key_share    X25519  "],["ok","✓\n"],
+ ["k","→ "],["","REALITY      pubkey ✓  shortId ✓\n"],
+ ["k","→ "],["","TLS 1.3      AEAD session established\n"],
+ ["k","→ "],["","XTLS-Vision  length & timing shaped\n"],
+ ["k","→ "],["","phantom      protocol traits "],["ok","erased\n"],
+ ["ok","● "+I("已连接 · 加密隧道就绪")+"\n"]
+];
+function esc(t){return t.replace(/&/g,"&amp;").replace(/</g,"&lt;")}
+function type(){
+ var html="",si=0,ci=0;
+ if(reduce){script.forEach(function(p){html+='<span class="'+p[0]+'">'+esc(p[1])+"</span>"});tty.innerHTML=html;return}
+ (function t(){
+  if(si>=script.length){tty.innerHTML=html+'<span class="caret"></span>';setTimeout(type,4200);return}
+  var p=script[si];
+  if(ci===0)html+='<span class="'+p[0]+'">';
+  html+=esc(p[1][ci]);ci++;
+  var closing=ci>=p[1].length;
+  tty.innerHTML=html+'</span><span class="caret"></span>';
+  if(closing){html+="</span>";si++;ci=0}
+  setTimeout(t,p[0]==="ok"?18:(p[1][ci-1]==="\n"?260:14+Math.random()*22));
+ })();
+}
+type();
+
+/* ---------- Earth: WebGL textured globe + 2D overlay for links ---------- */
+var cv=document.getElementById("globe-fx"),ctx=cv.getContext("2d"),gcv=document.getElementById("globe"),W,H,R,dpr=Math.min(devicePixelRatio||1,2),gl=null,earth=false,GP={};
+function size(){var r=cv.getBoundingClientRect();W=r.width;H=r.height;cv.width=W*dpr;cv.height=H*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);R=Math.min(W,H)*.38;
+ gcv.width=Math.round(W*dpr);gcv.height=Math.round(H*dpr);if(gl)gl.viewport(0,0,gcv.width,gcv.height)}
+size();addEventListener("resize",size);
+var N=window.innerWidth<700?520:1100,pts=[],gold=Math.PI*(3-Math.sqrt(5));
+for(var i=0;i<N;i++){var y=1-i/(N-1)*2,r=Math.sqrt(1-y*y),th=gold*i;pts.push([Math.cos(th)*r,y,Math.sin(th)*r])}
+function ll(lat,lon){lat*=Math.PI/180;lon*=Math.PI/180;return[Math.cos(lat)*Math.sin(lon),Math.sin(lat),Math.cos(lat)*Math.cos(lon)]}
+var cities=[ll(22.3,114.2),ll(35.7,139.7),ll(1.35,103.8),ll(37.5,127),ll(34,-118.2),ll(51.5,-.1),ll(50.1,8.7),ll(40.7,-74),ll(25,121.5),ll(-33.9,151.2)];
+var links=[[0,1],[0,2],[0,4],[0,5],[0,3],[8,6],[2,9],[1,7],[0,8]].map(function(l){return{a:l[0],b:l[1],t:Math.random()}});
+var rotY=2.05,tilt=.38,mx=0,my=0,emx=0,emy=0;
+addEventListener("pointermove",function(e){mx=(e.clientX/innerWidth-.5);my=(e.clientY/innerHeight-.5)},{passive:true});
+function angA(){return rotY+emx*.6}function angT(){return tilt+emy*.3}
+function proj(p){var a=angA(),cy=Math.cos(a),sy=Math.sin(a),x=p[0]*cy-p[2]*sy,z=p[0]*sy+p[2]*cy;
+ var t=angT(),ct=Math.cos(t),st=Math.sin(t),y=p[1]*ct-z*st;z=p[1]*st+z*ct;return[W/2+x*R,H/2-y*R,z]}
+function slerp(a,b,t,lift){var d=Math.acos(Math.max(-1,Math.min(1,a[0]*b[0]+a[1]*b[1]+a[2]*b[2]))),s=Math.sin(d)||1,
+ k1=Math.sin((1-t)*d)/s,k2=Math.sin(t*d)/s,h=1+lift*Math.sin(Math.PI*t);return[(a[0]*k1+b[0]*k2)*h,(a[1]*k1+b[1]*k2)*h,(a[2]*k1+b[2]*k2)*h]}
+
+/* Sun from the upper left, so the terminator and city lights show on the right limb. */
+var SUN=[-.62,.38,.69];
+function initGL(){
+ try{gl=gcv.getContext("webgl",{premultipliedAlpha:true,alpha:true,antialias:false})||gcv.getContext("experimental-webgl")}catch(e){gl=null}
+ if(!gl)return;
+ var vs="attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}";
+ var fs=["precision highp float;",
+ "uniform sampler2D day,night;uniform vec2 res;uniform float rad,ang,tlt;uniform vec3 sun;",
+ "const float PI=3.14159265;",
+ "void main(){",
+ " vec2 q=(gl_FragCoord.xy-res*.5)/rad;float r2=dot(q,q),r=sqrt(r2);",
+ " vec3 atm=vec3(.32,.72,1.);",
+ " float lit2=clamp(dot(normalize(q+1e-5),normalize(sun.xy))*.5+.5,0.,1.);",
+ " if(r>1.){float h=(r-1.)/.13;if(h>1.){gl_FragColor=vec4(0.);return;}",
+ "  float g=pow(1.-h,2.6)*(.25+.75*lit2);gl_FragColor=vec4(atm*g,g);return;}",
+ " vec3 n=vec3(q,sqrt(1.-r2));",
+ " float ct=cos(tlt),st=sin(tlt),ca=cos(ang),sa=sin(ang);",
+ " float wy=n.y*ct+n.z*st,zp=-n.y*st+n.z*ct;",
+ " float wx=n.x*ca+zp*sa,wz=-n.x*sa+zp*ca;",
+ " float lat=asin(clamp(wy,-1.,1.)),lon=atan(wx,wz);",
+ " vec2 uv=vec2(lon/(2.*PI)+.5,.5-lat/PI);",
+ " vec3 d=texture2D(day,uv).rgb,nt=texture2D(night,uv).rgb;",
+ " float dl=dot(n,normalize(sun));",
+ " float dayF=smoothstep(-.12,.32,dl),nightF=smoothstep(.12,-.22,dl);",
+ " float water=smoothstep(.06,.16,d.b-max(d.r,d.g));",
+ " vec3 col=d*(.06+1.05*dayF);",
+ " col=mix(col,vec3(.018,.07,.16)*(.12+1.05*dayF)+d*.12,water*.85);",
+ " vec3 h=normalize(normalize(sun)+vec3(0.,0.,1.));",
+ " col+=vec3(.75,.85,1.)*pow(max(dot(n,h),0.),160.)*water*.32*dayF;",
+ " float L=max(nt.r-.09,0.)*1.9;",
+ " col+=vec3(1.,.74,.42)*pow(L,1.15)*1.6*nightF;",
+ " float fr=pow(1.-n.z,3.);",
+ " col=mix(col,atm*(.35+.9*dayF),fr*.75);",
+ " col*=1.-smoothstep(.985,1.,r)*.25;",
+ " gl_FragColor=vec4(col,1.);",
+ "}"].join("\n");
+ function sh(t,src){var s=gl.createShader(t);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw gl.getShaderInfoLog(s);return s}
+ try{var pr=gl.createProgram();gl.attachShader(pr,sh(gl.VERTEX_SHADER,vs));gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,fs));gl.linkProgram(pr);
+  if(!gl.getProgramParameter(pr,gl.LINK_STATUS))throw gl.getProgramInfoLog(pr)}catch(e){gl=null;return}
+ gl.useProgram(pr);
+ var b=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
+ var loc=gl.getAttribLocation(pr,"p");gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+ ["res","rad","ang","tlt","sun","day","night"].forEach(function(k){GP[k]=gl.getUniformLocation(pr,k)});
+ gl.uniform1i(GP.day,0);gl.uniform1i(GP.night,1);gl.uniform3fv(GP.sun,SUN);
+ gl.viewport(0,0,gcv.width,gcv.height);
+ var left=2;
+ function tex(unit,src){var t=gl.createTexture(),img=new Image();img.onload=function(){
+   gl.activeTexture(gl.TEXTURE0+unit);gl.bindTexture(gl.TEXTURE_2D,t);
+   gl.texImage2D(gl.TEXTURE_2D,0,gl.RGB,gl.RGB,gl.UNSIGNED_BYTE,img);
+   gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+   gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.REPEAT);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+   if(--left===0){earth=true;gcv.classList.add("on")}};
+  img.onerror=function(){gl=null};img.src=src}
+ tex(0,"/site/earth-day.jpg");tex(1,"/site/earth-night.jpg");
+}
+initGL();
+function drawEarth(){
+ gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);
+ gl.uniform2f(GP.res,gcv.width,gcv.height);gl.uniform1f(GP.rad,R*gcv.width/W);
+ gl.uniform1f(GP.ang,angA());gl.uniform1f(GP.tlt,angT());
+ gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+}
+var visible=true;new IntersectionObserver(function(e){visible=e[0].isIntersecting}).observe(cv);
+function frame(){
+ requestAnimationFrame(frame);if(!visible)return;
+ emx+=(mx-emx)*.05;emy+=(my-emy)*.05;
+ ctx.clearRect(0,0,W,H);
+ if(earth&&gl){drawEarth()}else{
+  var g=ctx.createRadialGradient(W/2,H/2,R*.2,W/2,H/2,R*1.25);g.addColorStop(0,"rgba(22,194,100,.10)");g.addColorStop(1,"rgba(22,194,100,0)");
+  ctx.fillStyle=g;ctx.beginPath();ctx.arc(W/2,H/2,R*1.25,0,7);ctx.fill();
+  for(var i=0;i<pts.length;i++){var q=proj(pts[i]);if(q[2]<-.15)continue;
+   ctx.fillStyle="rgba(150,240,200,"+(.12+.55*Math.max(0,q[2])).toFixed(3)+")";ctx.fillRect(q[0],q[1],1.4,1.4)}
+  ctx.strokeStyle="rgba(45,226,230,.16)";ctx.lineWidth=1;ctx.beginPath();ctx.arc(W/2,H/2,R,0,7);ctx.stroke()}
+ links.forEach(function(l){var A=cities[l.a],B=cities[l.b],prev=null;ctx.lineWidth=1.3;
+  for(var s=0;s<=48;s++){var q=proj(slerp(A,B,s/48,.2));
+   if(prev&&q[2]>0&&prev[2]>0){ctx.strokeStyle="rgba(80,240,230,"+(.25+.5*q[2]).toFixed(2)+")";ctx.beginPath();ctx.moveTo(prev[0],prev[1]);ctx.lineTo(q[0],q[1]);ctx.stroke()}
+   prev=q}
+  if(!reduce)l.t=(l.t+.005)%1;var pk=proj(slerp(A,B,l.t,.2));
+  if(pk[2]>0){ctx.fillStyle="#fff";ctx.shadowColor="#2de2e6";ctx.shadowBlur=14;ctx.beginPath();ctx.arc(pk[0],pk[1],2.4,0,7);ctx.fill();ctx.shadowBlur=0}});
+ var now=Date.now()/1600;
+ cities.forEach(function(c,i){var q=proj(c);if(q[2]<.02)return;ctx.fillStyle=i===0?"#1fe07a":"#7ff6f2";
+  ctx.shadowColor=i===0?"#16c264":"#2de2e6";ctx.shadowBlur=10;ctx.beginPath();ctx.arc(q[0],q[1],i===0?3.6:2.4,0,7);ctx.fill();ctx.shadowBlur=0;
+  var ph=(now+i*.3)%1;ctx.strokeStyle="rgba(31,224,122,"+(.6-ph*.6).toFixed(2)+")";ctx.lineWidth=1.2;ctx.beginPath();ctx.arc(q[0],q[1],3+ph*16,0,7);ctx.stroke()});
+ if(!reduce)rotY-=.0012;
+}
+frame();
+})();
+</script></body></html>

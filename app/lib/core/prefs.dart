@@ -10,7 +10,9 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 class Prefs {
   Prefs._();
 
-  static const _storage = FlutterSecureStorage();
+  // macOS: the login keychain. The data-protection keychain (the default)
+  // needs a keychain-access-groups entitlement, i.e. a provisioned team build.
+  static const _storage = FlutterSecureStorage(mOptions: MacOsOptions(usesDataProtectionKeychain: false));
   static Map<String, String> _m = {};
   static Future<void> _pending = Future.value();
 

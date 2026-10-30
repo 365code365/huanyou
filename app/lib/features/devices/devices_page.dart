@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -323,15 +324,19 @@ class _DevicesPageState extends State<DevicesPage> {
             Text(tr('扫描会员设备上的二维码，或输入它的令牌'), style: TextStyle(fontSize: 13, color: AppColors.sub)),
             const SizedBox(height: 12),
             Row(children: [
-              Expanded(
-                child: FilledButton.icon(
-                  key: const Key('scan-join'),
-                  onPressed: _busy ? null : _scan,
-                  icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
-                  label: Text(tr('扫码绑定')),
+              // Desktop: no QR scanning (mobile_scanner has no Windows
+              // version; Macs often have no usable camera). Token entry only.
+              if (!Platform.isWindows && !Platform.isMacOS) ...[
+                Expanded(
+                  child: FilledButton.icon(
+                    key: const Key('scan-join'),
+                    onPressed: _busy ? null : _scan,
+                    icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
+                    label: Text(tr('扫码绑定')),
+                  ),
                 ),
-              ),
-              const SizedBox(width: 10),
+                const SizedBox(width: 10),
+              ],
               Expanded(
                 child: OutlinedButton.icon(
                   key: const Key('enter-join'),
@@ -373,41 +378,117 @@ class _ScanPage extends StatefulWidget {
 
 class _ScanPageState extends State<_ScanPage> {
   bool _done = false;
+  final _controller = MobileScannerController(detectionSpeed: DetectionSpeed.noDuplicates);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: Colors.black,
+        backgroundColor: Colors.transparent,
         foregroundColor: Colors.white,
-        title: Text(tr('扫描设备令牌'), style: TextStyle(color: Colors.white)),
+        elevation: 0,
+        title: Text(tr('扫描设备令牌'), style: const TextStyle(color: Colors.white)),
+        actions: [
+          ValueListenableBuilder(
+            valueListenable: _controller,
+            builder: (context, state, _) => state.torchState == TorchState.unavailable
+                ? const SizedBox.shrink()
+                : IconButton(
+                    tooltip: tr('手电筒'),
+                    icon: Icon(state.torchState == TorchState.on ? Icons.flash_on_rounded : Icons.flash_off_rounded),
+                    onPressed: _controller.toggleTorch,
+                  ),
+          ),
+        ],
       ),
-      body: Stack(alignment: Alignment.center, children: [
-        MobileScanner(
-          onDetect: (capture) {
-            final v = capture.barcodes.firstOrNull?.rawValue;
-            if (_done || v == null) return;
-            _done = true;
-            Navigator.pop(context, v);
-          },
-          errorBuilder: (context, error) => Center(
-            child: Text(tr('无法打开相机：{0}\n请在系统设置里允许相机权限', [error.errorCode.name]),
-                textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70)),
+      // Full screen camera; the frame is centred on the screen (not on the
+      // camera preview, whose size depends on the device), and only codes
+      // inside it are read.
+      body: LayoutBuilder(builder: (context, c) {
+        final side = (c.biggest.shortestSide * 0.68).clamp(200.0, 300.0);
+        final window = Rect.fromCenter(center: c.biggest.center(Offset.zero), width: side, height: side);
+        return Stack(fit: StackFit.expand, children: [
+          MobileScanner(
+            controller: _controller,
+            fit: BoxFit.cover,
+            scanWindow: window,
+            onDetect: (capture) {
+              final v = capture.barcodes.firstOrNull?.rawValue;
+              if (_done || v == null) return;
+              _done = true;
+              Navigator.pop(context, v);
+            },
+            errorBuilder: (context, error) => Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Text(tr('无法打开相机：{0}\n请在系统设置里允许相机权限', [error.errorCode.name]),
+                    textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70)),
+              ),
+            ),
           ),
-        ),
-        IgnorePointer(
-          child: Container(
-            width: 240,
-            height: 240,
-            decoration: BoxDecoration(border: Border.all(color: Colors.white, width: 2), borderRadius: BorderRadius.circular(20)),
+          IgnorePointer(child: CustomPaint(painter: _ScanMask(window))),
+          Positioned(
+            left: 24,
+            right: 24,
+            top: window.bottom + 28,
+            child: Text(tr('对准会员设备「多设备」页的二维码'),
+                textAlign: TextAlign.center, style: const TextStyle(color: Colors.white, fontSize: 14)),
           ),
-        ),
-        Positioned(
-          bottom: 60,
-          child: Text(tr('对准会员设备「多设备」页的二维码'), style: TextStyle(color: Colors.white70)),
-        ),
-      ]),
+        ]);
+      }),
     );
   }
+}
+
+/// Dims everything outside the scan window and draws its corners.
+class _ScanMask extends CustomPainter {
+  _ScanMask(this.window);
+  final Rect window;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final r = RRect.fromRectAndRadius(window, const Radius.circular(18));
+    canvas.drawPath(
+      Path.combine(PathOperation.difference, Path()..addRect(Offset.zero & size), Path()..addRRect(r)),
+      Paint()..color = Colors.black.withValues(alpha: 0.55),
+    );
+    canvas.drawRRect(r, Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..color = Colors.white.withValues(alpha: 0.35));
+    // Corner brackets.
+    const len = 28.0;
+    final p = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4
+      ..strokeCap = StrokeCap.round
+      ..color = Colors.white;
+    final w = window;
+    for (final (o, dx, dy) in [
+      (w.topLeft, 1.0, 1.0),
+      (w.topRight, -1.0, 1.0),
+      (w.bottomLeft, 1.0, -1.0),
+      (w.bottomRight, -1.0, -1.0),
+    ]) {
+      canvas.drawPath(
+        Path()
+          ..moveTo(o.dx, o.dy + dy * len)
+          ..lineTo(o.dx, o.dy + dy * 10)
+          ..quadraticBezierTo(o.dx, o.dy, o.dx + dx * 10, o.dy)
+          ..lineTo(o.dx + dx * len, o.dy),
+        p,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_ScanMask old) => old.window != window;
 }

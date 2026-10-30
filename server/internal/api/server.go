@@ -82,6 +82,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /download", s.handleLanding)
 	mux.HandleFunc("GET /{$}", s.handleLanding)
 	mux.HandleFunc("GET /robots.txt", s.handleRobots)
+	mux.HandleFunc("GET /site/{name}", s.handleSiteAsset)
 	mux.HandleFunc("GET /dl/{name}", s.handleDownloadFile)
 	mux.HandleFunc("GET /dl/releases/{name}", s.handleReleaseFile)
 	mux.HandleFunc("GET /dl/releases/{id}/manifest.plist", s.handleIOSManifest)

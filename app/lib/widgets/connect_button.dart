@@ -9,7 +9,8 @@ import '../i18n/i18n.dart';
 /// The main power control.
 ///
 /// Idle: a white disc with a hairline track and an ink power glyph.
-/// Connecting: an ink arc sweeps around the track.
+/// Connecting: an ink arc sweeps around the track and the glyph turns into
+/// a stop mark: tapping again cancels the connect.
 /// Connected: the disc fills with signal green and breathes softly.
 class ConnectButton extends StatefulWidget {
   const ConnectButton({super.key, required this.status, required this.onTap, this.size = 200});
@@ -31,6 +32,7 @@ class _ConnectButtonState extends State<ConnectButton> with TickerProviderStateM
 
   bool get _busy => widget.status == VpnStatus.connecting || widget.status == VpnStatus.disconnecting;
   bool get _on => widget.status == VpnStatus.connected;
+  bool get _cancellable => widget.status == VpnStatus.connecting && widget.onTap != null;
 
   @override
   void initState() {
@@ -67,8 +69,10 @@ class _ConnectButtonState extends State<ConnectButton> with TickerProviderStateM
     final outer = s * 1.3;
     return Semantics(
       button: true,
-      label: _on ? tr('断开') : tr('连接'),
-      child: GestureDetector(
+      label: _on ? tr('断开') : (_cancellable ? tr('取消连接') : tr('连接')),
+      child: MouseRegion(
+        cursor: widget.onTap != null ? SystemMouseCursors.click : SystemMouseCursors.basic,
+        child: GestureDetector(
         onTapDown: (_) => setState(() => _pressed = true),
         onTapCancel: () => setState(() => _pressed = false),
         onTapUp: (_) => setState(() => _pressed = false),
@@ -119,10 +123,17 @@ class _ConnectButtonState extends State<ConnectButton> with TickerProviderStateM
                       ],
                     ),
                     child: Center(
-                      child: Icon(
-                        Icons.power_settings_new_rounded,
-                        size: s * 0.34,
-                        color: _on ? Colors.white : (_busy ? AppColors.faint : AppColors.ink),
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 180),
+                        transitionBuilder: (c, a) => FadeTransition(opacity: a, child: ScaleTransition(scale: a, child: c)),
+                        child: _cancellable
+                            ? Icon(Icons.close_rounded, key: const ValueKey('stop'), size: s * 0.30, color: AppColors.ink)
+                            : Icon(
+                                Icons.power_settings_new_rounded,
+                                key: const ValueKey('power'),
+                                size: s * 0.34,
+                                color: _on ? Colors.white : (_busy ? AppColors.faint : AppColors.ink),
+                              ),
                       ),
                     ),
                   ),
@@ -131,6 +142,7 @@ class _ConnectButtonState extends State<ConnectButton> with TickerProviderStateM
             ),
           ),
         ),
+      ),
       ),
     );
   }

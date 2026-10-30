@@ -3,9 +3,11 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 
 import '../i18n/i18n.dart';
 import 'config.dart';
+import 'prefs.dart';
 
 class ApiException implements Exception {
   ApiException(this.status, this.code, this.message);
@@ -358,7 +360,7 @@ class ApiClient {
   ApiClient({List<Uri>? baseUrls}) : _bases = baseUrls ?? AppConfig.apiBaseUrls;
 
   final List<Uri> _bases;
-  final http.Client _http = http.Client();
+  final http.Client _http = IOClient(_ApiConnections.client());
   int _preferred = 0; // index of the last base URL that worked
   String? token;
 
@@ -488,8 +490,13 @@ class ApiClient {
   Future<Map<String, dynamic>> _send(String method, String path,
       {Map<String, dynamic>? body, Map<String, String>? query}) async {
     Object? lastError;
-    for (var i = 0; i < _bases.length; i++) {
+    // With a single API URL, one quick retry: a kept-alive connection can
+    // die when the network changes (e.g. the VPN coming up).
+    final tries = _bases.length < 2 ? 2 : _bases.length;
+    for (var i = 0; i < tries; i++) {
       final idx = (_preferred + i) % _bases.length;
+      // Same URL again only for reads (a POST may have reached the server).
+      if (i > 0 && _bases.length < 2 && (lastError is TimeoutException || method != 'GET')) break;
       final uri = _bases[idx].replace(path: path, queryParameters: query);
       try {
         final req = http.Request(method, uri)
@@ -522,5 +529,92 @@ class ApiClient {
       }
     }
     throw ApiException(0, 'network', tr('无法连接服务器，请检查网络 ({0})', [lastError]));
+  }
+}
+
+/// Connections to the API.
+///
+/// While a VPN is up, the system resolver can be slow or time out for the
+/// app (Android routes the lookup around the tunnel, some ROMs stall on it),
+/// and every new connection paid for that. So the API host's address is
+/// cached (memory + disk) and refreshed in the background, connections are
+/// made to the cached IP (TLS still verifies the host name), and idle
+/// connections are kept longer so most requests reuse one.
+class _ApiConnections {
+  static const _prefsKey = 'api_dns';
+  static const _fresh = Duration(minutes: 10);
+  static final Map<String, (List<InternetAddress>, DateTime)> _cache = {};
+  static final Map<String, Future<List<InternetAddress>>> _inflight = {};
+
+  static HttpClient client() {
+    final c = HttpClient()
+      ..idleTimeout = const Duration(seconds: 90)
+      ..connectionTimeout = const Duration(seconds: 8);
+    c.connectionFactory = (Uri uri, String? proxyHost, int? proxyPort) async {
+      final port = uri.hasPort ? uri.port : (uri.scheme == 'https' ? 443 : 80);
+      Future<Socket> open() async {
+        Object? last;
+        final tried = <String>{};
+        // Cached addresses first; if none answers (the server moved), a
+        // fresh lookup and once more.
+        for (final fresh in [false, true]) {
+          final addrs = fresh ? await _lookup(uri.host) : await _resolve(uri.host);
+          for (final a in addrs.take(3)) {
+            if (!tried.add(a.address)) continue;
+            try {
+              final s = await Socket.connect(a, port, timeout: const Duration(seconds: 6));
+              if (uri.scheme != 'https') return s;
+              return await SecureSocket.secure(s, host: uri.host);
+            } on SocketException catch (e) {
+              last = e;
+            }
+          }
+          if (InternetAddress.tryParse(uri.host) != null) break;
+        }
+        throw last ?? SocketException('no address for ${uri.host}');
+      }
+
+      return ConnectionTask.fromSocket(open(), () {});
+    };
+    return c;
+  }
+
+  static Future<List<InternetAddress>> _resolve(String host) async {
+    final ip = InternetAddress.tryParse(host);
+    if (ip != null) return [ip];
+    final hit = _cache[host] ?? _load(host);
+    if (hit != null) {
+      // Stale: use it now, refresh in the background.
+      if (DateTime.now().difference(hit.$2) > _fresh) unawaited(_lookup(host).catchError((_) => hit.$1));
+      return hit.$1;
+    }
+    return _lookup(host);
+  }
+
+  static Future<List<InternetAddress>> _lookup(String host) =>
+      _inflight[host] ??= InternetAddress.lookup(host, type: InternetAddressType.IPv4)
+          .timeout(const Duration(seconds: 5))
+          .then((list) {
+        if (list.isEmpty) throw SocketException('no address for $host');
+        _cache[host] = (list, DateTime.now());
+        _save();
+        return list;
+      }).whenComplete(() => _inflight.remove(host));
+
+  static (List<InternetAddress>, DateTime)? _load(String host) {
+    try {
+      final m = jsonDecode(Prefs.get(_prefsKey) ?? '{}') as Map<String, dynamic>;
+      final ips = (m[host] as List<dynamic>?)?.map((e) => InternetAddress(e as String)).toList();
+      if (ips == null || ips.isEmpty) return null;
+      // From disk: usable right away, but refreshed on first use.
+      return _cache[host] = (ips, DateTime.fromMillisecondsSinceEpoch(0));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static void _save() {
+    final m = {for (final e in _cache.entries) e.key: [for (final a in e.value.$1) a.address]};
+    unawaited(Prefs.set(_prefsKey, jsonEncode(m)));
   }
 }

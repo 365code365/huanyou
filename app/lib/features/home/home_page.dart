@@ -57,7 +57,8 @@ class _HomePageState extends State<HomePage> {
                       key: const Key('connect-button'),
                       status: app.status,
                       size: btn,
-                      onTap: app.busy ? null : () => _handle(app.toggle()),
+                      // Also active while connecting: a second tap cancels.
+                      onTap: app.status == VpnStatus.disconnecting ? null : () => _handle(app.toggle()),
                     ),
                   ),
                   if (app.message != null) ...[
@@ -183,7 +184,7 @@ class _Headline extends StatelessWidget {
     final (title, color) = switch (app.status) {
       VpnStatus.connected => (tr('已保护'), AppColors.signal),
       VpnStatus.connecting => (tr('连接中'), AppColors.ink),
-      VpnStatus.disconnecting => (tr('断开中'), AppColors.sub),
+      VpnStatus.disconnecting => (app.cancelling ? tr('正在取消') : tr('断开中'), AppColors.sub),
       VpnStatus.error => (tr('连接失败'), AppColors.danger),
       VpnStatus.disconnected => (tr('未连接'), AppColors.ink),
     };
@@ -208,6 +209,14 @@ class _Headline extends StatelessWidget {
       const SizedBox(height: 6),
       if (app.status == VpnStatus.connected && app.connectedAt != null)
         _Elapsed(since: app.connectedAt!, style: subStyle)
+      else if (app.canCancel)
+        Text.rich(
+            TextSpan(children: [
+              TextSpan(text: sub),
+              const TextSpan(text: '  ·  '),
+              TextSpan(text: tr('再次点按可取消'), style: subStyle.copyWith(color: AppColors.faint)),
+            ]),
+            style: subStyle)
       else
         Text(sub, style: subStyle),
     ]);
@@ -253,7 +262,7 @@ class _NodeRow extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         key: const Key('node-card'),
-        onTap: app.busy ? null : onTap,
+        onTap: app.status == VpnStatus.disconnecting ? null : onTap,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           child: Row(children: [
@@ -358,7 +367,7 @@ class _ModeSegments extends StatelessWidget {
                   child: InkWell(
                     key: Key('mode-${m.id}'),
                     borderRadius: BorderRadius.circular(10),
-                    onTap: app.busy ? null : () => onChanged(m),
+                    onTap: app.status == VpnStatus.disconnecting ? null : () => onChanged(m),
                     child: Center(
                       child: Text(m.label,
                           style: TextStyle(

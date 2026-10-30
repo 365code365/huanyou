@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- No sandbox: the app starts the bundled VPN core (huanyou-core) and the
+	     core changes the system proxy with networksetup. Distribute with a
+	     Developer ID signature, not through the Mac App Store. -->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+	<!-- Unsigned (ad-hoc) builds: every framework has its own ad-hoc identity,
+	     and the hardened runtime's library validation would refuse to load
+	     them ("different Team IDs"), so the app crashed at launch. -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>
