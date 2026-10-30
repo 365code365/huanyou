@@ -4,6 +4,7 @@ import '../../core/api.dart';
 import '../../core/format.dart';
 import '../../state/app_scope.dart';
 import '../../theme/app_theme.dart';
+import '../../i18n/i18n.dart';
 
 class OrdersPage extends StatefulWidget {
   const OrdersPage({super.key});
@@ -20,7 +21,7 @@ class _OrdersPageState extends State<OrdersPage> {
   void initState() {
     super.initState();
     AppScope.read(context).api.orders().then((o) => setState(() => _orders = o)).catchError((Object e) {
-      setState(() => _error = e is ApiException ? e.message : '加载失败');
+      setState(() => _error = e is ApiException ? e.message : tr('加载失败'));
     });
   }
 
@@ -28,13 +29,13 @@ class _OrdersPageState extends State<OrdersPage> {
   Widget build(BuildContext context) {
     final orders = _orders;
     return Scaffold(
-      appBar: AppBar(title: const Text('购买记录')),
+      appBar: AppBar(title: Text(tr('购买记录'))),
       body: _error != null
           ? Center(child: Text(_error!))
           : orders == null
               ? const Center(child: CircularProgressIndicator())
               : orders.isEmpty
-                  ? const Center(child: Text('暂无购买记录', style: TextStyle(color: AppColors.sub)))
+                  ? Center(child: Text(tr('暂无购买记录'), style: TextStyle(color: AppColors.sub)))
                   : ListView.separated(
                       padding: const EdgeInsets.all(16),
                       itemCount: orders.length,
@@ -51,7 +52,7 @@ class _OrdersPageState extends State<OrdersPage> {
                             title: Text('${o.planId} · ${formatYuan(o.amountCents)}',
                                 key: Key('order-${o.id}'), style: const TextStyle(fontWeight: FontWeight.w600)),
                             subtitle: Text('${formatDate(o.paidAt ?? o.createdAt)}  ${o.id}',
-                                style: const TextStyle(fontSize: 12, color: AppColors.sub)),
+                                style: TextStyle(fontSize: 12, color: AppColors.sub)),
                           ),
                         );
                       },

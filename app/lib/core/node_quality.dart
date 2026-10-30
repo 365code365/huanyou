@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'api.dart';
+import '../i18n/i18n.dart';
 
 /// Quality of one node as seen from this device.
 class NodeQuality {
@@ -24,8 +25,9 @@ enum QualityLevel {
   down('不可用', 0),
   unknown('待测', 0);
 
-  const QualityLevel(this.label, this.bars);
-  final String label;
+  const QualityLevel(this._label, this.bars);
+  final String _label;
+  String get label => tr(_label);
   final int bars; // signal bars, 0..4
 }
 
@@ -56,7 +58,7 @@ class NodeScore {
     return QualityLevel.poor;
   }
 
-  String get loadLabel => node.load <= 5 ? '空闲' : node.load <= 30 ? '适中' : '繁忙';
+  String get loadLabel => node.load <= 5 ? tr('空闲') : node.load <= 30 ? tr('适中') : tr('繁忙');
 }
 
 /// Measures TCP connect latency to each node directly from this device. The

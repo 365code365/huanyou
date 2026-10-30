@@ -72,6 +72,15 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	a("PATCH /admin/api/releases/{id}", s.adminPatchRelease)
 	a("DELETE /admin/api/releases/{id}", s.adminDeleteRelease)
 
+	a("GET /admin/api/i18n", s.adminListLanguages)
+	a("GET /admin/api/i18n/base", s.adminI18nBase)
+	a("POST /admin/api/i18n/parse", s.adminParsePack)
+	a("POST /admin/api/i18n/translate", s.adminTranslate)
+	a("PUT /admin/api/i18n/ai", s.adminPutAIConfig)
+	a("GET /admin/api/i18n/{code}", s.adminGetLanguage)
+	a("PUT /admin/api/i18n/{code}", s.adminPutLanguage)
+	a("DELETE /admin/api/i18n/{code}", s.adminDeleteLanguage)
+
 	a("GET /admin/api/backup/info", s.adminBackupInfo)
 	a("POST /admin/api/backup", s.adminBackup)
 	a("POST /admin/api/backup/restore", s.adminRestore)

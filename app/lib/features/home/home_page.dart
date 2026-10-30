@@ -14,6 +14,7 @@ import '../../widgets/connect_button.dart';
 import '../../widgets/region_flag.dart';
 import '../nodes/node_list_page.dart';
 import '../plans/plans_page.dart';
+import '../../i18n/i18n.dart';
 
 /// Home tab: status headline, power button, current node, connection mode.
 class HomePage extends StatefulWidget {
@@ -105,14 +106,14 @@ class _TopBar extends StatelessWidget {
     final e = app.user?.entitlement;
     final String chip;
     if (e == null) {
-      chip = app.loadFailed ? '重试' : '加载中';
+      chip = app.loadFailed ? tr('重试') : tr('加载中');
     } else if (!e.canConnect) {
-      chip = '去开通';
+      chip = tr('去开通');
     } else if (e.paid && e.expiresAt != null) {
       final days = e.expiresAt!.difference(DateTime.now()).inDays;
-      chip = '${e.planName} · ${days < 0 ? 0 : days} 天';
+      chip = tr('{0} · {1} 天', [e.planName, days < 0 ? 0 : days]);
     } else if (e.quotaBytes > 0) {
-      chip = '免费 · 剩 ${formatBytes((e.quotaBytes - e.usedBytes).clamp(0, e.quotaBytes))}';
+      chip = tr('免费 · 剩 {0}', [formatBytes((e.quotaBytes - e.usedBytes).clamp(0, e.quotaBytes))]);
     } else {
       chip = e.planName;
     }
@@ -166,17 +167,17 @@ class _Headline extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (title, color) = switch (app.status) {
-      VpnStatus.connected => ('已保护', AppColors.signal),
-      VpnStatus.connecting => ('连接中', AppColors.ink),
-      VpnStatus.disconnecting => ('断开中', AppColors.sub),
-      VpnStatus.error => ('连接失败', AppColors.danger),
-      VpnStatus.disconnected => ('未连接', AppColors.ink),
+      VpnStatus.connected => (tr('已保护'), AppColors.signal),
+      VpnStatus.connecting => (tr('连接中'), AppColors.ink),
+      VpnStatus.disconnecting => (tr('断开中'), AppColors.sub),
+      VpnStatus.error => (tr('连接失败'), AppColors.danger),
+      VpnStatus.disconnected => (tr('未连接'), AppColors.ink),
     };
     final sub = switch (app.status) {
-      VpnStatus.connected => '已连接 ${_elapsed()}',
-      VpnStatus.connecting => app.statusHint ?? '正在建立加密通道…',
+      VpnStatus.connected => tr('已连接 {0}', [_elapsed()]),
+      VpnStatus.connecting => app.statusHint ?? tr('正在建立加密通道…'),
       VpnStatus.disconnecting => ' ',
-      _ => '轻点下方按钮开始',
+      _ => tr('轻点下方按钮开始'),
     };
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       AnimatedSwitcher(
@@ -187,7 +188,7 @@ class _Headline extends StatelessWidget {
       ),
       const SizedBox(height: 6),
       Text(sub,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 14,
             color: AppColors.sub,
             fontFeatures: [FontFeature.tabularFigures()],
@@ -241,8 +242,8 @@ class _NodeRow extends StatelessWidget {
               Container(
                 width: 40,
                 height: 40,
-                decoration: const BoxDecoration(color: AppColors.sunken, shape: BoxShape.circle),
-                child: const Icon(Icons.hub_rounded, color: AppColors.ink, size: 20),
+                decoration: BoxDecoration(color: AppColors.sunken, shape: BoxShape.circle),
+                child: Icon(Icons.hub_rounded, color: AppColors.ink, size: 20),
               )
             else
               RegionFlag(n?.region ?? '', size: 40),
@@ -255,13 +256,13 @@ class _NodeRow extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 2),
-                Text(cluster ? '${app.nodes.where((x) => x.online).length} 个节点自动切换' : '轻点切换节点',
-                    style: const TextStyle(fontSize: 12.5, color: AppColors.sub)),
+                Text(cluster ? tr('{0} 个节点自动切换', [app.nodes.where((x) => x.online).length]) : tr('轻点切换节点'),
+                    style: TextStyle(fontSize: 12.5, color: AppColors.sub)),
               ]),
             ),
             if (!cluster && n != null) _QualityBadge(score: app.scoreOf(n)),
             const SizedBox(width: 4),
-            const Icon(Icons.chevron_right_rounded, color: AppColors.faint),
+            Icon(Icons.chevron_right_rounded, color: AppColors.faint),
           ]),
         ),
       ),
@@ -286,7 +287,7 @@ class _QualityBadge extends StatelessWidget {
     return Row(mainAxisSize: MainAxisSize.min, children: [
       Container(width: 7, height: 7, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
       const SizedBox(width: 5),
-      Text(ms != null ? '${level.label} ${ms}ms' : (score.node.online ? '在线' : '维护中'),
+      Text(ms != null ? '${level.label} ${ms}ms' : (score.node.online ? tr('在线') : tr('维护中')),
           style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w600)),
     ]);
   }
@@ -322,7 +323,7 @@ class _ModeSegments extends StatelessWidget {
                   color: AppColors.surface,
                   borderRadius: BorderRadius.circular(10),
                   boxShadow: [
-                    BoxShadow(color: AppColors.ink.withValues(alpha: 0.08), blurRadius: 6, offset: const Offset(0, 2)),
+                    BoxShadow(color: AppColors.shadow.withValues(alpha: 0.08), blurRadius: 6, offset: const Offset(0, 2)),
                   ],
                 ),
               ),
@@ -354,7 +355,7 @@ class _ModeSegments extends StatelessWidget {
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 180),
           child: Text(app.mode.hint,
-              key: ValueKey(app.mode), style: const TextStyle(fontSize: 12.5, color: AppColors.sub)),
+              key: ValueKey(app.mode), style: TextStyle(fontSize: 12.5, color: AppColors.sub)),
         ),
       ),
     ]);

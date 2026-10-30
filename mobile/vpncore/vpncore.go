@@ -21,9 +21,8 @@ import (
 
 	"github.com/xtls/xray-core/common/platform"
 	core "github.com/xtls/xray-core/core"
-	"google.golang.org/protobuf/proto"
 	"github.com/xtls/xray-core/transport/internet"
-
+	"google.golang.org/protobuf/proto"
 )
 
 // Protector excludes a socket from the VPN so Xray's own connections to the

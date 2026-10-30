@@ -9,6 +9,7 @@ import '../core/device.dart';
 import '../core/node_quality.dart';
 import '../core/session.dart';
 import '../core/vpn.dart';
+import '../i18n/i18n.dart';
 
 /// Connection modes offered in the app (must match server profile modes).
 enum ConnectMode {
@@ -16,10 +17,12 @@ enum ConnectMode {
   cluster('cluster', '集群', '多个节点自动择优，断线自动切换'),
   ai('ai', 'AI', '只有 ChatGPT、Claude 等 AI 服务走代理');
 
-  const ConnectMode(this.id, this.label, this.hint);
+  const ConnectMode(this.id, this._label, this._hint);
   final String id;
-  final String label;
-  final String hint;
+  final String _label;
+  final String _hint;
+  String get label => tr(_label);
+  String get hint => tr(_hint);
 
   static ConnectMode parse(String s) => values.firstWhere((m) => m.id == s, orElse: () => direct);
 }
@@ -174,7 +177,7 @@ class AppController extends ChangeNotifier {
     } on ApiException catch (e) {
       loggedIn = false;
       loadFailed = true;
-      message = e.code == 'network' ? '网络连接失败，正在重试…' : e.message;
+      message = e.code == 'network' ? tr('网络连接失败，正在重试…') : e.message;
       notifyListeners();
       _retryTimer?.cancel();
       final secs = min(30, 2 << min(_retryAttempt, 4));
@@ -198,7 +201,7 @@ class AppController extends ChangeNotifier {
     final prev = status;
     status = e.$1;
     statusHint = e.$1 == VpnStatus.connecting ? e.$2 : null;
-    if (e.$1 == VpnStatus.error) message = e.$2 ?? '连接失败';
+    if (e.$1 == VpnStatus.error) message = e.$2 ?? tr('连接失败');
     if (e.$1 == VpnStatus.connected) {
       message = null;
       connectedAt ??= DateTime.now();
@@ -216,7 +219,7 @@ class AppController extends ChangeNotifier {
       if (e.$2 == 'revoked') {
         // Another VPN app took over or permission was revoked: respect that.
         _wantConnected = false;
-        message = 'VPN 已被系统或其它 VPN 应用断开';
+        message = tr('VPN 已被系统或其它 VPN 应用断开');
       } else {
         _scheduleReconnect();
       }
@@ -242,12 +245,12 @@ class AppController extends ChangeNotifier {
     _reconnectTimer?.cancel();
     if (_reconnectAttempt >= 8) {
       _wantConnected = false;
-      message = '多次重连失败，请检查网络后手动连接';
+      message = tr('多次重连失败，请检查网络后手动连接');
       return;
     }
     final secs = min(60, 3 << _reconnectAttempt);
     _reconnectAttempt++;
-    message = '连接已断开，$secs 秒后自动重连（第 $_reconnectAttempt 次）';
+    message = tr('连接已断开，{0} 秒后自动重连（第 {1} 次）', [secs, _reconnectAttempt]);
     _reconnectTimer = Timer(Duration(seconds: secs), () {
       if (_wantConnected && !active) connect(auto: true);
     });
@@ -317,7 +320,7 @@ class AppController extends ChangeNotifier {
         loadFailed = true;
         _scheduleRetry();
       }
-      if (!quiet) message = e.code == 'network' ? '网络连接失败，正在重试…' : e.message;
+      if (!quiet) message = e.code == 'network' ? tr('网络连接失败，正在重试…') : e.message;
       notifyListeners();
     }
   }
@@ -447,7 +450,7 @@ class AppController extends ChangeNotifier {
       return ConnectResult.failed;
     } on PlatformException catch (e) {
       status = VpnStatus.disconnected;
-      message = e.message ?? '无法启动 VPN';
+      message = e.message ?? tr('无法启动 VPN');
       notifyListeners();
       return ConnectResult.failed;
     }

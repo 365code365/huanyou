@@ -43,7 +43,7 @@ class _MarkPainter extends CustomPainter {
         ..style = PaintingStyle.stroke
         ..strokeWidth = s * 0.095
         ..strokeCap = StrokeCap.round
-        ..color = inverted ? AppColors.ink : Colors.white,
+        ..color = inverted ? AppColors.night : AppColors.onInk,
     );
     canvas.drawCircle(
       c + Offset(math.cos(gapCenter), math.sin(gapCenter)) * r,

@@ -20,13 +20,13 @@ class PrimaryButton extends StatelessWidget {
         style: FilledButton.styleFrom(
           backgroundColor: AppColors.ink,
           disabledBackgroundColor: AppColors.ink.withValues(alpha: loading ? 1 : 0.35),
-          foregroundColor: Colors.white,
-          disabledForegroundColor: Colors.white,
+          foregroundColor: AppColors.onInk,
+          disabledForegroundColor: AppColors.onInk,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.button)),
         ),
         onPressed: enabled ? onPressed : null,
         child: loading
-            ? const SizedBox.square(dimension: 20, child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white))
+            ? SizedBox.square(dimension: 20, child: CircularProgressIndicator(strokeWidth: 2.2, color: AppColors.onInk))
             : Row(mainAxisSize: MainAxisSize.min, children: [
                 if (icon != null) ...[Icon(icon, size: 19), const SizedBox(width: 8)],
                 Text(label, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),

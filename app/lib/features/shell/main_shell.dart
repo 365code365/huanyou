@@ -7,6 +7,7 @@ import '../apps/apps_page.dart';
 import '../home/home_page.dart';
 import '../me/me_page.dart';
 import '../update/update_dialog.dart';
+import '../../i18n/i18n.dart';
 
 /// Bottom-tab shell with the floating liquid-glass bar. To add a tab, append to [_tabs].
 ///
@@ -20,11 +21,11 @@ class MainShell extends StatefulWidget {
 }
 
 class _MainShellState extends State<MainShell> {
-  static final _tabs = <(GlassNavItem, WidgetBuilder)>[
-    (const GlassNavItem(label: '首页', icon: Icons.radio_button_unchecked_rounded, activeIcon: Icons.radio_button_checked_rounded),
+  static List<(GlassNavItem, WidgetBuilder)> get _tabs => [
+    (GlassNavItem(label: tr('首页'), icon: Icons.radio_button_unchecked_rounded, activeIcon: Icons.radio_button_checked_rounded),
         (_) => const HomePage()),
-    (const GlassNavItem(label: '应用', icon: Icons.grid_view_outlined, activeIcon: Icons.grid_view_rounded), (_) => const AppsPage()),
-    (const GlassNavItem(label: '我的', icon: Icons.person_outline_rounded, activeIcon: Icons.person_rounded), (_) => const MePage()),
+    (GlassNavItem(label: tr('应用'), icon: Icons.grid_view_outlined, activeIcon: Icons.grid_view_rounded), (_) => const AppsPage()),
+    (GlassNavItem(label: tr('我的'), icon: Icons.person_outline_rounded, activeIcon: Icons.person_rounded), (_) => const MePage()),
   ];
   int _index = 0;
   final _built = <int>{0}; // build tabs lazily, then keep them alive

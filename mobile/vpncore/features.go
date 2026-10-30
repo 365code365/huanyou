@@ -16,6 +16,9 @@ import (
 	_ "github.com/xtls/xray-core/app/proxyman/inbound"
 	_ "github.com/xtls/xray-core/app/proxyman/outbound"
 	_ "github.com/xtls/xray-core/app/router"
+	// Registers tagged.Dialer, which the observatory uses to probe outbounds.
+	// Without it the leastPing probe dereferences a nil func and crashes.
+	_ "github.com/xtls/xray-core/transport/internet/tagged/taggedimpl"
 
 	// inbound: TUN; outbounds: VLESS to the node, freedom (direct), blackhole, dns
 	_ "github.com/xtls/xray-core/proxy/blackhole"
@@ -31,5 +34,4 @@ import (
 	_ "github.com/xtls/xray-core/transport/internet/tcp"
 	_ "github.com/xtls/xray-core/transport/internet/tls"
 	_ "github.com/xtls/xray-core/transport/internet/udp"
-
 )

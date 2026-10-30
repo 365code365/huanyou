@@ -307,3 +307,33 @@ export type CloneEvent =
   | { type: 'log'; text: string }
   | { type: 'error'; message: string }
   | { type: 'done'; url: string; admin: string; tls: boolean }
+export interface LangPack {
+  code: string
+  name: string
+  native_name: string
+  rtl: boolean
+  enabled: boolean
+  version: number
+  count: number
+  strings?: Record<string, string>
+  updated_at: string
+}
+export interface SuggestedLang {
+  code: string
+  name: string
+  native_name: string
+  rtl: boolean
+  region: string
+}
+export interface AIStatus {
+  ready: boolean
+  base_url: string
+  model: string
+  api_key: string
+}
+export interface LangList {
+  languages: LangPack[]
+  base_count: number
+  suggested: SuggestedLang[]
+  ai: AIStatus
+}

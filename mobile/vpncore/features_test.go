@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	core "github.com/xtls/xray-core/core"
+	"github.com/xtls/xray-core/transport/internet/tagged"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -41,5 +42,13 @@ func TestCompiledProfilesBuild(t *testing.T) {
 		}
 		inst.Close()
 		t.Logf("%s ok (%d bytes)", filepath.Base(f), len(raw))
+	}
+}
+
+// TestHooksRegistered guards against trimming away packages that only
+// register hooks (no config type), which fail at runtime instead of at Start.
+func TestHooksRegistered(t *testing.T) {
+	if tagged.Dialer == nil {
+		t.Fatal("tagged.Dialer is nil: import transport/internet/tagged/taggedimpl (observatory probes crash without it)")
 	}
 }

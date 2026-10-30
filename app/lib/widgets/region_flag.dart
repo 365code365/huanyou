@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
+import '../i18n/i18n.dart';
 
 // ISO 3166-1 alpha-2 codes that have a flag emoji.
 const _iso = 'AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS '
@@ -30,7 +31,7 @@ class RegionFlag extends StatelessWidget {
     return Container(
       width: size,
       height: size,
-      decoration: const BoxDecoration(color: AppColors.sunken, shape: BoxShape.circle),
+      decoration: BoxDecoration(color: AppColors.sunken, shape: BoxShape.circle),
       alignment: Alignment.center,
       child: Text(flagEmoji(region), style: TextStyle(fontSize: size * 0.55)),
     );
@@ -46,9 +47,9 @@ class LatencyBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (color, text) = !online
-        ? (AppColors.danger, '离线')
+        ? (AppColors.danger, tr('离线'))
         : latencyMs <= 0
-            ? (AppColors.success, '在线')
+            ? (AppColors.success, tr('在线'))
             : latencyMs < 150
                 ? (AppColors.success, '${latencyMs}ms')
                 : latencyMs < 300

@@ -1,7 +1,10 @@
 // One function per admin endpoint. Pages import from here, never call fetch directly.
 import { download, http, stream, upload } from './http'
 import type {
+  AIStatus,
   BackupInfo,
+  LangList,
+  LangPack,
   CloneEvent,
   CloneRequest,
   Release,
@@ -100,6 +103,19 @@ export const api = {
     backup: (password: string, include_packages: boolean) => download('/backup', { password, include_packages }, 'huanyou-backup.hybk'),
     restore: (form: FormData, onProgress?: (p: number) => void) => upload<{ ok: boolean; message: string }>('/backup/restore', form, onProgress),
     clone: (body: CloneRequest, onEvent: (e: CloneEvent) => void) => stream('/clone', body, onEvent),
+  },
+
+  i18n: {
+    list: () => http.get<LangList>('/i18n'),
+    base: (code = '', name = '') => http.get<{ keys: string[]; prompt: string }>('/i18n/base', { code, name }),
+    get: (code: string) => http.get<LangPack>(`/i18n/${encodeURIComponent(code)}`),
+    save: (p: Pick<LangPack, 'code' | 'name' | 'native_name' | 'rtl' | 'enabled'> & { strings: Record<string, string> }) =>
+      http.put<{ language: LangPack; placeholder_mismatch: string[] | null }>(`/i18n/${encodeURIComponent(p.code)}`, p),
+    remove: (code: string) => http.del<unknown>(`/i18n/${encodeURIComponent(code)}`),
+    parse: (text: string) => http.post<{ strings: Record<string, string>; placeholder_mismatch: string[] | null }>('/i18n/parse', { text }),
+    translate: (code: string, name: string, keys: string[]) =>
+      http.post<{ strings: Record<string, string> }>('/i18n/translate', { code, name, keys }),
+    saveAI: (c: { base_url: string; model: string; api_key: string }) => http.put<AIStatus>('/i18n/ai', c),
   },
 
   settings: {

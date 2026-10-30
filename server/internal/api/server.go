@@ -80,6 +80,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /dl/releases/{id}/manifest.plist", s.handleIOSManifest)
 	mux.HandleFunc("GET /api/v1/app/update", s.handleAppUpdate)
 	mux.HandleFunc("GET /api/v1/apps", s.handleApps)
+	mux.HandleFunc("GET /api/v1/i18n", s.handleLanguages)
+	mux.HandleFunc("GET /api/v1/i18n/{code}", s.handleLanguagePack)
 	mux.HandleFunc("GET /api/v1/plans", s.handlePlans)
 	mux.HandleFunc("POST /api/v1/orders", s.authed(s.handleCreateOrder))
 	mux.HandleFunc("GET /api/v1/orders", s.authed(s.handleListOrders))

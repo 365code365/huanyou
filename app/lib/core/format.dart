@@ -1,3 +1,4 @@
+import '../i18n/i18n.dart';
 String formatBytes(int b) {
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   var v = b.toDouble();
@@ -10,7 +11,7 @@ String formatBytes(int b) {
 }
 
 String formatSpeed(int kbps) {
-  if (kbps <= 0) return '不限速';
+  if (kbps <= 0) return tr('不限速');
   if (kbps >= 1000) return '${(kbps / 1000).toStringAsFixed(kbps % 1000 == 0 ? 0 : 1)} Mbps';
   return '$kbps kbps';
 }
@@ -21,7 +22,7 @@ String formatDate(DateTime d) =>
     '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
 String formatTraffic(double gb) {
-  if (gb <= 0) return '不限流量';
+  if (gb <= 0) return tr('不限流量');
   if (gb < 1) return '${(gb * 1024).round()} MB';
   return '${gb % 1 == 0 ? gb.toInt() : gb} GB';
 }

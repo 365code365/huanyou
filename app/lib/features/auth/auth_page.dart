@@ -5,6 +5,7 @@ import '../../state/app_scope.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/app_text_field.dart';
 import '../../widgets/primary_button.dart';
+import '../../i18n/i18n.dart';
 
 /// Login and registration on one screen, switched by a segmented toggle.
 class AuthPage extends StatefulWidget {
@@ -74,7 +75,7 @@ class _AuthPageState extends State<AuthPage> {
           Transform.translate(
             offset: const Offset(0, -28),
             child: Container(
-              decoration: const BoxDecoration(
+              decoration: BoxDecoration(
                 color: AppColors.surface,
                 borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
               ),
@@ -85,37 +86,37 @@ class _AuthPageState extends State<AuthPage> {
                   child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                     _ModeSwitch(register: _register, onChanged: _switch),
                     const SizedBox(height: 26),
-                    Text(_register ? '创建账号' : '欢迎回来',
+                    Text(_register ? tr('创建账号') : tr('欢迎回来'),
                         style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700)),
                     const SizedBox(height: 6),
-                    Text(_register ? '注册即送免费流量，填写邀请码还能多得时长' : '登录后一键连接',
-                        style: const TextStyle(color: AppColors.sub, fontSize: 14)),
+                    Text(_register ? tr('注册即送免费流量，填写邀请码还能多得时长') : tr('登录后一键连接'),
+                        style: TextStyle(color: AppColors.sub, fontSize: 14)),
                     const SizedBox(height: 24),
                     AppTextField(
                       fieldKey: const Key('auth-email'),
                       controller: _email,
-                      hint: '邮箱',
+                      hint: tr('邮箱'),
                       icon: Icons.mail_outline_rounded,
                       keyboardType: TextInputType.emailAddress,
                       textInputAction: TextInputAction.next,
                       autofillHints: const [AutofillHints.email],
                       validator: (v) {
                         final s = v?.trim() ?? '';
-                        return RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(s) ? null : '请输入有效的邮箱';
+                        return RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(s) ? null : tr('请输入有效的邮箱');
                       },
                     ),
                     const SizedBox(height: 14),
                     AppTextField(
                       fieldKey: const Key('auth-password'),
                       controller: _password,
-                      hint: _register ? '设置密码（至少 8 位）' : '密码',
+                      hint: _register ? tr('设置密码（至少 8 位）') : tr('密码'),
                       icon: Icons.lock_outline_rounded,
                       password: true,
                       textInputAction: _register ? TextInputAction.next : TextInputAction.done,
                       // No newPassword hint: without an associated domain, iOS "Strong Password"
                       // would silently fill a generated password the user never sees.
                       autofillHints: _register ? null : const [AutofillHints.password],
-                      validator: (v) => (v == null || v.length < 8) ? '密码至少 8 位' : null,
+                      validator: (v) => (v == null || v.length < 8) ? tr('密码至少 8 位') : null,
                       onSubmitted: _register ? null : (_) => _submit(),
                     ),
                     AnimatedSize(
@@ -127,17 +128,17 @@ class _AuthPageState extends State<AuthPage> {
                               AppTextField(
                                 fieldKey: const Key('auth-confirm'),
                                 controller: _confirm,
-                                hint: '确认密码',
+                                hint: tr('确认密码'),
                                 icon: Icons.lock_reset_rounded,
                                 password: true,
                                 textInputAction: TextInputAction.next,
-                                validator: (v) => v != _password.text ? '两次输入的密码不一致' : null,
+                                validator: (v) => v != _password.text ? tr('两次输入的密码不一致') : null,
                               ),
                               const SizedBox(height: 14),
                               AppTextField(
                                 fieldKey: const Key('auth-invite'),
                                 controller: _invite,
-                                hint: '邀请码（选填）',
+                                hint: tr('邀请码（选填）'),
                                 icon: Icons.card_giftcard_rounded,
                                 textCapitalization: TextCapitalization.characters,
                                 textInputAction: TextInputAction.done,
@@ -171,7 +172,7 @@ class _AuthPageState extends State<AuthPage> {
                     ),
                     PrimaryButton(
                       key: const Key('auth-submit'),
-                      label: _register ? '注册并登录' : '登录',
+                      label: _register ? tr('注册并登录') : tr('登录'),
                       loading: _busy,
                       onPressed: _submit,
                     ),
@@ -180,12 +181,12 @@ class _AuthPageState extends State<AuthPage> {
                       child: TextButton(
                         onPressed: _busy ? null : () => _switch(!_register),
                         child: Text.rich(TextSpan(
-                          style: const TextStyle(color: AppColors.sub, fontSize: 14),
+                          style: TextStyle(color: AppColors.sub, fontSize: 14),
                           children: [
-                            TextSpan(text: _register ? '已有账号？' : '还没有账号？'),
+                            TextSpan(text: _register ? tr('已有账号？') : tr('还没有账号？')),
                             TextSpan(
-                              text: _register ? '去登录' : '免费注册',
-                              style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.w600),
+                              text: _register ? tr('去登录') : tr('免费注册'),
+                              style: TextStyle(color: AppColors.primary, fontWeight: FontWeight.w600),
                             ),
                           ],
                         )),
@@ -211,7 +212,7 @@ class _Header extends StatelessWidget {
     return Container(
       width: double.infinity,
       clipBehavior: Clip.hardEdge,
-      decoration: const BoxDecoration(gradient: AppColors.brandGradient),
+      decoration: BoxDecoration(gradient: AppColors.brandGradient),
       child: Stack(children: [
         Positioned(right: -50, top: topPadding - 10, child: _Bubble(size: 190, alpha: 0.10)),
         Positioned(right: 90, bottom: 10, child: _Bubble(size: 90, alpha: 0.08)),
@@ -228,10 +229,10 @@ class _Header extends StatelessWidget {
             child: const Icon(Icons.shield_rounded, color: Colors.white, size: 30),
           ),
           const SizedBox(height: 22),
-          const Text('环游',
+          Text(tr('环游'),
               style: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w700, letterSpacing: 1)),
           const SizedBox(height: 6),
-          Text('加密 · 稳定 · 一键直达全球',
+          Text(tr('加密 · 稳定 · 一键直达全球'),
               style: TextStyle(color: Colors.white.withValues(alpha: 0.85), fontSize: 14)),
           ]),
         ),
@@ -297,7 +298,7 @@ class _ModeSwitch extends StatelessWidget {
             ),
           ),
         ),
-        Row(children: [tab('登录', false), tab('注册', true)]),
+        Row(children: [tab(tr('登录'), false), tab(tr('注册'), true)]),
       ]),
     );
   }

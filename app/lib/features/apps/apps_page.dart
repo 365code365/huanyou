@@ -4,6 +4,7 @@ import '../../core/api.dart';
 import '../../core/open_url.dart';
 import '../../state/app_scope.dart';
 import '../../theme/app_theme.dart';
+import '../../i18n/i18n.dart';
 
 /// "应用" tab: backend-configured recommended apps, grouped by category.
 class AppsPage extends StatefulWidget {
@@ -42,23 +43,23 @@ class _AppsPageState extends State<AppsPage> {
     final apps = _apps;
     final groups = <String, List<AppRec>>{};
     for (final a in apps ?? <AppRec>[]) {
-      groups.putIfAbsent(a.category.isEmpty ? '其他' : a.category, () => []).add(a);
+      groups.putIfAbsent(a.category.isEmpty ? tr('其他') : a.category, () => []).add(a);
     }
     return Scaffold(
-      appBar: AppBar(title: const Text('推荐应用')),
+      appBar: AppBar(title: Text(tr('推荐应用'))),
       body: RefreshIndicator(
         onRefresh: _load,
         child: _error != null && apps == null
             ? ListView(children: [
                 const SizedBox(height: 160),
-                Center(child: Text(_error!, style: const TextStyle(color: AppColors.sub))),
+                Center(child: Text(_error!, style: TextStyle(color: AppColors.sub))),
               ])
             : apps == null
                 ? const Center(child: CircularProgressIndicator())
                 : apps.isEmpty
-                    ? ListView(children: const [
+                    ? ListView(children: [
                         SizedBox(height: 160),
-                        Center(child: Text('暂无推荐', style: TextStyle(color: AppColors.sub))),
+                        Center(child: Text(tr('暂无推荐'), style: TextStyle(color: AppColors.sub))),
                       ])
                     : ListView(
                         padding: EdgeInsets.fromLTRB(16, 4, 16, MediaQuery.paddingOf(context).bottom + 24),
@@ -108,14 +109,14 @@ class _AppCard extends StatelessWidget {
                         width: 42, height: 42, fit: BoxFit.cover, errorBuilder: (ctx, err, st) => _fallback()),
               ),
               const Spacer(),
-              const Icon(Icons.north_east_rounded, size: 18, color: AppColors.faint),
+              Icon(Icons.north_east_rounded, size: 18, color: AppColors.faint),
             ]),
             const Spacer(),
             Text(app.name, maxLines: 1, overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
             const SizedBox(height: 2),
             Text(app.desc.isEmpty ? app.url : app.desc,
-                maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, color: AppColors.sub)),
+                maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: AppColors.sub)),
           ]),
         ),
       ),
@@ -125,7 +126,7 @@ class _AppCard extends StatelessWidget {
   Widget _fallback() => Container(
         width: 42,
         height: 42,
-        decoration: const BoxDecoration(gradient: AppColors.brandGradient),
+        decoration: BoxDecoration(gradient: AppColors.brandGradient),
         alignment: Alignment.center,
         child: Text(app.name.characters.first,
             style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),

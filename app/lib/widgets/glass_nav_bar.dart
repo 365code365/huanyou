@@ -172,8 +172,8 @@ class _GlassCapsule extends StatelessWidget {
       decoration: BoxDecoration(
         borderRadius: radius,
         boxShadow: [
-          BoxShadow(color: AppColors.ink.withValues(alpha: 0.10), blurRadius: 30, offset: const Offset(0, 12)),
-          BoxShadow(color: AppColors.ink.withValues(alpha: 0.05), blurRadius: 6, offset: const Offset(0, 2)),
+          BoxShadow(color: AppColors.shadow.withValues(alpha: 0.10), blurRadius: 30, offset: const Offset(0, 12)),
+          BoxShadow(color: AppColors.shadow.withValues(alpha: 0.05), blurRadius: 6, offset: const Offset(0, 2)),
         ],
       ),
       child: ClipRRect(
@@ -205,7 +205,7 @@ class _Lens extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(r),
             boxShadow: [
-              BoxShadow(color: AppColors.ink.withValues(alpha: pressed ? 0.14 : 0.08), blurRadius: 14, offset: const Offset(0, 4)),
+              BoxShadow(color: AppColors.shadow.withValues(alpha: pressed ? 0.14 : 0.08), blurRadius: 14, offset: const Offset(0, 4)),
             ],
           ),
           child: ClipRRect(
@@ -240,9 +240,13 @@ class _GlassPainter extends CustomPainter {
         ..shader = LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: strong
-              ? [Colors.white.withValues(alpha: 0.72), Colors.white.withValues(alpha: 0.48)]
-              : [Colors.white.withValues(alpha: 0.85), const Color(0xFFF1F0EC).withValues(alpha: 0.75)],
+          colors: AppColors.dark
+              ? (strong
+                  ? [const Color(0xFF2A2D34).withValues(alpha: 0.72), const Color(0xFF1C1E23).withValues(alpha: 0.62)]
+                  : [const Color(0xFF3A3E46).withValues(alpha: 0.85), const Color(0xFF2C2F36).withValues(alpha: 0.78)])
+              : strong
+                  ? [Colors.white.withValues(alpha: 0.72), Colors.white.withValues(alpha: 0.48)]
+                  : [Colors.white.withValues(alpha: 0.85), const Color(0xFFF1F0EC).withValues(alpha: 0.75)],
         ).createShader(rect),
     );
 
@@ -254,7 +258,7 @@ class _GlassPainter extends CustomPainter {
         ..shader = LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Colors.white.withValues(alpha: strong ? 0.55 : 0.7), Colors.white.withValues(alpha: 0)],
+          colors: [Colors.white.withValues(alpha: (strong ? 0.55 : 0.7) * (AppColors.dark ? 0.18 : 1)), Colors.white.withValues(alpha: 0)],
         ).createShader(sheen),
     );
 
@@ -268,8 +272,8 @@ class _GlassPainter extends CustomPainter {
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
           colors: [
-            Colors.white.withValues(alpha: 0.95),
-            Colors.white.withValues(alpha: 0.25),
+            Colors.white.withValues(alpha: AppColors.dark ? 0.22 : 0.95),
+            Colors.white.withValues(alpha: AppColors.dark ? 0.06 : 0.25),
             AppColors.ink.withValues(alpha: strong ? 0.06 : 0.08),
           ],
           stops: const [0, 0.55, 1],
@@ -278,7 +282,7 @@ class _GlassPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_GlassPainter old) => old.radius != radius || old.strong != strong;
+  bool shouldRepaint(_GlassPainter old) => true; // cheap; also repaints on theme switch
 }
 
 class _Tab extends StatelessWidget {

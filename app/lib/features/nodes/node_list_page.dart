@@ -6,6 +6,7 @@ import '../../state/app_controller.dart';
 import '../../state/app_scope.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/region_flag.dart';
+import '../../i18n/i18n.dart';
 
 /// What the user picked on the node page.
 sealed class NodeChoice {
@@ -72,7 +73,7 @@ class _NodeListPageState extends State<NodeListPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('选择节点'),
+        title: Text(tr('选择节点')),
         actions: [
           TextButton.icon(
             key: const Key('probe-nodes'),
@@ -80,7 +81,7 @@ class _NodeListPageState extends State<NodeListPage> {
             icon: app.probing
                 ? const SizedBox.square(dimension: 15, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.speed_rounded, size: 19),
-            label: Text(app.probing ? '测速中' : '测速'),
+            label: Text(app.probing ? tr('测速中') : tr('测速')),
           ),
           const SizedBox(width: 6),
         ],
@@ -96,11 +97,11 @@ class _NodeListPageState extends State<NodeListPage> {
               leading: Container(
                 width: 40,
                 height: 40,
-                decoration: const BoxDecoration(color: AppColors.sunken, shape: BoxShape.circle),
-                child: const Icon(Icons.hub_rounded, color: AppColors.ink, size: 20),
+                decoration: BoxDecoration(color: AppColors.sunken, shape: BoxShape.circle),
+                child: Icon(Icons.hub_rounded, color: AppColors.ink, size: 20),
               ),
-              title: '智能选择',
-              subtitle: '集群模式 · 自动连接最优节点，断线自动切换（$usable/${app.nodes.length} 可用）',
+              title: tr('智能选择'),
+              subtitle: tr('集群模式 · 自动连接最优节点，断线自动切换（{0}/{1} 可用）', [usable, app.nodes.length]),
               selected: cluster,
               onTap: () => Navigator.pop(context, const AutoNodeChoice()),
             ),
@@ -115,15 +116,15 @@ class _NodeListPageState extends State<NodeListPage> {
             Padding(
               padding: const EdgeInsets.fromLTRB(4, 20, 0, 10),
               child: Row(children: [
-                const Text('全部节点', style: TextStyle(color: AppColors.sub, fontSize: 13, fontWeight: FontWeight.w600)),
+                Text(tr('全部节点'), style: TextStyle(color: AppColors.sub, fontSize: 13, fontWeight: FontWeight.w600)),
                 const Spacer(),
                 _SortChips(value: _sort, onChanged: (s) => setState(() => _sort = s)),
               ]),
             ),
             if (app.nodes.isEmpty)
-              const Padding(
+              Padding(
                 padding: EdgeInsets.symmetric(vertical: 60),
-                child: Center(child: Text('暂无可用节点', style: TextStyle(color: AppColors.sub))),
+                child: Center(child: Text(tr('暂无可用节点'), style: TextStyle(color: AppColors.sub))),
               ),
             for (final s in ordered)
               Padding(
@@ -132,7 +133,7 @@ class _NodeListPageState extends State<NodeListPage> {
                   key: Key('node-${s.node.id}'),
                   leading: RegionFlag(s.node.region),
                   title: s.node.name,
-                  badge: best != null && s.node.id == best.node.id && app.nodes.length > 1 ? '推荐' : null,
+                  badge: best != null && s.node.id == best.node.id && app.nodes.length > 1 ? tr('推荐') : null,
                   subtitle: _detail(s, app.probing),
                   trailing: _QualityMeter(level: s.level, measuring: app.probing && s.quality == null),
                   selected: !cluster && s.node.id == app.selectedNode?.id,
@@ -141,10 +142,10 @@ class _NodeListPageState extends State<NodeListPage> {
                 ),
               ),
             if (app.nodes.isNotEmpty)
-              const Padding(
+              Padding(
                 padding: EdgeInsets.fromLTRB(6, 6, 6, 0),
                 child: Text(
-                  '质量综合了本机实测延迟、丢包、近 1 小时稳定性和当前负载。网络环境变化后可点右上角重新测速。',
+                  tr('质量综合了本机实测延迟、丢包、近 1 小时稳定性和当前负载。网络环境变化后可点右上角重新测速。'),
                   style: TextStyle(color: AppColors.faint, fontSize: 12, height: 1.6),
                 ),
               ),
@@ -155,19 +156,19 @@ class _NodeListPageState extends State<NodeListPage> {
   }
 
   String _detail(NodeScore s, bool probing) {
-    if (!s.node.online) return '节点维护中';
+    if (!s.node.online) return tr('节点维护中');
     final q = s.quality;
     final parts = <String>[];
     if (q == null) {
-      parts.add(probing ? '测速中…' : '未测速');
+      parts.add(probing ? tr('测速中…') : tr('未测速'));
     } else if (!q.reachable) {
-      return '当前网络无法连通';
+      return tr('当前网络无法连通');
     } else {
       parts.add('${q.latencyMs}ms');
-      if (q.loss > 0) parts.add('丢包 ${(q.loss * 100).round()}%');
+      if (q.loss > 0) parts.add(tr('丢包 {0}%', [(q.loss * 100).round()]));
     }
-    parts.add('稳定 ${(s.node.uptime * 100).round()}%');
-    parts.add('负载${s.loadLabel}');
+    parts.add(tr('稳定 {0}%', [(s.node.uptime * 100).round()]));
+    parts.add(tr('负载{0}', [s.loadLabel]));
     return parts.join(' · ');
   }
 }
@@ -195,16 +196,16 @@ class _BestBanner extends StatelessWidget {
             Expanded(
               child: Text.rich(
                 TextSpan(children: [
-                  const TextSpan(text: '当前最优：'),
+                  TextSpan(text: tr('当前最优：')),
                   TextSpan(text: '${flagEmoji(score.node.region)} ${score.node.name}', style: const TextStyle(fontWeight: FontWeight.w700)),
                   TextSpan(text: '  ${score.quality!.latencyMs}ms'),
                 ]),
-                style: const TextStyle(fontSize: 13.5, color: AppColors.ink),
+                style: TextStyle(fontSize: 13.5, color: AppColors.ink),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
             ),
-            Text(current ? '使用中' : '切换',
+            Text(current ? tr('使用中') : tr('切换'),
                 style: const TextStyle(fontSize: 13, color: AppColors.signal, fontWeight: FontWeight.w700)),
           ]),
         ),
@@ -220,7 +221,7 @@ class _SortChips extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const labels = {_Sort.quality: '推荐', _Sort.latency: '延迟', _Sort.region: '地区'};
+    final labels = {_Sort.quality: tr('推荐'), _Sort.latency: tr('延迟'), _Sort.region: tr('地区')};
     return Container(
       padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(color: AppColors.sunken, borderRadius: BorderRadius.circular(10)),
@@ -348,7 +349,7 @@ class _NodeTile extends StatelessWidget {
                     Text(subtitle,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 12, color: AppColors.sub)),
+                        style: TextStyle(fontSize: 12, color: AppColors.sub)),
                   ]),
                 ),
                 if (trailing != null) ...[const SizedBox(width: 8), trailing!, const SizedBox(width: 10)],
@@ -389,8 +390,8 @@ Future<ConnectResult?> pickNodeAndConnect(BuildContext context) async {
 
 /// Kept for callers that only need a label for the current selection.
 String nodeLabel(AppController app) {
-  if (app.mode == ConnectMode.cluster) return '智能选择';
+  if (app.mode == ConnectMode.cluster) return tr('智能选择');
   final Node? n = app.selectedNode;
   if (n != null) return n.name;
-  return app.loadFailed ? '加载失败，点击重试' : (app.user == null ? '加载中…' : '暂无节点');
+  return app.loadFailed ? tr('加载失败，点击重试') : (app.user == null ? tr('加载中…') : tr('暂无节点'));
 }

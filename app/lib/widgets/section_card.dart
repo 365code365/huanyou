@@ -65,8 +65,8 @@ class MenuRow extends StatelessWidget {
             child: Text(title,
                 style: TextStyle(fontSize: 15, color: danger ? AppColors.danger : AppColors.ink)),
           ),
-          if (value != null) Text(value!, style: const TextStyle(color: AppColors.sub, fontSize: 13)),
-          if (!danger) const Icon(Icons.chevron_right_rounded, color: AppColors.faint),
+          if (value != null) Text(value!, style: TextStyle(color: AppColors.sub, fontSize: 13)),
+          if (!danger) Icon(Icons.chevron_right_rounded, color: AppColors.faint),
         ]),
       ),
     );

@@ -11,6 +11,7 @@ import '../../core/config.dart';
 import '../../state/app_scope.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/brand_mark.dart';
+import '../../i18n/i18n.dart';
 
 /// Invite page: share poster (QR + code) that can be saved to the album,
 /// copyable download link, invite stats, and entering a friend's code.
@@ -55,7 +56,7 @@ class _ReferralPageState extends State<ReferralPage> {
   void _copy(String text, String what) {
     Clipboard.setData(ClipboardData(text: text));
     HapticFeedback.lightImpact();
-    _snack('$what已复制');
+    _snack(tr('{0}已复制', [what]));
   }
 
   /// Renders the poster widget to a PNG and saves it to the photo album.
@@ -63,7 +64,7 @@ class _ReferralPageState extends State<ReferralPage> {
     setState(() => _saving = true);
     try {
       if (!await Gal.hasAccess(toAlbum: true) && !await Gal.requestAccess(toAlbum: true)) {
-        _snack('需要相册权限才能保存');
+        _snack(tr('需要相册权限才能保存'));
         return;
       }
       final boundary = _poster.currentContext!.findRenderObject()! as RenderRepaintBoundary;
@@ -71,11 +72,11 @@ class _ReferralPageState extends State<ReferralPage> {
       final png = await image.toByteData(format: ui.ImageByteFormat.png);
       await Gal.putImageBytes(png!.buffer.asUint8List(), album: AppConfig.appName, name: 'invite_${_ref!.code}');
       HapticFeedback.mediumImpact();
-      _snack('二维码已保存到相册');
+      _snack(tr('二维码已保存到相册'));
     } on GalException catch (e) {
-      _snack('保存失败：${e.type.message}');
+      _snack(tr('保存失败：{0}', [e.type.message]));
     } catch (_) {
-      _snack('保存失败，请重试');
+      _snack(tr('保存失败，请重试'));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -83,7 +84,7 @@ class _ReferralPageState extends State<ReferralPage> {
 
   Future<void> _bind() async {
     final code = _codeInput.text.trim().toUpperCase();
-    if (code.length != 7) return _snack('邀请码是 7 位字母数字');
+    if (code.length != 7) return _snack(tr('邀请码是 7 位字母数字'));
     setState(() => _binding = true);
     try {
       final app = AppScope.read(context);
@@ -91,7 +92,7 @@ class _ReferralPageState extends State<ReferralPage> {
       await app.refreshUser();
       _codeInput.clear();
       FocusManager.instance.primaryFocus?.unfocus();
-      _snack(days > 0 ? '已领取 $days 天会员' : '邀请码已填写');
+      _snack(days > 0 ? tr('已领取 {0} 天会员', [days]) : tr('邀请码已填写'));
       await _load();
     } on ApiException catch (e) {
       _snack(e.message);
@@ -104,13 +105,13 @@ class _ReferralPageState extends State<ReferralPage> {
   Widget build(BuildContext context) {
     final r = _ref;
     return Scaffold(
-      appBar: AppBar(title: const Text('邀请好友')),
+      appBar: AppBar(title: Text(tr('邀请好友'))),
       body: _error != null
-          ? Center(child: Text(_error!, style: const TextStyle(color: AppColors.sub)))
+          ? Center(child: Text(_error!, style: TextStyle(color: AppColors.sub)))
           : r == null
               ? const Center(child: CircularProgressIndicator())
               : !r.enabled
-                  ? const Center(child: Text('邀请活动暂未开启', style: TextStyle(color: AppColors.sub)))
+                  ? Center(child: Text(tr('邀请活动暂未开启'), style: TextStyle(color: AppColors.sub)))
                   : ListView(padding: const EdgeInsets.fromLTRB(18, 4, 18, 40), children: [
                       _RewardBanner(ref: r),
                       const SizedBox(height: 16),
@@ -123,7 +124,7 @@ class _ReferralPageState extends State<ReferralPage> {
                           child: _ActionButton(
                             key: const Key('save-qr'),
                             icon: Icons.download_rounded,
-                            label: _saving ? '保存中…' : '保存二维码',
+                            label: _saving ? tr('保存中…') : tr('保存二维码'),
                             primary: true,
                             onTap: _saving || r.inviteUrl.isEmpty ? null : _savePoster,
                           ),
@@ -133,8 +134,8 @@ class _ReferralPageState extends State<ReferralPage> {
                           child: _ActionButton(
                             key: const Key('copy-link'),
                             icon: Icons.link_rounded,
-                            label: '复制下载链接',
-                            onTap: r.shareText.isEmpty ? null : () => _copy(r.shareText, '下载链接'),
+                            label: tr('复制下载链接'),
+                            onTap: r.shareText.isEmpty ? null : () => _copy(r.shareText, tr('下载链接')),
                           ),
                         ),
                       ]),
@@ -143,21 +144,21 @@ class _ReferralPageState extends State<ReferralPage> {
                         clipBehavior: Clip.antiAlias,
                         child: Column(children: [
                           ListTile(
-                            title: const Text('我的邀请码'),
+                            title: Text(tr('我的邀请码')),
                             subtitle: Text(r.code,
                                 key: const Key('ref-code'),
-                                style: const TextStyle(
+                                style: TextStyle(
                                     fontSize: 18, fontWeight: FontWeight.w800, letterSpacing: 3, color: AppColors.ink)),
                             trailing: TextButton.icon(
-                              onPressed: () => _copy(r.code, '邀请码'),
+                              onPressed: () => _copy(r.code, tr('邀请码')),
                               icon: const Icon(Icons.copy_rounded, size: 17),
-                              label: const Text('复制'),
+                              label: Text(tr('复制')),
                             ),
                           ),
                           const Divider(indent: 16),
                           ListTile(
-                            title: const Text('已成功邀请'),
-                            trailing: Text('${r.invitedCount} 人',
+                            title: Text(tr('已成功邀请')),
+                            trailing: Text(tr('{0} 人', [r.invitedCount]),
                                 style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                           ),
                         ]),
@@ -168,7 +169,7 @@ class _ReferralPageState extends State<ReferralPage> {
                           child: Padding(
                             padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
                             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                              Text(r.inviteeDays > 0 ? '有好友的邀请码？填写后领取 ${r.inviteeDays} 天会员' : '填写好友的邀请码',
+                              Text(r.inviteeDays > 0 ? tr('有好友的邀请码？填写后领取 {0} 天会员', [r.inviteeDays]) : tr('填写好友的邀请码'),
                                   style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                               const SizedBox(height: 10),
                               Row(children: [
@@ -178,7 +179,7 @@ class _ReferralPageState extends State<ReferralPage> {
                                     textCapitalization: TextCapitalization.characters,
                                     maxLength: 7,
                                     inputFormatters: [FilteringTextInputFormatter.allow(RegExp('[a-zA-Z0-9]'))],
-                                    decoration: const InputDecoration(hintText: '7 位邀请码', counterText: '', isDense: true),
+                                    decoration: InputDecoration(hintText: tr('7 位邀请码'), counterText: '', isDense: true),
                                     style: const TextStyle(letterSpacing: 3, fontWeight: FontWeight.w700),
                                   ),
                                 ),
@@ -190,7 +191,7 @@ class _ReferralPageState extends State<ReferralPage> {
                                     child: _binding
                                         ? const SizedBox.square(
                                             dimension: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                                        : const Text('领取'),
+                                        : Text(tr('领取')),
                                   ),
                                 ),
                               ]),
@@ -198,10 +199,10 @@ class _ReferralPageState extends State<ReferralPage> {
                           ),
                         ),
                       ],
-                      const Padding(
+                      Padding(
                         padding: EdgeInsets.fromLTRB(6, 16, 6, 0),
                         child: Text(
-                          '好友扫码或打开链接下载，首次打开会自动识别你的邀请码，奖励即时到账。',
+                          tr('好友扫码或打开链接下载，首次打开会自动识别你的邀请码，奖励即时到账。'),
                           style: TextStyle(color: AppColors.sub, fontSize: 12.5, height: 1.6),
                         ),
                       ),
@@ -218,19 +219,19 @@ class _RewardBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
-      decoration: BoxDecoration(color: AppColors.ink, borderRadius: BorderRadius.circular(AppRadius.card)),
+      decoration: BoxDecoration(color: AppColors.hero, borderRadius: BorderRadius.circular(AppRadius.card)),
       child: Row(children: [
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text('邀请好友，双方得会员', style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700)),
+            Text(tr('邀请好友，双方得会员'), style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700)),
             const SizedBox(height: 4),
-            Text(ref.maxInvites > 0 ? '最多奖励 ${ref.maxInvites} 位好友' : '邀请越多，时长越多',
+            Text(ref.maxInvites > 0 ? tr('最多奖励 {0} 位好友', [ref.maxInvites]) : tr('邀请越多，时长越多'),
                 style: const TextStyle(color: Color(0xFF9A9CA3), fontSize: 12.5)),
           ]),
         ),
-        _Reward(days: ref.inviterDays, label: '你得'),
+        _Reward(days: ref.inviterDays, label: tr('你得')),
         Container(width: 1, height: 32, margin: const EdgeInsets.symmetric(horizontal: 14), color: Colors.white12),
-        _Reward(days: ref.inviteeDays, label: '好友得'),
+        _Reward(days: ref.inviteeDays, label: tr('好友得')),
       ]),
     );
   }
@@ -245,7 +246,7 @@ class _Reward extends StatelessWidget {
   Widget build(BuildContext context) => Column(children: [
         Text.rich(TextSpan(children: [
           TextSpan(text: '$days', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
-          const TextSpan(text: ' 天', style: TextStyle(fontSize: 12)),
+          TextSpan(text: tr(' 天'), style: TextStyle(fontSize: 12)),
         ]), style: const TextStyle(color: Colors.white)),
         Text(label, style: const TextStyle(color: Color(0xFF9A9CA3), fontSize: 12)),
       ]);
@@ -278,7 +279,7 @@ class _Poster extends StatelessWidget {
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text(AppConfig.appName,
                 style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800, letterSpacing: 2)),
-            Text(ref.slogan.isEmpty ? AppConfig.slogan : ref.slogan,
+            Text(ref.slogan.isEmpty ? tr(AppConfig.slogan) : tr(ref.slogan),
                 style: const TextStyle(color: Color(0xFF9C9B97), fontSize: 11.5)),
           ]),
         ]),
@@ -287,7 +288,7 @@ class _Poster extends StatelessWidget {
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
           child: ref.inviteUrl.isEmpty
-              ? const SizedBox.square(dimension: 180, child: Center(child: Text('暂无下载链接')))
+              ? SizedBox.square(dimension: 180, child: Center(child: Text(tr('暂无下载链接'))))
               : QrImageView(
                   data: ref.inviteUrl,
                   size: 180,
@@ -295,18 +296,18 @@ class _Poster extends StatelessWidget {
                   errorCorrectionLevel: QrErrorCorrectLevel.M,
                   // Standard square modules: round dots look nicer but some
                   // scanners (and OpenCV) fail to read them.
-                  eyeStyle: const QrEyeStyle(eyeShape: QrEyeShape.square, color: AppColors.ink),
-                  dataModuleStyle: const QrDataModuleStyle(dataModuleShape: QrDataModuleShape.square, color: AppColors.ink),
+                  eyeStyle: const QrEyeStyle(eyeShape: QrEyeShape.square, color: AppColors.night),
+                  dataModuleStyle: const QrDataModuleStyle(dataModuleShape: QrDataModuleShape.square, color: AppColors.night),
                 ),
         ),
         const SizedBox(height: 16),
-        const Text('邀请码', style: TextStyle(color: Color(0xFF9C9B97), fontSize: 11.5)),
+        Text(tr('邀请码'), style: TextStyle(color: Color(0xFF9C9B97), fontSize: 11.5)),
         const SizedBox(height: 2),
         Text(ref.code,
             style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800, letterSpacing: 5)),
         const SizedBox(height: 8),
         Text(
-          ref.inviteeDays > 0 ? '扫码下载 · 自动领取 ${ref.inviteeDays} 天会员' : '扫码下载 · 无需注册',
+          ref.inviteeDays > 0 ? tr('扫码下载 · 自动领取 {0} 天会员', [ref.inviteeDays]) : tr('扫码下载 · 无需注册'),
           style: const TextStyle(color: Color(0xFF7FD8A4), fontSize: 12.5, fontWeight: FontWeight.w600),
         ),
       ]),
@@ -323,14 +324,14 @@ class _ActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final fg = primary ? Colors.white : AppColors.ink;
+    final fg = primary ? AppColors.onInk : AppColors.ink;
     return SizedBox(
       height: 50,
       child: Material(
         color: primary ? AppColors.ink : AppColors.surface,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppRadius.button),
-          side: primary ? BorderSide.none : const BorderSide(color: AppColors.line),
+          side: primary ? BorderSide.none : BorderSide(color: AppColors.line),
         ),
         child: InkWell(
           borderRadius: BorderRadius.circular(AppRadius.button),

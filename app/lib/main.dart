@@ -5,7 +5,9 @@ import 'core/config.dart';
 import 'features/shell/main_shell.dart';
 import 'state/app_controller.dart';
 import 'state/app_scope.dart';
+import 'i18n/i18n.dart';
 import 'theme/app_theme.dart';
+import 'theme/appearance.dart';
 import 'widgets/bootstrap_gate.dart';
 
 // App structure (see README "App 架构"):
@@ -15,12 +17,13 @@ import 'widgets/bootstrap_gate.dart';
 //   widgets/   reusable UI pieces
 //   features/  one folder per screen / flow
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.dark,
-  ));
+  // Cached choices only (no network), so the first frame is already in the
+  // right language and palette.
+  await Future.wait([I18n.instance.load(), Appearance.instance.load()]);
+  AppColors.dark = Appearance.instance.isDark;
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(statusBarColor: Colors.transparent));
   runApp(VpnApp(controller: AppController()));
 }
 
@@ -37,7 +40,29 @@ class _VpnAppState extends State<VpnApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    I18n.instance.addListener(_restyle);
+    Appearance.instance.addListener(_restyle);
     widget.controller.init();
+    I18n.instance.sync(widget.controller.api); // pick up new / updated language packs
+  }
+
+  /// Language or palette changed: tr() and AppColors are read directly by
+  /// widgets, so mark the whole tree for rebuild.
+  void _restyle() {
+    if (!mounted) return;
+    AppColors.dark = Appearance.instance.isDark;
+    setState(() {});
+    rebuildAll(context);
+  }
+
+  @override
+  void didChangePlatformBrightness() {
+    if (Appearance.instance.mode == AppearanceMode.system) _restyle();
+  }
+
+  @override
+  void didChangeLocales(List<Locale>? locales) {
+    if (I18n.instance.preference == I18n.system) I18n.instance.sync(widget.controller.api);
   }
 
   @override
@@ -48,6 +73,8 @@ class _VpnAppState extends State<VpnApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    I18n.instance.removeListener(_restyle);
+    Appearance.instance.removeListener(_restyle);
     widget.controller.dispose();
     super.dispose();
   }
@@ -59,7 +86,9 @@ class _VpnAppState extends State<VpnApp> with WidgetsBindingObserver {
       child: MaterialApp(
         title: AppConfig.appName,
         debugShowCheckedModeBanner: false,
-        theme: AppTheme.light(),
+        theme: AppTheme.current(),
+        // Material's own strings stay built in; layout direction follows the pack (ar/fa/he are RTL).
+        builder: (context, child) => Directionality(textDirection: I18n.instance.direction, child: child!),
         home: const _Root(),
       ),
     );

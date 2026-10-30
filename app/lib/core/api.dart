@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
+import '../i18n/i18n.dart';
 import 'config.dart';
 
 class ApiException implements Exception {
@@ -413,6 +414,15 @@ class ApiClient {
     return (j['days'] as List).map((e) => DailyUsage.fromJson(e as Map<String, dynamic>)).toList();
   }
 
+  /// Languages with a downloadable pack (Chinese is built in and not listed).
+  Future<List<LangInfo>> languages() async {
+    final j = await _send('GET', '/api/v1/i18n');
+    return [for (final e in j['languages'] as List) LangInfo.fromJson(e as Map<String, dynamic>)];
+  }
+
+  /// {code, version, rtl, strings: {中文原文: 译文}}
+  Future<Map<String, dynamic>> languagePack(String code) => _send('GET', '/api/v1/i18n/${Uri.encodeComponent(code)}');
+
   Future<Profile> profile({String? nodeId, String mode = 'smart'}) async {
     // format=pb: the server compiles the profile (smart-routing IP lists
     // included) so the native core needs no JSON loader or geo files.
@@ -442,8 +452,10 @@ class ApiClient {
           return decoded as Map<String, dynamic>;
         }
         final m = decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
+        // Server messages are Chinese; packs may carry translations for them.
+        final msg = m['message'] as String?;
         throw ApiException(resp.statusCode, m['error'] as String? ?? 'http_${resp.statusCode}',
-            m['message'] as String? ?? '请求失败 (${resp.statusCode})');
+            msg != null ? tr(msg) : tr('请求失败 ({0})', [resp.statusCode]));
       } on ApiException {
         rethrow;
       } on SocketException catch (e) {
@@ -456,6 +468,6 @@ class ApiClient {
         lastError = e;
       }
     }
-    throw ApiException(0, 'network', '无法连接服务器，请检查网络 ($lastError)');
+    throw ApiException(0, 'network', tr('无法连接服务器，请检查网络 ({0})', [lastError]));
   }
 }

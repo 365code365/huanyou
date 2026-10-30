@@ -16,6 +16,7 @@ import (
 
 	"vpnplatform/server/internal/backup"
 	"vpnplatform/server/internal/config"
+	"vpnplatform/server/internal/i18n"
 	"vpnplatform/server/internal/keys"
 	"vpnplatform/server/internal/provision"
 	"vpnplatform/server/internal/store"
@@ -328,6 +329,28 @@ func (s *Server) cloneDB(ctx context.Context, path string, full, keepNodes bool)
 	defer st.Close()
 	if err := cat.Normalize(); err != nil {
 		return err
+	}
+	if !full {
+		// Language packs and the AI translator setting are configuration too.
+		packs, err := s.store.LangPacks(ctx, false)
+		if err != nil {
+			return err
+		}
+		for _, p := range packs {
+			pk, err := s.store.LangPack(ctx, p.Code)
+			if err != nil {
+				return err
+			}
+			if _, err := st.SaveLangPack(ctx, pk); err != nil {
+				return err
+			}
+		}
+		var ai i18n.AIConfig
+		if ok, _ := s.store.Setting(ctx, aiSettingKey, &ai); ok {
+			if err := st.PutSetting(ctx, aiSettingKey, ai); err != nil {
+				return err
+			}
+		}
 	}
 	return st.SaveCatalog(ctx, cat)
 }

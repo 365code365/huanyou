@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../core/config.dart';
 import '../theme/app_theme.dart';
+import '../i18n/i18n.dart';
 
 /// Launch screen. Continues the native splash (same dark background, same
 /// mark position): the ring draws itself, the green dot travels once around
@@ -104,7 +105,7 @@ class _BootstrapGateState extends State<BootstrapGate> with TickerProviderStateM
                     opacity: sub,
                     child: Transform.translate(
                       offset: Offset(0, 10 * (1 - sub)),
-                      child: const Text(AppConfig.slogan,
+                      child: Text(tr(AppConfig.slogan),
                           style: TextStyle(color: Color(0xFF9C9B97), fontSize: 14, letterSpacing: 3)),
                     ),
                   ),
@@ -125,7 +126,7 @@ class _BootstrapGateState extends State<BootstrapGate> with TickerProviderStateM
                             key: const ValueKey('hint'),
                             opacity: sub,
                             child: Text(
-                              _slow ? '正在连接服务器…' : '无需注册 · 打开即用',
+                              _slow ? tr('正在连接服务器…') : tr('无需注册 · 打开即用'),
                               textAlign: TextAlign.center,
                               style: const TextStyle(color: Color(0xFF66656A), fontSize: 12.5, letterSpacing: 1),
                             ),
@@ -149,7 +150,7 @@ class _RetryBlock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Column(mainAxisSize: MainAxisSize.min, children: [
-      Text(message ?? '暂时连不上服务器',
+      Text(message ?? tr('暂时连不上服务器'),
           textAlign: TextAlign.center, style: const TextStyle(color: Color(0xFF9C9B97), fontSize: 13)),
       const SizedBox(height: 14),
       ClipRRect(
@@ -164,11 +165,11 @@ class _RetryBlock extends StatelessWidget {
             ),
             child: InkWell(
               onTap: onRetry,
-              child: const SizedBox(
+              child: SizedBox(
                 width: double.infinity,
                 height: 52,
                 child: Center(
-                  child: Text('重试', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
+                  child: Text(tr('重试'), style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
                 ),
               ),
             ),

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../core/vpn.dart';
 import '../theme/app_theme.dart';
+import '../i18n/i18n.dart';
 
 /// The main power control.
 ///
@@ -66,7 +67,7 @@ class _ConnectButtonState extends State<ConnectButton> with TickerProviderStateM
     final outer = s * 1.3;
     return Semantics(
       button: true,
-      label: _on ? '断开' : '连接',
+      label: _on ? tr('断开') : tr('连接'),
       child: GestureDetector(
         onTapDown: (_) => setState(() => _pressed = true),
         onTapCancel: () => setState(() => _pressed = false),
@@ -111,7 +112,7 @@ class _ConnectButtonState extends State<ConnectButton> with TickerProviderStateM
                       border: Border.all(color: _on ? AppColors.signal : AppColors.line),
                       boxShadow: [
                         BoxShadow(
-                          color: (_on ? AppColors.signal : AppColors.ink).withValues(alpha: _on ? 0.30 : 0.07),
+                          color: (_on ? AppColors.signal : AppColors.shadow).withValues(alpha: _on ? 0.30 : 0.07),
                           blurRadius: _on ? 36 : 28,
                           offset: const Offset(0, 14),
                         ),

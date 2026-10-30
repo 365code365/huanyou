@@ -15,6 +15,9 @@ import '../../core/updater.dart';
 import '../update/update_dialog.dart';
 import 'contacts_section.dart';
 import 'orders_page.dart';
+import 'preferences_sheets.dart';
+import '../../theme/appearance.dart';
+import '../../i18n/i18n.dart';
 
 /// "我的" tab: membership card (recharge ID, plan, traffic), usage, links.
 class MePage extends StatefulWidget {
@@ -38,10 +41,10 @@ class _MePageState extends State<MePage> {
       if (u != null && u.hasUpdate) {
         await showUpdateDialog(context, u);
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已是最新版本')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('已是最新版本'))));
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('检查失败：$e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('检查失败：{0}', [e]))));
     } finally {
       if (mounted) setState(() => _checking = false);
     }
@@ -52,7 +55,7 @@ class _MePageState extends State<MePage> {
     super.initState();
     _load();
     Updater.info().then((i) {
-      if (mounted) setState(() => _version = '${i.version} (${i.buildNumber})');
+      if (mounted) setState(() => _version = '${i.version} (${Updater.buildOf(i)})');
     });
   }
 
@@ -73,11 +76,11 @@ class _MePageState extends State<MePage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('退出邮箱账号'),
-        content: const Text('退出后本机会回到设备账号，VPN 将断开。'),
+        title: Text(tr('退出邮箱账号')),
+        content: Text(tr('退出后本机会回到设备账号，VPN 将断开。')),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('退出')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('取消'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('退出'))),
         ],
       ),
     );
@@ -89,7 +92,7 @@ class _MePageState extends State<MePage> {
     final app = AppScope.of(context);
     final u = app.user;
     return Scaffold(
-      appBar: AppBar(title: const Text('我的')),
+      appBar: AppBar(title: Text(tr('我的'))),
       body: RefreshIndicator(
         color: AppColors.ink,
         onRefresh: _load,
@@ -98,7 +101,7 @@ class _MePageState extends State<MePage> {
           children: [
             if (u != null) _MemberCard(user: u, onUpgrade: () => openPlans(context)),
             const SizedBox(height: 14),
-            SectionCard(title: '近 30 天流量', child: _UsageChart(days: _usage)),
+            SectionCard(title: tr('近 30 天流量'), child: _UsageChart(days: _usage)),
             const SizedBox(height: 14),
             Card(
               clipBehavior: Clip.antiAlias,
@@ -106,22 +109,22 @@ class _MePageState extends State<MePage> {
                 MenuRow(
                   icon: Icons.workspace_premium_outlined,
                   color: AppColors.warning,
-                  title: '购买套餐',
+                  title: tr('购买套餐'),
                   onTap: () => openPlans(context),
                 ),
                 const Divider(indent: 66),
                 MenuRow(
                   icon: Icons.card_giftcard_rounded,
                   color: AppColors.violet,
-                  title: '邀请好友送时长',
+                  title: tr('邀请好友送时长'),
                   onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ReferralPage())),
                 ),
                 const Divider(indent: 66),
                 MenuRow(
                   key: const Key('menu-devices'),
                   icon: Icons.devices_rounded,
-                  title: '多设备',
-                  value: u != null && u.linked ? '使用 ${u.ownerCode}' : '扫码 / 令牌',
+                  title: tr('多设备'),
+                  value: u != null && u.linked ? tr('使用 {0}', [u.ownerCode]) : tr('扫码 / 令牌'),
                   onTap: () async {
                     await Navigator.push(context, MaterialPageRoute(builder: (_) => const DevicesPage()));
                     _load();
@@ -130,26 +133,42 @@ class _MePageState extends State<MePage> {
                 const Divider(indent: 66),
                 MenuRow(
                   icon: Icons.receipt_long_outlined,
-                  title: '购买记录',
+                  title: tr('购买记录'),
                   onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const OrdersPage())),
+                ),
+                const Divider(indent: 66),
+                MenuRow(
+                  key: const Key('menu-language'),
+                  icon: Icons.translate_rounded,
+                  title: tr('语言'),
+                  value: languageLabel(),
+                  onTap: () => showLanguageSheet(context),
+                ),
+                const Divider(indent: 66),
+                MenuRow(
+                  key: const Key('menu-appearance'),
+                  icon: Icons.contrast_rounded,
+                  title: tr('外观'),
+                  value: tr(Appearance.instance.mode.label),
+                  onTap: () => showAppearanceSheet(context),
                 ),
                 const Divider(indent: 66),
                 MenuRow(
                   key: const Key('menu-update'),
                   icon: Icons.system_update_rounded,
                   color: AppColors.signal,
-                  title: '检查更新',
-                  value: _checking ? '检查中…' : (_version.isEmpty ? null : 'v$_version'),
+                  title: tr('检查更新'),
+                  value: _checking ? tr('检查中…') : (_version.isEmpty ? null : 'v$_version'),
                   onTap: _checking ? null : _checkUpdate,
                 ),
               ]),
             ),
             ContactsSection(contacts: _contacts),
             const SizedBox(height: 18),
-            const Padding(
+            Padding(
               padding: EdgeInsets.symmetric(horizontal: 6),
               child: Text(
-                '本机已自动开通账号，卸载重装后会自动找回。需要充值时，把上方的充值 ID 发给客服即可。',
+                tr('本机已自动开通账号，卸载重装后会自动找回。需要充值时，把上方的充值 ID 发给客服即可。'),
                 style: TextStyle(fontSize: 12.5, color: AppColors.sub, height: 1.5),
               ),
             ),
@@ -157,7 +176,7 @@ class _MePageState extends State<MePage> {
               const SizedBox(height: 14),
               Card(
                 clipBehavior: Clip.antiAlias,
-                child: MenuRow(key: const Key('logout'), icon: Icons.logout_rounded, title: '退出邮箱账号', danger: true, onTap: _logout),
+                child: MenuRow(key: const Key('logout'), icon: Icons.logout_rounded, title: tr('退出邮箱账号'), danger: true, onTap: _logout),
               ),
             ],
           ],
@@ -181,11 +200,11 @@ class _MemberCard extends StatelessWidget {
     final code = user.rechargeCode;
     const dim = Color(0xFF9A9CA3);
     return Container(
-      decoration: BoxDecoration(color: AppColors.ink, borderRadius: BorderRadius.circular(AppRadius.card + 2)),
+      decoration: BoxDecoration(color: AppColors.hero, borderRadius: BorderRadius.circular(AppRadius.card + 2)),
       padding: const EdgeInsets.fromLTRB(20, 18, 14, 20),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          const Text('充值 ID', style: TextStyle(color: dim, fontSize: 12.5)),
+          Text(tr('充值 ID'), style: TextStyle(color: dim, fontSize: 12.5)),
           const Spacer(),
           if (user.hasAccount)
             Text(user.email, style: const TextStyle(color: dim, fontSize: 12), overflow: TextOverflow.ellipsis),
@@ -203,13 +222,13 @@ class _MemberCard extends StatelessWidget {
               )),
           const SizedBox(width: 6),
           IconButton(
-            tooltip: '复制',
+            tooltip: tr('复制'),
             visualDensity: VisualDensity.compact,
             onPressed: code.isEmpty
                 ? null
                 : () {
                     Clipboard.setData(ClipboardData(text: code));
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('充值 ID 已复制')));
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('充值 ID 已复制'))));
                   },
             icon: const Icon(Icons.copy_rounded, size: 18, color: dim),
           ),
@@ -218,14 +237,14 @@ class _MemberCard extends StatelessWidget {
         Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(e.planName.isEmpty ? '无套餐' : e.planName,
+              Text(e.planName.isEmpty ? tr('无套餐') : e.planName,
                   key: const Key('me-plan'),
                   style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700)),
               const SizedBox(height: 2),
               Text(
                 user.linked
-                    ? '共享 ${user.ownerCode} 的订阅${e.paid && e.expiresAt != null ? ' · ${formatDate(e.expiresAt!)} 到期' : ''}'
-                    : e.paid && e.expiresAt != null ? '${formatDate(e.expiresAt!)} 到期' : '免费体验中',
+                    ? tr('共享 {0} 的订阅{1}', [user.ownerCode, e.paid && e.expiresAt != null ? tr(' · {0} 到期', [formatDate(e.expiresAt!)]) : ''])
+                    : e.paid && e.expiresAt != null ? tr('{0} 到期', [formatDate(e.expiresAt!)]) : tr('免费体验中'),
                 style: const TextStyle(color: dim, fontSize: 12.5),
               ),
             ]),
@@ -235,13 +254,13 @@ class _MemberCard extends StatelessWidget {
             child: FilledButton(
               style: FilledButton.styleFrom(
                 backgroundColor: Colors.white,
-                foregroundColor: AppColors.ink,
+                foregroundColor: AppColors.night,
                 visualDensity: VisualDensity.compact,
                 padding: const EdgeInsets.symmetric(horizontal: 18),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
               onPressed: user.linked ? null : onUpgrade,
-              child: Text(user.linked ? '共享中' : e.paid ? '续费' : '开通会员', style: const TextStyle(fontWeight: FontWeight.w700)),
+              child: Text(user.linked ? tr('共享中') : e.paid ? tr('续费') : tr('开通会员'), style: const TextStyle(fontWeight: FontWeight.w700)),
             ),
           ),
         ]),
@@ -253,13 +272,13 @@ class _MemberCard extends StatelessWidget {
               Text(
                 e.quotaBytes > 0
                     ? '${formatBytes(e.usedBytes)} / ${formatBytes(e.quotaBytes)}'
-                    : '已用 ${formatBytes(e.usedBytes)} · 不限流量',
+                    : tr('已用 {0} · 不限流量', [formatBytes(e.usedBytes)]),
                 key: const Key('me-usage'),
                 style: const TextStyle(color: Colors.white, fontSize: 13, fontFeatures: [FontFeature.tabularFigures()]),
               ),
               const Spacer(),
               if (e.periodEnd != null && e.quotaBytes > 0)
-                Text('${formatDate(e.periodEnd!)} 重置', style: const TextStyle(color: dim, fontSize: 12)),
+                Text(tr('{0} 重置', [formatDate(e.periodEnd!)]), style: const TextStyle(color: dim, fontSize: 12)),
             ]),
             if (e.quotaBytes > 0) ...[
               const SizedBox(height: 8),
@@ -276,7 +295,7 @@ class _MemberCard extends StatelessWidget {
             if (warn) ...[
               const SizedBox(height: 10),
               Text(
-                !e.canConnect ? (e.reason ?? '暂时无法连接') : '流量已用完，当前限速 ${formatSpeed(e.speedKbps)}',
+                !e.canConnect ? (e.reason ?? tr('暂时无法连接')) : tr('流量已用完，当前限速 {0}', [formatSpeed(e.speedKbps)]),
                 style: const TextStyle(color: Color(0xFFFFB3AB), fontSize: 12),
               ),
             ],
@@ -316,8 +335,8 @@ class _UsageChart extends StatelessWidget {
         ]),
       ),
       const SizedBox(height: 10),
-      Text('合计 ${formatBytes(total)} · 单日最高 ${formatBytes(maxV)}',
-          key: const Key('usage-total'), style: const TextStyle(color: AppColors.sub, fontSize: 12)),
+      Text(tr('合计 {0} · 单日最高 {1}', [formatBytes(total), formatBytes(maxV)]),
+          key: const Key('usage-total'), style: TextStyle(color: AppColors.sub, fontSize: 12)),
     ]);
   }
 }

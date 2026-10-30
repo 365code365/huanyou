@@ -201,6 +201,18 @@ var migrations = []string{
 		created_at  INTEGER NOT NULL
 	);
 	CREATE UNIQUE INDEX releases_platform_build ON releases(platform, build);`,
+	// Downloadable app language packs (Chinese is built into the app).
+	`CREATE TABLE lang_packs (
+		code        TEXT    PRIMARY KEY,          -- en, es, pt-BR, ar ...
+		name        TEXT    NOT NULL DEFAULT '',  -- Chinese name for the admin
+		native_name TEXT    NOT NULL DEFAULT '',
+		rtl         INTEGER NOT NULL DEFAULT 0,
+		enabled     INTEGER NOT NULL DEFAULT 1,
+		version     INTEGER NOT NULL,
+		strings     TEXT    NOT NULL DEFAULT '{}', -- {"中文原文": "译文"}
+		updated_at  INTEGER NOT NULL,
+		sort        INTEGER NOT NULL DEFAULT 0
+	);`,
 }
 
 func (s *Store) migrate() error {

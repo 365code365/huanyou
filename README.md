@@ -235,19 +235,31 @@ vpn-api -config /etc/vpn/api.json user rotate  a@b.com          # 更换该用�
 需要：Go（脚本会自动下载 Go 1.26 工具链）、Flutter 3.41+、Android SDK + NDK、Xcode（iOS）。
 
 ```bash
-# 1) 编译 Go 核心（Xray-core）
+# 1) 编译 Go 核心（精简版 Xray-core，只含 VLESS + REALITY / XHTTP 等用到的功能）
 cd mobile && ./build.sh            # 或 ./build.sh android / ./build.sh ios
 
-# 2) 下载大陆 IP 库（每次发版前更新一次）
-cd ../app && ./scripts/fetch_geo.sh
-
-# 3) 运行 / 打包（API 地址在编译时注入，多个用逗号分隔）
+# 2) 运行 / 打包（API 地址在编译时注入，多个用逗号分隔）
+cd ../app
 flutter run --dart-define=API_BASE_URLS=https://api.example.com,https://api2.example.com
-flutter build appbundle --release --dart-define=API_BASE_URLS=...      # Google Play
-flutter build apk --release --split-per-abi --dart-define=API_BASE_URLS=...  # 直接分发
+flutter build apk --release --split-per-abi --target-platform android-arm,android-arm64 \
+  --obfuscate --split-debug-info=build/symbols --dart-define=API_BASE_URLS=...   # 直接分发
+flutter build appbundle --release --dart-define=API_BASE_URLS=...                 # Google Play
 ```
 
-> APK 里每个 CPU 架构各带一份约 35 MB 的 Go 库。直接分发时请用 `--split-per-abi`，否则 APK 有 100 MB 以上。
+> 每个 CPU 架构的 APK 约 20 MB：大陆 IP 库和配置解析放在服务端（API 下发编译好的 protobuf 配置），Go 核心只编入用到的协议。
+> 发布用 `build/app/outputs/flutter-apk/app-arm64-v8a-release.apk`。`--split-per-abi` 会把 versionCode 设为「架构 × 1000 + 构建号」（arm64 为 2004），App 检查更新时会自动去掉前缀，所以**构建号要小于 1000，并且以后一直用分架构 APK 发布**（换成通用 APK 的 versionCode 会变小，无法覆盖安装）。
+> 大陆 IP 库：服务端发版前运行 `app/scripts/fetch_geo.sh` 更新 `server/internal/profile/geoip-only-cn-private.dat`。
+
+### 多语言
+
+App 内置简体中文，界面文字以中文原文为 key（`tr('剩余 {0} 天', [days])`），其他语言是后台「多语言」页管理的语言包，App 按需下载并缓存：
+
+- 默认跟随手机系统语言；没有对应语言包时用英语，再没有就用中文。用户可在「我的 → 语言」切换。阿拉伯语、波斯语、希伯来语等勾选「从右到左」后界面自动镜像。
+- 新增 / 修改 App 文字后运行 `python3 scripts/i18n-extract.py`，更新 `server/internal/i18n/base.json`（翻译模板），再重新编译 API。
+- 翻译方式：后台填 OpenAI 兼容接口后点「AI 自动翻译」；或点「复制 AI 提示词」贴到任意 AI 对话，把返回的 JSON 贴回来；也可以上传 JSON 文件或逐条校对。占位符 `{0}` 不一致会提示。
+- 英语包的源文件在 `docs/i18n/en.json`。
+
+外观：「我的 → 外观」可选跟随系统 / 浅色 / 深色，颜色都在 `app/lib/theme/app_theme.dart` 的 `AppPalette`。
 
 ### iOS 额外步骤
 

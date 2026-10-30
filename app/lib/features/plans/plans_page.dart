@@ -8,6 +8,7 @@ import '../../core/open_url.dart';
 import '../../state/app_scope.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/primary_button.dart';
+import '../../i18n/i18n.dart';
 
 /// Opens the plans page; refreshes the user if a purchase completed.
 Future<void> openPlans(BuildContext context) async {
@@ -57,14 +58,14 @@ class _PlansPageState extends State<PlansPage> {
   Future<void> _buy() async {
     final plan = _plan;
     if (plan == null) return;
-    if (_methods.isEmpty) return _snack('暂无可用的支付方式');
+    if (_methods.isEmpty) return _snack(tr('暂无可用的支付方式'));
     final method = _methods.length == 1 ? _methods.first : await _pickMethod(plan);
     if (method == null || !mounted) return;
 
     setState(() => _buying = true);
     try {
       final (order, payUrl) = await AppScope.read(context).api.createOrder(plan.id, method.id);
-      if (!await openUrl(payUrl)) return _snack('无法打开支付页面');
+      if (!await openUrl(payUrl)) return _snack(tr('无法打开支付页面'));
       if (!mounted) return;
       final paid = await showDialog<bool>(
         context: context,
@@ -72,7 +73,7 @@ class _PlansPageState extends State<PlansPage> {
         builder: (_) => _PaymentDialog(orderId: order.id),
       );
       if (paid == true && mounted) {
-        _snack('支付成功，${plan.name}已生效');
+        _snack(tr('支付成功，{0}已生效', [plan.name]));
         Navigator.pop(context, true);
       }
     } on ApiException catch (e) {
@@ -90,9 +91,9 @@ class _PlansPageState extends State<PlansPage> {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
             child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('支付 ${formatYuan(plan.priceCents)}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+              Text(tr('支付 {0}', [formatYuan(plan.priceCents)]), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
               const SizedBox(height: 4),
-              Text(plan.name, style: const TextStyle(color: AppColors.sub)),
+              Text(plan.name, style: TextStyle(color: AppColors.sub)),
               const SizedBox(height: 16),
               for (final m in _methods)
                 Padding(
@@ -126,7 +127,7 @@ class _PlansPageState extends State<PlansPage> {
     final plans = _plans;
     final cur = AppScope.of(context).user?.entitlement;
     return Scaffold(
-      appBar: AppBar(title: const Text('购买套餐')),
+      appBar: AppBar(title: Text(tr('购买套餐'))),
       body: _error != null
           ? Center(child: Text(_error!))
           : plans == null
@@ -139,9 +140,9 @@ class _PlansPageState extends State<PlansPage> {
                         padding: const EdgeInsets.fromLTRB(4, 0, 4, 14),
                         child: Text(
                           cur.paid && cur.expiresAt != null
-                              ? '当前：${cur.planName}，${formatDate(cur.expiresAt!)} 到期。续费同一套餐顺延，换套餐立即生效。'
-                              : '当前：${cur.planName.isEmpty ? '无套餐' : cur.planName}',
-                          style: const TextStyle(color: AppColors.sub, fontSize: 13),
+                              ? tr('当前：{0}，{1} 到期。续费同一套餐顺延，换套餐立即生效。', [cur.planName, formatDate(cur.expiresAt!)])
+                              : tr('当前：{0}', [cur.planName.isEmpty ? tr('无套餐') : cur.planName]),
+                          style: TextStyle(color: AppColors.sub, fontSize: 13),
                         ),
                       ),
                     for (final p in plans)
@@ -155,9 +156,9 @@ class _PlansPageState extends State<PlansPage> {
                         ),
                       ),
                     if (plans.isEmpty)
-                      const Padding(
+                      Padding(
                         padding: EdgeInsets.only(top: 80),
-                        child: Center(child: Text('暂无在售套餐', style: TextStyle(color: AppColors.sub))),
+                        child: Center(child: Text(tr('暂无在售套餐'), style: TextStyle(color: AppColors.sub))),
                       ),
                   ],
                 ),
@@ -166,21 +167,21 @@ class _PlansPageState extends State<PlansPage> {
           : SafeArea(
               child: Container(
                 padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
-                decoration: const BoxDecoration(
+                decoration: BoxDecoration(
                   color: AppColors.surface,
                   border: Border(top: BorderSide(color: AppColors.line)),
                 ),
                 child: Row(children: [
                   Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    const Text('合计', style: TextStyle(color: AppColors.sub, fontSize: 12)),
+                    Text(tr('合计'), style: TextStyle(color: AppColors.sub, fontSize: 12)),
                     Text(formatYuan(_plan!.priceCents),
-                        style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: AppColors.primary)),
+                        style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: AppColors.primary)),
                   ]),
                   const SizedBox(width: 20),
                   Expanded(
                     child: PrimaryButton(
                       key: const Key('buy-button'),
-                      label: cur?.paid == true && cur?.planId == _plan!.id ? '立即续费' : '立即购买',
+                      label: cur?.paid == true && cur?.planId == _plan!.id ? tr('立即续费') : tr('立即购买'),
                       loading: _buying,
                       onPressed: _buy,
                     ),
@@ -203,9 +204,9 @@ class _PlanCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final perMonth = plan.durationDays >= 60 ? plan.priceCents * 30 ~/ plan.durationDays : 0;
     final features = [
-      '${formatTraffic(plan.trafficGb)} / 周期',
+      tr('{0} / 周期', [formatTraffic(plan.trafficGb)]),
       formatSpeed(plan.speedMbps * 1000),
-      '${plan.durationDays} 天',
+      tr('{0} 天', [plan.durationDays]),
     ];
     return AnimatedContainer(
       duration: const Duration(milliseconds: 180),
@@ -214,7 +215,7 @@ class _PlanCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppRadius.card),
         border: Border.all(color: selected ? AppColors.primary : Colors.transparent, width: 1.8),
         boxShadow: [
-          if (selected) BoxShadow(color: AppColors.primary.withValues(alpha: 0.14), blurRadius: 18, offset: const Offset(0, 8)),
+          if (selected) BoxShadow(color: AppColors.shadow.withValues(alpha: 0.14), blurRadius: 18, offset: const Offset(0, 8)),
         ],
       ),
       child: Material(
@@ -239,13 +240,13 @@ class _PlanCard extends StatelessWidget {
                             color: AppColors.success.withValues(alpha: 0.12),
                             borderRadius: BorderRadius.circular(8),
                           ),
-                          child: const Text('当前', style: TextStyle(fontSize: 11, color: AppColors.success)),
+                          child: Text(tr('当前'), style: TextStyle(fontSize: 11, color: AppColors.success)),
                         ),
                       ],
                     ]),
                     if (plan.description.isNotEmpty) ...[
                       const SizedBox(height: 4),
-                      Text(plan.description, style: const TextStyle(color: AppColors.sub, fontSize: 13)),
+                      Text(plan.description, style: TextStyle(color: AppColors.sub, fontSize: 13)),
                     ],
                   ]),
                 ),
@@ -254,7 +255,7 @@ class _PlanCard extends StatelessWidget {
                       style: TextStyle(
                           fontSize: 24, fontWeight: FontWeight.w800, color: selected ? AppColors.primary : AppColors.ink)),
                   if (perMonth > 0)
-                    Text('约 ${formatYuan(perMonth)}/月', style: const TextStyle(fontSize: 11, color: AppColors.sub)),
+                    Text(tr('约 {0}/月', [formatYuan(perMonth)]), style: TextStyle(fontSize: 11, color: AppColors.sub)),
                 ]),
               ]),
               const SizedBox(height: 14),
@@ -263,7 +264,7 @@ class _PlanCard extends StatelessWidget {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                     decoration: BoxDecoration(color: AppColors.canvas, borderRadius: BorderRadius.circular(8)),
-                    child: Text(f, style: const TextStyle(fontSize: 12, color: AppColors.sub)),
+                    child: Text(f, style: TextStyle(fontSize: 12, color: AppColors.sub)),
                   ),
               ]),
             ]),
@@ -311,10 +312,10 @@ class _PaymentDialogState extends State<_PaymentDialog> {
         _timer?.cancel();
         Navigator.pop(context, true);
       } else if (manual) {
-        setState(() => _hint = '还没有收到支付结果，请稍候');
+        setState(() => _hint = tr('还没有收到支付结果，请稍候'));
       } else if (DateTime.now().difference(_started) > const Duration(minutes: 15)) {
         _timer?.cancel();
-        setState(() => _hint = '等待超时。如已付款，请稍后在「我的」查看');
+        setState(() => _hint = tr('等待超时。如已付款，请稍后在「我的」查看'));
       }
     } on ApiException catch (e) {
       if (manual && mounted) setState(() => _hint = e.message);
@@ -327,16 +328,16 @@ class _PaymentDialogState extends State<_PaymentDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
-      title: const Text('等待支付结果'),
+      title: Text(tr('等待支付结果')),
       content: Column(mainAxisSize: MainAxisSize.min, children: [
         const LinearProgressIndicator(),
         const SizedBox(height: 16),
-        const Text('请在打开的页面完成支付，完成后返回此处。', style: TextStyle(color: AppColors.sub)),
+        Text(tr('请在打开的页面完成支付，完成后返回此处。'), style: TextStyle(color: AppColors.sub)),
         if (_hint != null) ...[const SizedBox(height: 8), Text(_hint!)],
       ]),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
-        FilledButton(onPressed: () => _check(manual: true), child: const Text('我已完成支付')),
+        TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('取消'))),
+        FilledButton(onPressed: () => _check(manual: true), child: Text(tr('我已完成支付'))),
       ],
     );
   }
