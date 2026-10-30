@@ -342,6 +342,7 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request, u *store.
 	mode := profile.ParseMode(r.URL.Query().Get("mode"))
 	p := profile.Params{UUID: u.UUID, Mode: mode, AIDomains: cat.AIDomains}
 	p.DirectDomains, p.DirectIPs = s.apiEndpoints()
+	p.DirectHosts = s.apiHosts(p.DirectDomains, p.DirectIPs)
 
 	// Prefer nodes the monitor sees as online; fall back to all enabled nodes.
 	healthy := enabled

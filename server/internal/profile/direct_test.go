@@ -14,7 +14,8 @@ func TestDirectAPIEndpoints(t *testing.T) {
 		Reality: config.RealityPublic{PublicKey: "LvdM4-nTD6fmK5sqQdG5iJrsZppcDBdRc-aEaYGV7Tc", ShortID: "abcd", ServerName: "www.apple.com"}}
 	for _, m := range []Mode{ModeDirect, ModeCluster, ModeAI, ModeGlobal} {
 		p := Params{UUID: "15c2fcd0-8042-4c22-8e70-e5e36b025e93", Mode: m, Nodes: []*config.Node{n},
-			DirectDomains: []string{"api.example.com"}, DirectIPs: []string{"198.51.100.7"}}
+			DirectDomains: []string{"api.example.com"}, DirectIPs: []string{"198.51.100.7"},
+			DirectHosts: map[string][]string{"api.example.com": {"198.51.100.7"}}}
 		js, err := Build(p)
 		if err != nil {
 			t.Fatal(err)

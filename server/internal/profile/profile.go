@@ -61,6 +61,9 @@ type Params struct {
 	// of the world, and the host is resolved by the system, not over DoH.
 	DirectDomains []string
 	DirectIPs     []string
+	// DirectHosts pins DirectDomains to these addresses (the API knows where
+	// it runs), so the app's host name needs no lookup at all inside the tunnel.
+	DirectHosts map[string][]string
 }
 
 // nodeOutbounds returns the outbound definitions and their tags for one node.
@@ -190,7 +193,7 @@ func Build(p Params) (string, error) {
 		// DNS over HTTPS, routed through the tunnel (dns-module -> proxy rule):
 		// neither the local network nor the node's upstream ISP sees the
 		// queried names. IP-literal endpoints need no bootstrap resolution.
-		"dns": dnsConfig(p.DirectDomains),
+		"dns": dnsConfig(p.DirectDomains, p.DirectHosts),
 		"inbounds": []any{map[string]any{
 			"tag":      "tun-in",
 			"protocol": "tun",
@@ -228,7 +231,7 @@ func Build(p Params) (string, error) {
 
 // dnsConfig: DNS over HTTPS through the tunnel, except the API's own host,
 // which the system resolver answers (fast, and it is our own domain).
-func dnsConfig(direct []string) map[string]any {
+func dnsConfig(direct []string, hosts map[string][]string) map[string]any {
 	servers := []any{}
 	if len(direct) > 0 {
 		full := make([]string, 0, len(direct))
@@ -238,5 +241,13 @@ func dnsConfig(direct []string) map[string]any {
 		servers = append(servers, map[string]any{"address": "localhost", "domains": full, "skipFallback": true})
 	}
 	servers = append(servers, "https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query")
-	return map[string]any{"tag": "dns-module", "queryStrategy": "UseIPv4", "servers": servers}
+	cfg := map[string]any{"tag": "dns-module", "queryStrategy": "UseIPv4", "servers": servers}
+	if len(hosts) > 0 {
+		h := map[string]any{}
+		for d, ips := range hosts {
+			h["full:"+d] = ips
+		}
+		cfg["hosts"] = h
+	}
+	return cfg
 }

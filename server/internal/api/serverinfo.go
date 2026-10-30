@@ -336,3 +336,57 @@ func (s *Server) apiEndpoints() (hosts, ips []string) {
 }
 
 var publicIPRefreshing atomic.Bool
+
+var (
+	apiDNSMu   sync.Mutex
+	apiDNS     = map[string][]string{} // domain -> public A records
+	apiDNSAt   time.Time
+	apiDNSBusy atomic.Bool
+)
+
+// apiHosts pins each API domain to the addresses it resolves to publicly,
+// but only when those are this server's own addresses (behind a CDN or load
+// balancer the pin would be wrong). Resolution runs in the background.
+func (s *Server) apiHosts(domains, mine []string) map[string][]string {
+	if len(domains) == 0 || len(mine) == 0 {
+		return nil
+	}
+	own := map[string]bool{}
+	for _, ip := range mine {
+		own[ip] = true
+	}
+	apiDNSMu.Lock()
+	stale := time.Since(apiDNSAt) > 10*time.Minute
+	out := map[string][]string{}
+	for _, d := range domains {
+		ips := apiDNS[d]
+		ok := len(ips) > 0
+		for _, ip := range ips {
+			if !own[ip] {
+				ok = false
+			}
+		}
+		if ok {
+			out[d] = ips
+		}
+	}
+	apiDNSMu.Unlock()
+	if stale && apiDNSBusy.CompareAndSwap(false, true) {
+		go func() {
+			defer apiDNSBusy.Store(false)
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			m := map[string][]string{}
+			for _, d := range domains {
+				m[d] = resolveA(ctx, d)
+			}
+			apiDNSMu.Lock()
+			apiDNS, apiDNSAt = m, time.Now()
+			apiDNSMu.Unlock()
+		}()
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
