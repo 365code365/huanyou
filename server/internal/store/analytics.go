@@ -61,11 +61,11 @@ func (s *Store) RecordEvents(ctx context.Context, hits []EventHit) error {
 
 type DayStat struct {
 	Day       string `json:"day"`
-	UV        int64  `json:"uv"`         // distinct visitors who opened the app
-	Opens     int64  `json:"opens"`      // app opens
-	NewUsers  int64  `json:"new_users"`  // accounts created that day
-	Connects  int64  `json:"connects"`   // successful VPN connections
-	Purchases int64  `json:"purchases"`  // paid orders
+	UV        int64  `json:"uv"`        // distinct visitors who opened the app
+	Opens     int64  `json:"opens"`     // app opens
+	NewUsers  int64  `json:"new_users"` // accounts created that day
+	Connects  int64  `json:"connects"`  // successful VPN connections
+	Purchases int64  `json:"purchases"` // paid orders
 }
 
 // DailyStats returns n days ending today (oldest first, zero-filled).
