@@ -14,12 +14,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
 	"vpnplatform/server/internal/api"
 	"vpnplatform/server/internal/auth"
 	"vpnplatform/server/internal/config"
+	"vpnplatform/server/internal/monitor"
 	"vpnplatform/server/internal/store"
 )
 
@@ -37,20 +39,46 @@ func main() {
 	}
 	defer st.Close()
 
+	cat, err := loadCatalog(st, cfg)
+	if err != nil {
+		fatal("load catalog", err)
+	}
+
+	if flag.Arg(0) == "catalog" && flag.Arg(1) == "import" {
+		seed := cfg.Catalog
+		if err := seed.Normalize(); err != nil {
+			fatal("catalog import", err)
+		}
+		if err := st.SaveCatalog(context.Background(), &seed); err != nil {
+			fatal("catalog import", err)
+		}
+		fmt.Println("catalog imported from", *cfgPath, "- restart the API to apply")
+		return
+	}
 	if flag.NArg() > 0 {
-		if err := adminCmd(st, flag.Args()); err != nil {
+		if err := adminCmd(cat, st, flag.Args()); err != nil {
 			fatal("command failed", err)
 		}
 		return
+	}
+
+	if err := st.EnsureRefCodes(context.Background()); err != nil {
+		fatal("backfill invite codes", err)
 	}
 
 	issuer, err := auth.NewIssuer(cfg.JWTSecret, time.Duration(cfg.TokenTTLHours)*time.Hour)
 	if err != nil {
 		fatal("jwt", err)
 	}
+	live := config.NewLiveCatalog(cat)
+	mon := monitor.New(live)
+	apiServer, err := api.New(cfg, live, st, issuer, mon)
+	if err != nil {
+		fatal("payments", err)
+	}
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           api.New(cfg, st, issuer).Handler(),
+		Handler:           apiServer.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -59,6 +87,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go mon.Run(ctx)
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -66,16 +95,20 @@ func main() {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	slog.Info("api listening", "addr", cfg.Listen, "nodes", len(cfg.Nodes))
+	slog.Info("api listening", "addr", cfg.Listen, "nodes", len(cat.Nodes), "admin", cfg.Admin.Password != "")
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fatal("serve", err)
 	}
 }
 
-func adminCmd(st *store.Store, args []string) error {
+func adminCmd(cfg *config.Catalog, st *store.Store, args []string) error {
 	ctx := context.Background()
+	const usage = `usage:
+  user disable|enable|rotate|reset-traffic <email>
+  user plan <email> <plan_id> <days>      grant / extend a paid plan
+  user expire <email> <YYYY-MM-DD>        set paid plan expiry`
 	if len(args) < 3 || args[0] != "user" {
-		return errors.New("usage: user <disable|enable|rotate> <email> | user expire <email> <YYYY-MM-DD|never>")
+		return errors.New(usage)
 	}
 	email := args[2]
 	switch args[1] {
@@ -85,12 +118,24 @@ func adminCmd(st *store.Store, args []string) error {
 		return st.SetDisabled(ctx, email, false)
 	case "rotate":
 		return st.RotateUUID(ctx, email)
+	case "reset-traffic":
+		return st.ResetTraffic(ctx, email)
+	case "plan":
+		if len(args) < 5 {
+			return errors.New(usage)
+		}
+		p := cfg.Plan(args[3])
+		if p == nil || p.ID == cfg.FreePlan {
+			return fmt.Errorf("unknown paid plan %q", args[3])
+		}
+		days, err := strconv.Atoi(args[4])
+		if err != nil || days <= 0 {
+			return errors.New("days must be a positive integer")
+		}
+		return st.GrantPlan(ctx, email, p.ID, days)
 	case "expire":
 		if len(args) < 4 {
-			return errors.New("usage: user expire <email> <YYYY-MM-DD|never>")
-		}
-		if args[3] == "never" {
-			return st.SetExpiry(ctx, email, nil)
+			return errors.New(usage)
 		}
 		t, err := time.ParseInLocation("2006-01-02", args[3], time.Local)
 		if err != nil {
@@ -100,6 +145,33 @@ func adminCmd(st *store.Store, args []string) error {
 		return st.SetExpiry(ctx, email, &t)
 	}
 	return fmt.Errorf("unknown user command %q", args[1])
+}
+
+// loadCatalog returns the database copy of the catalog. On the first start
+// (or after upgrading from a version without one) it is seeded from api.json.
+// From then on the admin panel owns it: edits to plans / nodes / apps in
+// api.json are ignored unless you run "catalog import".
+func loadCatalog(st *store.Store, cfg *config.API) (*config.Catalog, error) {
+	ctx := context.Background()
+	c, err := st.LoadCatalog(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if c == nil {
+		seed := cfg.Catalog
+		if err := seed.Normalize(); err != nil {
+			return nil, err
+		}
+		if err := st.SaveCatalog(ctx, &seed); err != nil {
+			return nil, err
+		}
+		slog.Info("catalog seeded from config file", "plans", len(seed.Plans), "nodes", len(seed.Nodes))
+		return &seed, nil
+	}
+	if err := c.Normalize(); err != nil {
+		return nil, fmt.Errorf("stored catalog invalid: %w", err)
+	}
+	return c, nil
 }
 
 func fatal(msg string, err error) {

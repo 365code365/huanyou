@@ -18,6 +18,10 @@ final class VpnPlugin: NSObject, FlutterStreamHandler {
       .setMethodCallHandler(plugin.handle)
     FlutterEventChannel(name: "vpn_platform/vpn_status", binaryMessenger: registrar.messenger())
       .setStreamHandler(plugin)
+    #if !targetEnvironment(simulator)
+      // Clean up the "需要更新" entry left in Settings by a build without the extension.
+      if !tunnelExtensionInstalled { removeStaleProfiles() }
+    #endif
     plugin.loadManager { _ in }
   }
 
@@ -51,7 +55,35 @@ final class VpnPlugin: NSObject, FlutterStreamHandler {
     }
   }
 
+  /// The PacketTunnel extension must be inside this app bundle. If it isn't
+  /// (e.g. a build signed without an extension profile), iOS would save the
+  /// VPN profile anyway and then show it as "需要更新" in Settings.
+  private static var tunnelExtensionInstalled: Bool {
+    guard let url = Bundle.main.builtInPlugInsURL?.appendingPathComponent("PacketTunnel.appex") else { return false }
+    return Bundle(url: url)?.bundleIdentifier == tunnelBundleId
+  }
+
+  /// Removes VPN profiles this app saved earlier that can no longer work.
+  private static func removeStaleProfiles() {
+    NETunnelProviderManager.loadAllFromPreferences { managers, _ in
+      for m in managers ?? [] { m.removeFromPreferences { _ in } }
+    }
+  }
+
   private func connect(config: String, name: String, result: @escaping FlutterResult) {
+    #if targetEnvironment(simulator)
+      // Apple does not run Network Extensions in the Simulator.
+      result(FlutterError(code: "unsupported", message: "iOS 模拟器不支持 VPN，请在真机上测试连接", details: nil))
+      return
+    #endif
+    guard Self.tunnelExtensionInstalled else {
+      Self.removeStaleProfiles()
+      result(FlutterError(
+        code: "no_extension",
+        message: "当前安装包缺少 VPN 组件（PacketTunnel 扩展未签名），无法建立连接。请安装包含 VPN 扩展的正式版本。",
+        details: nil))
+      return
+    }
     loadManager { [weak self] existing in
       guard let self else { return }
       let m = existing ?? NETunnelProviderManager()
@@ -61,7 +93,7 @@ final class VpnPlugin: NSObject, FlutterStreamHandler {
       // Kept in the VPN preferences so the system can restart the tunnel on its own.
       proto.providerConfiguration = ["config": config]
       m.protocolConfiguration = proto
-      m.localizedDescription = "安全连接"
+      m.localizedDescription = "环游"
       m.isEnabled = true
       // The first save shows the system "Add VPN Configurations" prompt.
       m.saveToPreferences { error in

@@ -1,6 +1,7 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,16 +13,19 @@ import (
 )
 
 type remoteUser struct {
-	Email string `json:"email"`
-	UUID  string `json:"uuid"`
+	Email     string `json:"email"`
+	UUID      string `json:"uuid"`
+	SpeedKbps int    `json:"speed_kbps"` // 0 = unlimited
 }
 
-// Syncer periodically pulls the active user list and applies the diff to Xray.
+// Syncer periodically (1) reports per-user traffic to the API and
+// (2) pulls the allowed user list, applying the diff and speed limits to Xray.
 type Syncer struct {
 	APIURL   string
 	Token    string
 	Interval time.Duration
 	Xray     *Xray
+	Stats    *Stats
 
 	client  http.Client
 	current map[string]string // email -> uuid
@@ -33,24 +37,40 @@ func (s *Syncer) Run(ctx context.Context) {
 	t := time.NewTicker(s.Interval)
 	defer t.Stop()
 	for {
-		if err := s.syncOnce(ctx); err != nil {
+		if err := s.reportTraffic(ctx); err != nil {
+			slog.Warn("traffic report failed", "err", err)
+		}
+		if err := s.syncUsers(ctx); err != nil {
 			// Keep serving the last known user set; the API being down must not cut users off.
 			slog.Warn("user sync failed", "err", err)
 		}
 		select {
 		case <-ctx.Done():
+			// Final flush so traffic of the last interval is not lost.
+			flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = s.reportTraffic(flushCtx)
+			cancel()
 			return
 		case <-t.C:
 		}
 	}
 }
 
-func (s *Syncer) syncOnce(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(s.APIURL, "/")+"/internal/v1/users", nil)
+func (s *Syncer) do(ctx context.Context, method, path string, body any, out any) error {
+	var rd io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		rd = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(s.APIURL, "/")+path, rd)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+s.Token)
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return err
@@ -58,22 +78,50 @@ func (s *Syncer) syncOnce(ctx context.Context) error {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("api status %d: %s", resp.StatusCode, b)
+		return fmt.Errorf("%s %s: status %d: %s", method, path, resp.StatusCode, b)
 	}
+	if out == nil {
+		return nil
+	}
+	return json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(out)
+}
+
+func (s *Syncer) reportTraffic(ctx context.Context) error {
+	usage := s.Stats.Drain()
+	if len(usage) == 0 {
+		return nil
+	}
+	type item struct {
+		Email string `json:"email"`
+		Up    int64  `json:"up"`
+		Down  int64  `json:"down"`
+	}
+	items := make([]item, 0, len(usage))
+	for email, u := range usage {
+		items = append(items, item{email, u.Up, u.Down})
+	}
+	if err := s.do(ctx, http.MethodPost, "/internal/v1/traffic", map[string]any{"traffic": items}, nil); err != nil {
+		s.Stats.Restore(usage) // retry next round
+		return err
+	}
+	return nil
+}
+
+func (s *Syncer) syncUsers(ctx context.Context) error {
 	var body struct {
 		Users []remoteUser `json:"users"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&body); err != nil {
-		return fmt.Errorf("decode users: %w", err)
+	if err := s.do(ctx, http.MethodGet, "/internal/v1/users", nil, &body); err != nil {
+		return err
 	}
-	want := make(map[string]string, len(body.Users))
+	want := make(map[string]remoteUser, len(body.Users))
 	for _, u := range body.Users {
-		want[u.Email] = u.UUID
+		want[u.Email] = u
 	}
 
 	added, removed := 0, 0
 	for email, uuid := range s.current {
-		if w, ok := want[email]; !ok || w != uuid {
+		if w, ok := want[email]; !ok || w.UUID != uuid {
 			if err := s.Xray.RemoveUser(ctx, email); err != nil {
 				slog.Warn("remove user", "err", err)
 			}
@@ -81,15 +129,16 @@ func (s *Syncer) syncOnce(ctx context.Context) error {
 			removed++
 		}
 	}
-	for email, uuid := range want {
+	for email, u := range want {
+		s.Stats.SetSpeed(email, u.SpeedKbps)
 		if _, ok := s.current[email]; ok {
 			continue
 		}
-		if err := s.Xray.AddUser(ctx, email, uuid); err != nil {
+		if err := s.Xray.AddUser(ctx, email, u.UUID); err != nil {
 			slog.Warn("add user", "err", err)
 			continue
 		}
-		s.current[email] = uuid
+		s.current[email] = u.UUID
 		added++
 	}
 	if added+removed > 0 {

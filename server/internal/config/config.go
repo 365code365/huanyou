@@ -6,33 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 )
 
-// RealityPublic is the client-side half of a node's REALITY settings.
-type RealityPublic struct {
-	PublicKey   string `json:"public_key"`
-	ShortID     string `json:"short_id"`
-	ServerName  string `json:"server_name"` // SNI shown on the wire, must be in node's server_names
-	Fingerprint string `json:"fingerprint"` // uTLS fingerprint, default "chrome"
-}
-
-// Node is how the API server sees a proxy node.
-type Node struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Region  string `json:"region"`
-	Address string `json:"address"` // public IP or domain the app dials
-	// Token authenticates the node agent when it pulls the user list. Secret.
-	Token   string        `json:"token"`
-	Reality RealityPublic `json:"reality"`
-	// VisionPort: public port (443). Serves VLESS + XTLS-Vision + REALITY.
-	VisionPort int `json:"vision_port"`
-	// XHTTPPath: if set, the same port also serves VLESS + XHTTP + REALITY
-	// (second transport for when Vision is disrupted). Must match the node.
-	XHTTPPath string `json:"xhttp_path"`
-}
-
+// API is the API server configuration. Static settings (listen address,
+// secrets, payments) live only in the JSON file; the embedded Catalog is the
+// admin-editable part (see catalog.go).
 type API struct {
 	Listen        string `json:"listen"`
 	Database      string `json:"database"`
@@ -40,8 +20,58 @@ type API struct {
 	TokenTTLHours int    `json:"token_ttl_hours"`
 	AllowRegister bool   `json:"allow_register"`
 	// TrustProxyHeader: use X-Forwarded-For for client IP (only behind your own reverse proxy).
-	TrustProxyHeader bool   `json:"trust_proxy_header"`
-	Nodes            []Node `json:"nodes"`
+	TrustProxyHeader bool `json:"trust_proxy_header"`
+	// PublicURL is the externally reachable base URL of this API (payment callbacks, invite links).
+	PublicURL string          `json:"public_url"`
+	Payments  Payments        `json:"payments"`
+	Admin     AdminConfig     `json:"admin"`
+	Provision ProvisionConfig `json:"provision"`
+	// DownloadDir holds files served at /dl/<name>, e.g. app.apk for the invite page.
+	DownloadDir string `json:"download_dir"`
+
+	Catalog // seed for the database copy; JSON keys stay flat for compatibility
+}
+
+// ProvisionConfig enables one-click node installation over SSH from the admin
+// panel. The API uploads a vpn-node binary matching the target's architecture.
+type ProvisionConfig struct {
+	// BinaryAmd64 / BinaryArm64 are filesystem paths to linux vpn-node binaries.
+	// BinaryAmd64 defaults to the API's own installed node binary, so the common
+	// single-arch (x86_64) case needs no extra configuration.
+	BinaryAmd64 string `json:"binary_amd64"`
+	BinaryArm64 string `json:"binary_arm64"`
+	// RealityTarget is the camouflage site new nodes impersonate, e.g. "www.apple.com:443".
+	RealityTarget string `json:"reality_target"`
+}
+
+// AdminConfig secures the web admin panel. Password can come from env VPN_ADMIN_PASSWORD.
+type AdminConfig struct {
+	Password string `json:"password"`
+}
+
+type Payments struct {
+	Alipay *AlipayConfig `json:"alipay"`
+	Epay   *EpayConfig   `json:"epay"`
+	// Mock enables a fake payment page for development. NEVER enable in production.
+	Mock bool `json:"mock"`
+}
+
+// AlipayConfig: official Alipay open platform, 手机网站支付 (alipay.trade.wap.pay).
+type AlipayConfig struct {
+	AppID string `json:"app_id"`
+	// PEM or bare base64 (as shown in the Alipay console).
+	PrivateKeyFile      string `json:"private_key_file"`
+	AlipayPublicKeyFile string `json:"alipay_public_key_file"`
+	// Gateway: https://openapi.alipay.com/gateway.do (sandbox: https://openapi-sandbox.dl.alipaydev.com/gateway.do)
+	Gateway string `json:"gateway"`
+}
+
+// EpayConfig: "易支付" aggregator protocol (submit.php + MD5 sign), supports alipay / wxpay / qqpay.
+type EpayConfig struct {
+	APIURL string   `json:"api_url"`
+	PID    string   `json:"pid"`
+	Key    string   `json:"key"` // or env VPN_EPAY_KEY
+	Types  []string `json:"types"`
 }
 
 func LoadAPI(path string) (*API, error) {
@@ -52,30 +82,55 @@ func LoadAPI(path string) (*API, error) {
 	if v := os.Getenv("VPN_JWT_SECRET"); v != "" {
 		c.JWTSecret = v
 	}
-	seen := map[string]bool{}
-	for i := range c.Nodes {
-		n := &c.Nodes[i]
-		if n.ID == "" || n.Address == "" || n.VisionPort == 0 {
-			return nil, fmt.Errorf("node #%d: id, address and vision_port are required", i)
+	if v := os.Getenv("VPN_ADMIN_PASSWORD"); v != "" {
+		c.Admin.Password = v
+	}
+	if e := c.Payments.Epay; e != nil {
+		if v := os.Getenv("VPN_EPAY_KEY"); v != "" {
+			e.Key = v
 		}
-		if seen[n.ID] {
-			return nil, fmt.Errorf("duplicate node id %q", n.ID)
-		}
-		seen[n.ID] = true
-		if len(n.Token) < 24 {
-			return nil, fmt.Errorf("node %s: token must be at least 24 characters", n.ID)
-		}
-		if n.Reality.PublicKey == "" || n.Reality.ServerName == "" {
-			return nil, fmt.Errorf("node %s: reality.public_key and reality.server_name are required", n.ID)
-		}
-		if n.Reality.Fingerprint == "" {
-			n.Reality.Fingerprint = "chrome"
-		}
-		if n.XHTTPPath != "" && !strings.HasPrefix(n.XHTTPPath, "/") {
-			return nil, fmt.Errorf("node %s: xhttp_path must start with /", n.ID)
+		if e.APIURL == "" || e.PID == "" || e.Key == "" || len(e.Types) == 0 {
+			return nil, errors.New("payments.epay: api_url, pid, key and types are required")
 		}
 	}
+	if a := c.Payments.Alipay; a != nil {
+		if a.AppID == "" || a.PrivateKeyFile == "" || a.AlipayPublicKeyFile == "" {
+			return nil, errors.New("payments.alipay: app_id, private_key_file and alipay_public_key_file are required")
+		}
+		if a.Gateway == "" {
+			a.Gateway = "https://openapi.alipay.com/gateway.do"
+		}
+	}
+	if c.DownloadDir == "" {
+		c.DownloadDir = "/var/lib/vpn/dl"
+	}
+	if c.Provision.BinaryAmd64 == "" {
+		c.Provision.BinaryAmd64 = "/usr/local/bin/vpn-node"
+	}
+	if c.Provision.RealityTarget == "" {
+		c.Provision.RealityTarget = "www.apple.com:443"
+	}
+	hasPayments := c.Payments.Alipay != nil || c.Payments.Epay != nil || c.Payments.Mock
+	if hasPayments && !strings.HasPrefix(c.PublicURL, "http") {
+		return nil, errors.New("public_url is required when payments are configured")
+	}
+	c.PublicURL = strings.TrimRight(c.PublicURL, "/")
+	if err := c.Catalog.Normalize(); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
 	return c, nil
+}
+
+func sortSlice[T any](s []T, less func(a, b T) bool) {
+	slices.SortStableFunc(s, func(a, b T) int {
+		switch {
+		case less(a, b):
+			return -1
+		case less(b, a):
+			return 1
+		}
+		return 0
+	})
 }
 
 // NodeAgent is the configuration of a proxy node.
@@ -91,6 +146,10 @@ type NodeAgent struct {
 	XHTTPPath string `json:"xhttp_path"`
 	// XHTTPInternal is where the internal XHTTP inbound listens (loopback or unix socket).
 	XHTTPInternal string `json:"xhttp_internal"`
+	// AcceptProxyProtocol: set when a front proxy (e.g. nginx stream with
+	// ssl_preread SNI routing) forwards to the node with PROXY protocol, so
+	// the node sees real client IPs.
+	AcceptProxyProtocol bool `json:"accept_proxy_protocol"`
 
 	Reality struct {
 		PrivateKey string   `json:"private_key"`

@@ -18,6 +18,7 @@ import (
 	"github.com/xtls/xray-core/infra/conf/serial"
 	"github.com/xtls/xray-core/proxy"
 	"github.com/xtls/xray-core/proxy/vless"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	_ "github.com/xtls/xray-core/main/distro/all"
 
@@ -51,13 +52,15 @@ func BuildServerConfig(c *config.NodeAgent) ([]byte, error) {
 	if c.XHTTPPath != "" {
 		visionSettings["fallbacks"] = []any{map[string]any{"dest": c.XHTTPInternal, "xver": 0}}
 	}
+	visionStream := map[string]any{"network": "raw", "security": "reality", "realitySettings": reality}
+	if c.AcceptProxyProtocol {
+		visionStream["sockopt"] = map[string]any{"acceptProxyProtocol": true}
+	}
 	inbounds := []any{map[string]any{
 		"tag": TagVision, "listen": c.Listen, "port": c.VisionPort, "protocol": "vless",
-		"settings": visionSettings,
-		"streamSettings": map[string]any{
-			"network": "raw", "security": "reality", "realitySettings": reality,
-		},
-		"sniffing": sniff,
+		"settings":       visionSettings,
+		"streamSettings": visionStream,
+		"sniffing":       sniff,
 	}}
 	if c.XHTTPPath != "" {
 		host, port, err := splitListen(c.XHTTPInternal)
@@ -78,11 +81,23 @@ func BuildServerConfig(c *config.NodeAgent) ([]byte, error) {
 	cfg := map[string]any{
 		"log":      map[string]any{"loglevel": c.LogLevel},
 		"inbounds": inbounds,
+		// Egress fingerprint: the freedom outbound relays the client's raw TCP/UDP
+		// payload verbatim to the exact destination the client targeted. "AsIs"
+		// means the node performs no DNS re-resolution and does not rewrite the
+		// destination, so the client's own TLS ClientHello (its real uTLS/browser
+		// fingerprint) reaches the origin unchanged and no proxy headers
+		// (Via / X-Forwarded-For) are ever added. To the destination this looks
+		// like an ordinary client connection, not a proxied one.
 		"outbounds": []any{
-			map[string]any{"tag": "direct", "protocol": "freedom", "settings": map[string]any{"domainStrategy": "UseIPv4"}},
+			map[string]any{"tag": "direct", "protocol": "freedom",
+				"settings": map[string]any{"domainStrategy": "AsIs"}},
 			map[string]any{"tag": "block", "protocol": "blackhole"},
 		},
-		"policy": map[string]any{"levels": map[string]any{"0": map[string]any{"handshake": 4, "connIdle": 300}}},
+		"policy": map[string]any{"levels": map[string]any{"0": map[string]any{
+			"handshake": 4, "connIdle": 300,
+			// Makes Xray wrap each user's traffic with our counters (traffic stats + speed limit).
+			"statsUserUplink": true, "statsUserDownlink": true,
+		}}},
 		"routing": map[string]any{
 			// Resolve domains so the private-range rule also catches e.g. "localhost.example" -> 127.0.0.1.
 			"domainStrategy": "IPIfNonMatch",
@@ -118,7 +133,9 @@ type Xray struct {
 	tags map[string]string // inbound tag -> VLESS flow
 }
 
-func StartXray(c *config.NodeAgent) (*Xray, error) {
+// StartXray starts the embedded Xray server. st receives per-user traffic and
+// enforces per-user speed limits.
+func StartXray(c *config.NodeAgent, st *Stats) (*Xray, error) {
 	raw, err := BuildServerConfig(c)
 	if err != nil {
 		return nil, err
@@ -127,6 +144,9 @@ func StartXray(c *config.NodeAgent) (*Xray, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load xray config: %w", err)
 	}
+	// Install our stats manager in place of Xray's (see stats.go).
+	registerStats(st)
+	pb.App = append(pb.App, cserial.ToTypedMessage(&emptypb.Empty{}))
 	inst, err := core.New(pb)
 	if err != nil {
 		return nil, fmt.Errorf("create xray: %w", err)

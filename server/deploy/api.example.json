@@ -5,19 +5,65 @@
   "token_ttl_hours": 720,
   "allow_register": true,
   "trust_proxy_header": true,
+  "public_url": "https://api.example.com",
+  "traffic_period_days": 30,
+  "free_plan": "free",
+
+  "admin": { "password": "" },
+
+  "referral": {
+    "enabled": true,
+    "reward_plan_id": "month",
+    "inviter_days": 7,
+    "invitee_days": 3,
+    "max_invites": 50
+  },
+
+  "monitor": {
+    "enabled": true,
+    "interval_seconds": 60,
+    "timeout_seconds": 8,
+    "fail_threshold": 3,
+    "alert_webhook": ""
+  },
+
+  "apps": [
+    {"id": "chatgpt", "name": "ChatGPT", "category": "AI", "icon_url": "", "url": "https://chatgpt.com", "desc": "OpenAI 官方助手"},
+    {"id": "claude",  "name": "Claude",  "category": "AI", "icon_url": "", "url": "https://claude.ai",   "desc": "Anthropic AI"}
+  ],
+
+  "plans": [
+    {"id": "free",  "name": "免费版", "description": "每月 1 GB 全速，超出后限速 160 kbps", "traffic_gb": 1, "over_quota_kbps": 160},
+    {"id": "lite",  "name": "轻量版", "description": "每月 50 GB，最高 10 Mbps", "price_cents": 900, "duration_days": 30, "traffic_gb": 50, "speed_mbps": 10},
+    {"id": "month", "name": "月付",   "description": "每月 200 GB，不限速", "price_cents": 2500, "duration_days": 30, "traffic_gb": 200},
+    {"id": "year",  "name": "年付",   "description": "每月 200 GB，不限速，约 7 折", "price_cents": 21000, "duration_days": 365, "traffic_gb": 200}
+  ],
+
+  "payments": {
+    "epay": {
+      "api_url": "https://pay.example.com/",
+      "pid": "1001",
+      "key": "",
+      "types": ["alipay", "wxpay"]
+    },
+    "mock": false
+  },
+
   "nodes": [
     {
-      "id": "hk1",
-      "name": "香港 01",
-      "region": "HK",
+      "id": "us1",
+      "name": "美国 01",
+      "region": "US",
       "address": "203.0.113.10",
       "token": "PASTE token FROM `node keygen`",
       "vision_port": 443,
       "xhttp_path": "/PASTE-A-RANDOM-PATH",
+      "weight": 1,
+      "disabled": false,
       "reality": {
         "public_key": "PASTE public_key FROM `node keygen`",
         "short_id": "PASTE short_id FROM `node keygen`",
-        "server_name": "www.yahoo.com",
+        "server_name": "www.apple.com",
         "fingerprint": "chrome"
       }
     }

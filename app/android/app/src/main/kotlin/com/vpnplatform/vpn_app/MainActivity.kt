@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
+import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -39,6 +40,18 @@ class MainActivity : FlutterActivity() {
                 "disconnect" -> {
                     startService(Intent(this, XrayVpnService::class.java).setAction(XrayVpnService.ACTION_DISCONNECT))
                     result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // Stable per-device id (ANDROID_ID). It survives app reinstall, so a
+        // returning user is recognized without any login.
+        MethodChannel(messenger, "vpn_platform/device").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "deviceId" -> {
+                    val id = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+                    result.success(id)
                 }
                 else -> result.notImplemented()
             }

@@ -54,6 +54,25 @@ func (i *Issuer) Issue(userID int64) (string, time.Time, error) {
 	return s, exp, err
 }
 
+// IssueAdmin returns a short-lived token for the admin panel (8h).
+func (i *Issuer) IssueAdmin() (string, error) {
+	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
+		Subject:   "admin",
+		IssuedAt:  jwt.NewNumericDate(time.Now()),
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(8 * time.Hour)),
+	})
+	return tok.SignedString(i.secret)
+}
+
+// VerifyAdmin reports whether token is a valid admin token.
+func (i *Issuer) VerifyAdmin(token string) bool {
+	var claims jwt.RegisteredClaims
+	_, err := jwt.ParseWithClaims(token, &claims, func(*jwt.Token) (any, error) { return i.secret, nil },
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+		jwt.WithExpirationRequired())
+	return err == nil && claims.Subject == "admin"
+}
+
 // Verify returns the user ID in a valid token.
 func (i *Issuer) Verify(token string) (int64, error) {
 	var claims jwt.RegisteredClaims

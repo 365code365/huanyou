@@ -15,11 +15,28 @@ import (
 type Mode string
 
 const (
-	// ModeSmart: mainland China IPs go direct, everything else through the proxy.
-	ModeSmart Mode = "smart"
-	// ModeGlobal: everything except LAN goes through the proxy.
+	// ModeDirect: one node (CN IPs direct, everything else via that node).
+	ModeDirect Mode = "direct"
+	// ModeCluster: all enabled nodes behind one latency-balanced selector.
+	ModeCluster Mode = "cluster"
+	// ModeAI: one node, but only AI service domains go through the proxy.
+	ModeAI Mode = "ai"
+	// ModeGlobal: one node, everything (except LAN) via proxy.
 	ModeGlobal Mode = "global"
 )
+
+func ParseMode(s string) Mode {
+	switch Mode(s) {
+	case ModeCluster:
+		return ModeCluster
+	case ModeAI:
+		return ModeAI
+	case ModeGlobal:
+		return ModeGlobal
+	default:
+		return ModeDirect
+	}
+}
 
 // CNGeoIPFile is shipped inside the app (see app/scripts/fetch_geo.sh).
 const CNGeoIPFile = "geoip-only-cn-private.dat"
@@ -33,15 +50,22 @@ var PrivateCIDRs = []string{
 	"240.0.0.0/4", "::1/128", "fc00::/7", "fe80::/10", "ff00::/8",
 }
 
-// Build returns the client config JSON for user uuid on node n.
-func Build(n *config.Node, uuid string, mode Mode) (string, error) {
-	reality := func() map[string]any {
-		return map[string]any{
-			"fingerprint": n.Reality.Fingerprint,
-			"serverName":  n.Reality.ServerName,
-			"publicKey":   n.Reality.PublicKey,
-			"shortId":     n.Reality.ShortID,
-		}
+// Params controls how a client profile is built.
+type Params struct {
+	UUID      string
+	Mode      Mode
+	Nodes     []*config.Node // one for direct/ai/global; all enabled for cluster
+	AIDomains []string       // used only in ai mode
+}
+
+// nodeOutbounds returns the outbound definitions and their tags for one node.
+// suffix keeps tags unique when several nodes are combined (cluster mode).
+func nodeOutbounds(n *config.Node, uuid, suffix string) (outbounds []any, tags []string) {
+	reality := map[string]any{
+		"fingerprint": n.Reality.Fingerprint,
+		"serverName":  n.Reality.ServerName,
+		"publicKey":   n.Reality.PublicKey,
+		"shortId":     n.Reality.ShortID,
 	}
 	vless := func(port int, flow string) map[string]any {
 		user := map[string]any{"id": uuid, "encryption": "none"}
@@ -53,53 +77,96 @@ func Build(n *config.Node, uuid string, mode Mode) (string, error) {
 		}}}
 	}
 
-	outbounds := []any{
-		map[string]any{
-			"tag":      "proxy-vision",
-			"protocol": "vless",
-			"settings": vless(n.VisionPort, "xtls-rprx-vision"),
-			"streamSettings": map[string]any{
-				"network":         "raw",
-				"security":        "reality",
-				"realitySettings": reality(),
-			},
+	visionTag := "proxy-vision" + suffix
+	outbounds = append(outbounds, map[string]any{
+		"tag":      visionTag,
+		"protocol": "vless",
+		"settings": vless(n.VisionPort, "xtls-rprx-vision"),
+		"streamSettings": map[string]any{
+			"network":         "raw",
+			"security":        "reality",
+			"realitySettings": reality,
 		},
-	}
-	proxySelectors := []string{"proxy-vision"}
+	})
+	tags = append(tags, visionTag)
+
 	if n.XHTTPPath != "" {
+		xhttpTag := "proxy-xhttp" + suffix
 		outbounds = append(outbounds, map[string]any{
-			"tag":      "proxy-xhttp",
+			"tag":      xhttpTag,
 			"protocol": "vless",
 			"settings": vless(n.VisionPort, ""),
 			"streamSettings": map[string]any{
 				"network":         "xhttp",
 				"security":        "reality",
-				"realitySettings": reality(),
+				"realitySettings": reality,
 				"xhttpSettings":   map[string]any{"path": n.XHTTPPath, "mode": "auto"},
 			},
 		})
-		proxySelectors = append(proxySelectors, "proxy-xhttp")
+		tags = append(tags, xhttpTag)
 	}
+	return outbounds, tags
+}
+
+// Build returns the client config JSON for the given params.
+func Build(p Params) (string, error) {
+	if len(p.Nodes) == 0 {
+		return "", fmt.Errorf("profile: no nodes")
+	}
+	var outbounds []any
+	var proxyTags []string
+
+	if p.Mode == ModeCluster {
+		for _, n := range p.Nodes {
+			obs, tags := nodeOutbounds(n, p.UUID, "-"+n.ID)
+			outbounds = append(outbounds, obs...)
+			proxyTags = append(proxyTags, tags...)
+		}
+	} else {
+		obs, tags := nodeOutbounds(p.Nodes[0], p.UUID, "")
+		outbounds = append(outbounds, obs...)
+		proxyTags = append(proxyTags, tags...)
+	}
+
 	outbounds = append(outbounds,
-		map[string]any{"tag": "direct", "protocol": "freedom"},
+		map[string]any{"tag": "direct", "protocol": "freedom", "settings": map[string]any{"domainStrategy": "UseIP"}},
 		map[string]any{"tag": "block", "protocol": "blackhole"},
 		map[string]any{"tag": "dns-out", "protocol": "dns"},
 	)
 
 	rules := []any{
-		// The TUN advertises 172.19.0.2 as DNS; answer those queries with Xray's DNS module.
+		// TUN advertises TunDNS; answer those with Xray's DNS module.
 		map[string]any{"inboundTag": []string{"tun-in"}, "port": "53", "network": "tcp,udp", "outboundTag": "dns-out"},
-		// Anything else to the virtual DNS IP (e.g. Android Private DNS probing :853) is
-		// rejected immediately so the OS falls back to plain DNS without waiting.
-		map[string]any{"ip": []string{TunDNS + "/32"}, "outboundTag": "block"},
-		// Upstream DNS queries made by the DNS module go through the proxy (prevents DNS poisoning).
+		// DNS module's own upstream queries go through the proxy (prevents poisoning).
 		map[string]any{"inboundTag": []string{"dns-module"}, "balancerTag": "proxy"},
+		// Reject other traffic aimed at the virtual DNS IP (e.g. Android Private DNS :853).
+		map[string]any{"ip": []string{TunDNS + "/32"}, "outboundTag": "block"},
 		map[string]any{"ip": PrivateCIDRs, "outboundTag": "direct"},
 	}
-	if mode == ModeSmart {
-		rules = append(rules, map[string]any{"ip": []string{"ext:" + CNGeoIPFile + ":cn"}, "outboundTag": "direct"})
+
+	switch p.Mode {
+	case ModeAI:
+		// Only AI domains go through the proxy; everything else is direct.
+		domains := p.AIDomains
+		if len(domains) == 0 {
+			domains = config.DefaultAIDomains
+		}
+		matchers := make([]string, 0, len(domains))
+		for _, d := range domains {
+			matchers = append(matchers, "domain:"+d)
+		}
+		rules = append(rules,
+			map[string]any{"domain": matchers, "balancerTag": "proxy"},
+			map[string]any{"network": "tcp,udp", "outboundTag": "direct"},
+		)
+	case ModeGlobal:
+		rules = append(rules, map[string]any{"network": "tcp,udp", "balancerTag": "proxy"})
+	default: // direct, cluster: mainland China direct, the rest proxied
+		rules = append(rules,
+			map[string]any{"ip": []string{"ext:" + CNGeoIPFile + ":cn"}, "outboundTag": "direct"},
+			map[string]any{"network": "tcp,udp", "balancerTag": "proxy"},
+		)
 	}
-	rules = append(rules, map[string]any{"network": "tcp,udp", "balancerTag": "proxy"})
 
 	cfg := map[string]any{
 		"log": map[string]any{"loglevel": "warning"},
@@ -119,9 +186,8 @@ func Build(n *config.Node, uuid string, mode Mode) (string, error) {
 			},
 		}},
 		"outbounds": outbounds,
-		// Probe each transport; if one gets blocked/throttled the balancer moves traffic to the other.
 		"observatory": map[string]any{
-			"subjectSelector":   proxySelectors,
+			"subjectSelector":   proxyTags,
 			"probeUrl":          "https://www.gstatic.com/generate_204",
 			"probeInterval":     "60s",
 			"enableConcurrency": true,
@@ -130,9 +196,9 @@ func Build(n *config.Node, uuid string, mode Mode) (string, error) {
 			"domainStrategy": "AsIs",
 			"balancers": []any{map[string]any{
 				"tag":         "proxy",
-				"selector":    proxySelectors,
+				"selector":    proxyTags,
 				"strategy":    map[string]any{"type": "leastPing"},
-				"fallbackTag": "proxy-vision",
+				"fallbackTag": proxyTags[0],
 			}},
 			"rules": rules,
 		},

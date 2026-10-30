@@ -13,3 +13,19 @@ app/android/app/libs/vpncore*.jar
 app/ios/Frameworks/Vpncore.xcframework/
 
 .DS_Store
+
+# admin frontend deps (the built dist under server/internal/api/adminui/dist IS committed: it is embedded)
+admin/node_modules/
+admin/.next/
+admin/out/
+admin/next-env.d.ts
+admin/*.tsbuildinfo
+
+# local screenshots
+.shots/
+.tmp_sim*.png
+
+# signing material and server credentials (never commit)
+doc/
+*.p12
+*.mobileprovision

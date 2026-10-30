@@ -4,8 +4,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
     <application
-        android:label="安全连接"
+        android:label="环游"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
