@@ -322,7 +322,7 @@ export interface CloneRequest extends ProvisionRequest {
 export type CloneEvent =
   | { type: 'log'; text: string }
   | { type: 'error'; message: string }
-  | { type: 'done'; url: string; admin: string; tls: boolean }
+  | { type: 'done'; url: string; admin: string; tls: boolean; migrate?: boolean; ip?: string }
 export interface LangPack {
   code: string
   name: string

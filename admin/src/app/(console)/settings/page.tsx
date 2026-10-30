@@ -1,9 +1,10 @@
 'use client'
-import { CopyOutlined, FileTextOutlined, KeyOutlined, LinkOutlined, PictureOutlined, PlusOutlined, ReloadOutlined, SafetyOutlined } from '@ant-design/icons'
+import { CopyOutlined, FileTextOutlined, KeyOutlined, LinkOutlined, PlusOutlined, ReloadOutlined, SafetyOutlined } from '@ant-design/icons'
 import {
-  Alert, App, Button, DatePicker, Descriptions, Drawer, Form, Input, InputNumber, Popconfirm, Segmented, Select, Space, Spin, Switch, Table, Tabs, Tag, Typography, Upload,
+  Alert, App, Button, DatePicker, Descriptions, Drawer, Form, Input, InputNumber, Popconfirm, Segmented, Select, Space, Spin, Switch, Table, Tabs, Tag, Typography,
 } from 'antd'
 import dayjs from 'dayjs'
+import { ImageUpload } from '@/components/ImageUpload'
 import { useEffect, useState } from 'react'
 import { Markdown } from '@/components/Markdown'
 import { NumberUnit } from '@/components/NumberUnit'
@@ -273,17 +274,11 @@ function AdsTab({ value, onSaved }: { value: AdsSettings; onSaved: (a: AdsSettin
     setEdit(undefined)
     await save(next)
   }
+  const [popupAspect, setPopupAspect] = useState<number>(3 / 4)
   const uploadImage = async (file: File) => {
     const fd = new FormData()
     fd.append('file', file)
-    try {
-      const r = await api.ads.upload(fd)
-      adForm.setFieldValue('image', r.url)
-      message.success('图片已上传')
-    } catch (e) {
-      message.error(errMsg(e))
-    }
-    return false
+    return (await api.ads.upload(fd)).url
   }
   const toISO = { getValueProps: (v?: string | null) => ({ value: v ? dayjs(v) : null }), normalize: (d?: dayjs.Dayjs | null) => (d ? d.second(0).toISOString() : null) }
   const preview = (src: string) => (src.startsWith('/') ? src : src)
@@ -344,11 +339,22 @@ function AdsTab({ value, onSaved }: { value: AdsSettings; onSaved: (a: AdsSettin
           </Form.Item>
           <Form.Item name="title" label="标题" rules={[{ required: adSlot === 'popup', message: '弹窗需要标题' }]}><Input maxLength={40} /></Form.Item>
           {adSlot === 'popup' && <Form.Item name="text" label="正文" extra="没有图片时作为通知内容显示"><Input.TextArea rows={3} maxLength={300} /></Form.Item>}
-          <Form.Item label={adSlot === 'home' ? '图片（建议 1080×360，2 MB 以内）' : '图片（可选，建议 900×1200）'} required={adSlot === 'home'}>
+          <Form.Item label={adSlot === 'home' ? '图片（按 3:1 裁剪，App 首页横幅比例）' : '图片（可选）'} required={adSlot === 'home'}
+            extra="上传后可在线裁剪、缩放、旋转，并自动压缩（GIF 不裁剪，需小于 2 MB）">
             <Space direction="vertical" style={{ width: '100%' }}>
-              <Upload accept="image/png,image/jpeg,image/webp,image/gif" showUploadList={false} beforeUpload={uploadImage}>
-                <Button icon={<PictureOutlined />}>上传图片</Button>
-              </Upload>
+              <Space wrap>
+                {adSlot === 'popup' && (
+                  <Segmented size="small" value={popupAspect} onChange={(v) => setPopupAspect(v as number)}
+                    options={[{ label: '竖图 3:4', value: 3 / 4 }, { label: '方图 1:1', value: 1 }, { label: '横图 4:3', value: 4 / 3 }, { label: '不裁剪', value: 0 }]} />
+                )}
+                <ImageUpload
+                  key={adSlot + popupAspect}
+                  aspect={adSlot === 'home' ? 3 : popupAspect || undefined}
+                  maxWidth={adSlot === 'home' ? 1080 : 900}
+                  upload={uploadImage}
+                  onUploaded={(url) => adForm.setFieldValue('image', url)}
+                />
+              </Space>
               <Form.Item name="image" noStyle rules={[{ required: adSlot === 'home', message: '请上传图片或填写图片地址' }]}>
                 <Input placeholder="或填写图片地址 https://…" />
               </Form.Item>

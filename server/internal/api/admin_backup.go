@@ -227,12 +227,20 @@ func (s *Server) adminClone(w http.ResponseWriter, r *http.Request) {
 	case !domainPattern.MatchString(body.Domain):
 		writeErr(w, http.StatusBadRequest, "bad_domain", "请填写有效域名，如 vpn.example.com")
 		return
-	case len(body.AdminPassword) < 8:
+	}
+	// Same domain = moving this system to a new server: the DNS record is
+	// switched after the copy, so users, nodes, payment callbacks and app
+	// logins carry over unchanged.
+	migrate := "https://"+body.Domain == strings.TrimRight(s.cfg.PublicURL, "/")
+	if migrate && body.AdminPassword == "" {
+		body.AdminPassword = s.cfg.Admin.Password
+	}
+	if len(body.AdminPassword) < 8 {
 		writeErr(w, http.StatusBadRequest, "weak_password", "新系统的后台密码至少 8 位")
 		return
-	case "https://"+body.Domain == s.cfg.PublicURL:
-		writeErr(w, http.StatusBadRequest, "same_domain", "不能克隆到当前系统自己的域名")
-		return
+	}
+	if migrate {
+		body.Mode, body.KeepNodes = "full", true
 	}
 	if body.Mode != "config" {
 		body.Mode = "full"
@@ -286,6 +294,9 @@ func (s *Server) adminClone(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Config for the new system: same static settings, new domain + secrets.
 	jwt, _ := keys.RandomToken(48)
+	if migrate && s.cfg.JWTSecret != "" {
+		jwt = s.cfg.JWTSecret // same domain: users stay logged in
+	}
 	newCfg := s.cloneConfig(body.Domain, body.Email)
 	cfgJSON, _ := json.MarshalIndent(newCfg, "", "  ")
 	env := fmt.Sprintf("VPN_JWT_SECRET=%s\nVPN_ADMIN_PASSWORD=%s\n", jwt, body.AdminPassword)
@@ -299,13 +310,14 @@ func (s *Server) adminClone(w http.ResponseWriter, r *http.Request) {
 
 	res, err := provision.Clone(ctx, body.target(), provision.CloneInstall{
 		Domain: body.Domain, APIBinary: apiBin, NodeBinaries: nodeBins, APIConfig: cfgJSON, APIEnv: []byte(env),
-		Database: dbBytes, Log: writerFunc(func(p []byte) { emit(map[string]any{"type": "log", "text": string(p)}) }),
+		Database: dbBytes, Migrate: migrate, Log: writerFunc(func(p []byte) { emit(map[string]any{"type": "log", "text": string(p)}) }),
 	})
 	if err != nil {
 		emit(map[string]any{"type": "error", "message": err.Error()})
 		return
 	}
-	emit(map[string]any{"type": "done", "url": "https://" + body.Domain, "admin": "https://" + body.Domain + "/admin/", "tls": res.TLSReady})
+	emit(map[string]any{"type": "done", "url": "https://" + body.Domain, "admin": "https://" + body.Domain + "/admin/", "tls": res.TLSReady,
+		"migrate": migrate, "ip": res.TargetIP})
 }
 
 var domainPattern = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$`)

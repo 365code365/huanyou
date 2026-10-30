@@ -139,7 +139,12 @@ function CloneCard() {
   const [phase, setPhase] = useState<Phase>('form')
   const [log, setLog] = useState('')
   const [error, setError] = useState<string>()
-  const [result, setResult] = useState<{ url: string; admin: string; tls: boolean }>()
+  const [result, setResult] = useState<{ url: string; admin: string; tls: boolean; migrate?: boolean; ip?: string }>()
+  const { data: info } = useAsync(api.system.backupInfo)
+  const currentDomain = (info?.public_url ?? '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase()
+  const domain = (Form.useWatch('domain', form) ?? '').trim().toLowerCase()
+  // Same domain as this system: move the service to a new server, then switch DNS.
+  const migrate = !!currentDomain && domain === currentDomain
   const logRef = useRef<HTMLPreElement>(null)
   // Braces matter: newer Chrome returns a Promise from scrollTo, and React
   // would call a returned value as the effect cleanup and crash the page.
@@ -156,8 +161,8 @@ function CloneCard() {
       await api.system.clone(
         {
           host: v.host.trim(), port: v.port, user: v.user, password: v.password,
-          domain: v.domain.trim(), email: v.email?.trim(), admin_password: v.admin_password,
-          mode: v.mode, keep_nodes: !!v.keep_nodes,
+          domain: v.domain.trim(), email: v.email?.trim(), admin_password: v.admin_password ?? '',
+          mode: migrate ? 'full' : v.mode, keep_nodes: migrate || !!v.keep_nodes,
         },
         (e) => {
           if (e.type === 'log') setLog((l) => l + e.text)
@@ -167,7 +172,7 @@ function CloneCard() {
           } else {
             setResult(e)
             setPhase('done')
-            message.success('新系统已部署')
+            message.success(e.migrate ? '新服务器已部署，请切换域名解析' : '新系统已部署')
           }
         },
       )
@@ -188,7 +193,9 @@ function CloneCard() {
             showIcon
             style={{ marginBottom: 14 }}
             message="把本系统（程序 + 数据）一键部署到另一台全新服务器，自动申请 HTTPS 证书。"
-            description="准备：一台干净的 Debian / Ubuntu（x86_64，80 和 443 端口空闲），并先把新域名的 A 记录解析到这台服务器（不要开 CDN 代理）。"
+            description={<>准备：一台干净的 Debian / Ubuntu（x86_64，80 和 443 端口空闲）。<br />
+              · 新域名：先把新域名的 A 记录解析到新服务器（不要开 CDN 代理）。<br />
+              · 服务迁移（域名不变）：域名填当前域名 {currentDomain && <b>{currentDomain}</b>}，克隆完成后再把解析改到新服务器。</>}
           />
           <div style={{ display: 'flex', gap: 12 }}>
             <Form.Item name="host" label="服务器 IP" rules={[{ required: true, message: '必填' }]} style={{ flex: 1 }}><Input placeholder="203.0.113.10" /></Form.Item>
@@ -196,21 +203,45 @@ function CloneCard() {
             <Form.Item name="user" label="用户" style={{ width: 100 }}><Input /></Form.Item>
           </div>
           <Form.Item name="password" label="SSH 密码" rules={[{ required: true, message: '必填' }]}><Input.Password autoComplete="new-password" /></Form.Item>
-          <Form.Item name="domain" label="新系统域名" rules={[{ required: true, pattern: /^([a-z0-9-]+\.)+[a-z]{2,}$/i, message: '如 vpn2.example.com' }]}
-            extra="必须已解析到上面的服务器"><Input placeholder="vpn2.example.com" /></Form.Item>
+          <Form.Item label="新系统域名" required
+            extra={migrate ? '与当前系统相同：服务迁移模式' : '新域名必须已解析到上面的服务器；填当前域名则为服务迁移'}>
+            <Space.Compact style={{ width: '100%' }}>
+              <Form.Item name="domain" noStyle rules={[{ required: true, pattern: /^([a-z0-9-]+\.)+[a-z]{2,}$/i, message: '如 vpn2.example.com' }]}>
+                <Input placeholder="vpn2.example.com" />
+              </Form.Item>
+              {currentDomain && (
+                <Button onClick={() => form.setFieldValue('domain', currentDomain)}>使用当前域名（迁移）</Button>
+              )}
+            </Space.Compact>
+          </Form.Item>
+          {migrate && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 14 }}
+              message="服务迁移：域名不变，把整套系统搬到新服务器"
+              description={<>
+                1. 完整复制用户、订单、节点、设置，并沿用登录密钥：App 用户不用重新登录，节点和支付回调地址都不用改。<br />
+                2. 克隆完成后，把 <b>{currentDomain}</b> 的 A 记录改为新服务器 IP；解析生效后首次访问会自动申请 HTTPS 证书。<br />
+                3. 克隆之后、切换解析之前新产生的数据（新用户、订单）不会自动同步。可以在切换解析前再克隆一次，覆盖为最新数据。<br />
+                4. 当前服务器上的节点（如果有）迁移后不再可用，请在新后台的「节点」页停用或删除。
+              </>}
+            />
+          )}
           <div style={{ display: 'flex', gap: 12 }}>
-            <Form.Item name="admin_password" label="新系统后台密码" rules={[{ required: true, min: 8, message: '至少 8 位' }]} style={{ flex: 1 }}>
-              <Input.Password autoComplete="new-password" />
+            <Form.Item name="admin_password" label="新系统后台密码" style={{ flex: 1 }}
+              rules={[{ required: !migrate, message: '必填' }, { min: 8, message: '至少 8 位' }]}>
+              <Input.Password autoComplete="new-password" placeholder={migrate ? '留空沿用当前密码' : undefined} />
             </Form.Item>
             <Form.Item name="email" label="证书邮箱（可选）" style={{ flex: 1 }}><Input placeholder="ops@example.com" /></Form.Item>
           </div>
-          <Form.Item name="mode" label="复制内容">
+          <Form.Item name="mode" label="复制内容" hidden={migrate}>
             <Segmented options={[
               { label: '仅配置（套餐、设置、客服、版本）', value: 'config' },
               { label: '完整克隆（含用户和订单）', value: 'full' },
             ]} />
           </Form.Item>
-          <Form.Item name="keep_nodes" label="保留节点列表" valuePropName="checked"
+          <Form.Item name="keep_nodes" label="保留节点列表" valuePropName="checked" hidden={migrate}
             extra="一般不开：节点只能向一个后台汇报。新系统可用「一键安装节点」装自己的节点。">
             <Switch />
           </Form.Item>
@@ -220,9 +251,13 @@ function CloneCard() {
         <>
           <div className="provision-status">
             {phase === 'running' && <><LoadingOutlined /> 正在部署，通常 1–3 分钟，请勿关闭页面…</>}
-            {phase === 'done' && result && (
+            {phase === 'done' && result && !result.migrate && (
               <><CheckCircleFilled style={{ color: '#12A150' }} /> 已部署：<a href={result.admin} target="_blank" rel="noreferrer">{result.admin}</a>
                 {!result.tls && <span className="muted">（证书申请中，稍后访问）</span>}</>
+            )}
+            {phase === 'done' && result?.migrate && (
+              <><CheckCircleFilled style={{ color: '#12A150' }} /> 新服务器 {result.ip} 已部署。
+                {result.tls ? <>域名已指向新服务器，HTTPS 正常。</> : <>现在把 <b>{currentDomain}</b> 的 A 记录改为 <b>{result.ip}</b>，生效后访问 <a href={result.admin} target="_blank" rel="noreferrer">{result.admin}</a> 即是新服务器。</>}</>
             )}
             {phase === 'failed' && <><CloseCircleFilled style={{ color: '#D64545' }} /> 失败：{error}</>}
           </div>

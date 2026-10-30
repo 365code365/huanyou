@@ -505,11 +505,16 @@ type CloneInstall struct {
 	APIConfig    []byte            // /etc/vpn/api.json
 	APIEnv       []byte            // /etc/vpn/api.env (secrets)
 	Database     []byte            // /var/lib/vpn/vpn.db
-	Log          io.Writer
+	// Migrate: the domain still points at the current server and is switched
+	// to the target afterwards, so DNS and HTTPS are not checked here; the
+	// certificate is issued on the first request after the switch.
+	Migrate bool
+	Log     io.Writer
 }
 
 type CloneResult struct {
-	TLSReady bool `json:"tls_ready"`
+	TLSReady bool   `json:"tls_ready"`
+	TargetIP string `json:"target_ip"`
 }
 
 const apiUnit = `[Unit]
@@ -587,7 +592,13 @@ func Clone(ctx context.Context, t Target, in CloneInstall) (*CloneResult, error)
 			pointed = true
 		}
 	}
-	if !pointed {
+	if in.Migrate {
+		if pointed {
+			fmt.Fprintf(log, "服务迁移：域名 %s 已指向 %s ✓，80/443 空闲 ✓\n", in.Domain, targetIP)
+		} else {
+			fmt.Fprintf(log, "服务迁移：域名 %s 当前解析到 %v，部署完成后再改到 %s；80/443 空闲 ✓\n", in.Domain, ips, targetIP)
+		}
+	} else if !pointed {
 		return nil, fmt.Errorf("域名 %s 当前解析到 %v，没有指向目标服务器 %s。请先在 DNS 添加 A 记录（不要开 CDN 代理），生效后再克隆", in.Domain, ips, targetIP)
 	}
 	fmt.Fprintf(log, "域名 %s → %s ✓，80/443 空闲 ✓\n", in.Domain, targetIP)
@@ -664,6 +675,19 @@ echo "::cloned"
 		io.WriteString(log, jl)
 		return nil, fmt.Errorf("新系统的 vpn-api 没有运行起来，请查看上面的日志")
 	}
+	if in.Migrate && !pointed {
+		// The domain still reaches the old server; check the new one locally.
+		// bash /dev/tcp: works without curl on minimal images. Expect the
+		// :80 handler's redirect to HTTPS ("HTTP/1.1 302 Found").
+		code := probe(ctx, client, `timeout 5 bash -c 'exec 3<>/dev/tcp/127.0.0.1/80; printf "GET /healthz HTTP/1.0\r\nHost: localhost\r\n\r\n" >&3; head -1 <&3' 2>/dev/null | tr -d '\r' || true`)
+		if !strings.HasPrefix(code, "HTTP/") {
+			jl, _ := runScript(ctx, client, "journalctl -u vpn-api -n 30 --no-pager")
+			io.WriteString(log, jl)
+			return nil, fmt.Errorf("新服务器上的 vpn-api 没有响应，请查看上面的日志")
+		}
+		fmt.Fprintf(log, "新服务器已就绪（%s）。请把 %s 的 A 记录改为 %s，生效后首次访问会自动申请 HTTPS 证书。\n", code, in.Domain, targetIP)
+		return &CloneResult{TLSReady: false, TargetIP: targetIP}, nil
+	}
 	fmt.Fprint(log, "vpn-api 已启动，正在申请 HTTPS 证书…\n")
 
 	// --- wait for HTTPS (the first request triggers certificate issuance) ---
@@ -674,7 +698,7 @@ echo "::cloned"
 			resp.Body.Close()
 			if resp.StatusCode == 200 {
 				fmt.Fprintf(log, "HTTPS 正常：https://%s ✓\n", in.Domain)
-				return &CloneResult{TLSReady: true}, nil
+				return &CloneResult{TLSReady: true, TargetIP: targetIP}, nil
 			}
 		}
 		select {
@@ -684,5 +708,5 @@ echo "::cloned"
 		}
 	}
 	fmt.Fprint(log, "证书暂未就绪（可能 DNS 仍在生效），服务已运行，稍后访问即会自动申请。\n")
-	return &CloneResult{TLSReady: false}, nil
+	return &CloneResult{TLSReady: false, TargetIP: targetIP}, nil
 }
