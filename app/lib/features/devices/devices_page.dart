@@ -44,8 +44,10 @@ class _DevicesPageState extends State<DevicesPage> {
     super.initState();
     Analytics.track('devices_view');
     _load();
+    // Only while a code is showing and not expired yet (the countdown).
     _tick = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted && _code != null) setState(() {});
+      final c = _code;
+      if (mounted && c != null && c.expiresAt.isAfter(DateTime.now().subtract(const Duration(seconds: 2)))) setState(() {});
     });
   }
 
@@ -71,10 +73,14 @@ class _DevicesPageState extends State<DevicesPage> {
       });
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.message);
+    } catch (_) {
+      if (mounted) setState(() => _error = tr('加载失败'));
     }
   }
 
-  void _snack(String m) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  void _snack(String m) {
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+  }
 
   Future<void> _run(Future<void> Function() f) async {
     setState(() => _busy = true);
@@ -89,7 +95,7 @@ class _DevicesPageState extends State<DevicesPage> {
 
   Future<void> _newCode() => _run(() async {
         final c = await AppScope.read(context).api.createLinkCode();
-        setState(() => _code = c);
+        if (mounted) setState(() => _code = c);
       });
 
   Future<void> _join(String code) => _run(() async {
@@ -149,8 +155,13 @@ class _DevicesPageState extends State<DevicesPage> {
 
   Future<void> _enter() async {
     final ctl = TextEditingController();
-    final clip = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
-    final fromClip = clip == null ? null : parseLinkCode(clip);
+    // Prefill from the clipboard, except on iOS, where reading it shows the
+    // system paste prompt every time (the field has the system paste menu).
+    String? fromClip;
+    if (!Platform.isIOS) {
+      final clip = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+      fromClip = clip == null ? null : parseLinkCode(clip);
+    }
     if (fromClip != null) ctl.text = '${fromClip.substring(0, 4)}-${fromClip.substring(4)}';
     if (!mounted) return;
     final code = await showDialog<String>(
@@ -175,6 +186,7 @@ class _DevicesPageState extends State<DevicesPage> {
         ],
       ),
     );
+    ctl.dispose();
     if (code == null) return;
     final c = parseLinkCode(code);
     if (c == null) return _snack(tr('令牌格式不正确，应为 8 位字母数字'));
@@ -187,7 +199,19 @@ class _DevicesPageState extends State<DevicesPage> {
     return Scaffold(
       appBar: AppBar(title: Text(tr('多设备'))),
       body: _error != null && s == null
-          ? Center(child: Text(_error!, style: TextStyle(color: AppColors.sub)))
+          ? Center(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Text(_error!, style: TextStyle(color: AppColors.sub)),
+                const SizedBox(height: 12),
+                OutlinedButton(
+                  onPressed: () {
+                    setState(() => _error = null);
+                    _load();
+                  },
+                  child: Text(tr('重试')),
+                ),
+              ]),
+            )
           : s == null
               ? const Center(child: CircularProgressIndicator())
               : RefreshIndicator(
@@ -304,7 +328,14 @@ class _DevicesPageState extends State<DevicesPage> {
         ),
         for (final d in s.devices)
           ListTile(
-            leading: Icon(d.platform == 'ios' ? Icons.phone_iphone_rounded : Icons.phone_android_rounded, color: AppColors.ink),
+            leading: Icon(
+                switch (d.platform) {
+                  'ios' => Icons.phone_iphone_rounded,
+                  'macos' => Icons.laptop_mac_rounded,
+                  'windows' => Icons.laptop_windows_rounded,
+                  _ => Icons.phone_android_rounded,
+                },
+                color: AppColors.ink),
             title: Text(d.rechargeCode, style: const TextStyle(fontWeight: FontWeight.w600)),
             subtitle: Text([if (d.owner) tr('主设备'), if (d.self) tr('本机')].join(' · ').ifEmpty(tr('共享设备'))),
             trailing: !s.isMember && !d.owner

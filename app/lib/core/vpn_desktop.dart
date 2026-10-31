@@ -118,6 +118,7 @@ class DesktopVpn {
     _set(VpnStatus.connecting);
     final ready = Completer<void>();
     String? lastError;
+    var reportedStop = false; // the core said "disconnected" (system proxy restored by it)
 
     // Xray's own log also goes to stdout; status lines are the JSON ones.
     p.stdout.transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
@@ -139,6 +140,7 @@ class DesktopVpn {
         case 'disconnecting':
           _set(VpnStatus.disconnecting);
         case 'disconnected':
+          reportedStop = true;
           if (!ready.isCompleted) {
             // Stopped while starting (cancelled).
             ready.completeError(
@@ -165,6 +167,15 @@ class DesktopVpn {
         return;
       }
       _proc = null;
+      if (ready.isCompleted && !reportedStop) {
+        // The core died while connected (crash, killed): it never got to undo
+        // the system proxy, which now points at a dead port and leaves the
+        // whole computer offline. Undo it now; a reconnect waits for this.
+        _restoring = Process.run(_core, ['restore'])
+            .timeout(const Duration(seconds: 15))
+            .then<void>((_) {}, onError: (_) {})
+            .whenComplete(() => _restoring = null);
+      }
       if (!ready.isCompleted) {
         _status = VpnStatus.disconnected; // the caller reports the failure
         ready.completeError(

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/prefs.dart';
 import '../../core/updater.dart';
 import '../../state/app_scope.dart';
 import '../../widgets/glass_nav_bar.dart';
@@ -24,18 +25,22 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   // The 应用 (recommendations) tab is hidden when the server offers none for
   // this client — which is the case on the iOS App Review face, where linking
-  // out to other apps would fail review.
-  bool _showApps = true;
+  // out to other apps would fail review. The last answer is cached, so the
+  // tab does not flash in and out at every start.
+  static const _kAppsTab = 'apps_tab';
+  bool _showApps = Prefs.get(_kAppsTab) != '0';
 
-  List<(GlassNavItem, WidgetBuilder)> get _tabs => [
-    (GlassNavItem(label: tr('首页'), icon: Icons.radio_button_unchecked_rounded, activeIcon: Icons.radio_button_checked_rounded),
+  // Tabs are identified by id, not position: when 应用 appears or goes away,
+  // the user stays on the tab they were on.
+  List<(String, GlassNavItem, WidgetBuilder)> get _tabs => [
+    ('home', GlassNavItem(label: tr('首页'), icon: Icons.radio_button_unchecked_rounded, activeIcon: Icons.radio_button_checked_rounded),
         (_) => const HomePage()),
     if (_showApps)
-      (GlassNavItem(label: tr('应用'), icon: Icons.grid_view_outlined, activeIcon: Icons.grid_view_rounded), (_) => const AppsPage()),
-    (GlassNavItem(label: tr('我的'), icon: Icons.person_outline_rounded, activeIcon: Icons.person_rounded), (_) => const MePage()),
+      ('apps', GlassNavItem(label: tr('应用'), icon: Icons.grid_view_outlined, activeIcon: Icons.grid_view_rounded), (_) => const AppsPage()),
+    ('me', GlassNavItem(label: tr('我的'), icon: Icons.person_outline_rounded, activeIcon: Icons.person_rounded), (_) => const MePage()),
   ];
-  int _index = 0;
-  final _built = <int>{0}; // build tabs lazily, then keep them alive
+  String _current = 'home';
+  final _built = <String>{'home'}; // build tabs lazily, then keep them alive
 
   @override
   void initState() {
@@ -56,20 +61,25 @@ class _MainShellState extends State<MainShell> {
     try {
       final apps = await AppScope.read(context).api.apps();
       // Only hide the tab when the server deliberately serves none (review
-      // face); a transient load error leaves it shown.
-      if (mounted && apps.isEmpty) {
+      // face); a transient load error keeps the last known state.
+      final show = apps.isNotEmpty;
+      Prefs.set(_kAppsTab, show ? '1' : '0');
+      if (mounted && show != _showApps) {
         setState(() {
-          _showApps = false;
-          if (_index >= _tabs.length) _index = 0;
+          _showApps = show;
+          if (!show && _current == 'apps') _current = 'home';
+          _built.remove('apps');
         });
       }
     } catch (_) {
-      // keep the tab; AppsPage shows its own error / empty state
+      // keep the tab state; AppsPage shows its own error / empty state
     }
   }
 
   Future<void> _checkUpdate() async {
     if (!mounted) return;
+    // App Store builds are updated by the App Store only.
+    if (AppScope.read(context).iapFace) return;
     try {
       final u = await Updater.check(AppScope.read(context).api);
       if (u != null && u.hasUpdate && mounted) await showUpdateDialog(context, u);
@@ -80,21 +90,26 @@ class _MainShellState extends State<MainShell> {
 
   @override
   Widget build(BuildContext context) {
+    final tabs = _tabs;
+    final index = tabs.indexWhere((t) => t.$1 == _current).clamp(0, tabs.length - 1);
     return Scaffold(
       extendBody: true,
       body: IndexedStack(
-        index: _index,
+        index: index,
         children: [
-          for (var i = 0; i < _tabs.length; i++)
-            _built.contains(i) ? _tabs[i].$2(context) : const SizedBox.shrink(),
+          for (final t in tabs)
+            KeyedSubtree(
+              key: ValueKey(t.$1),
+              child: _built.contains(t.$1) ? t.$3(context) : const SizedBox.shrink(),
+            ),
         ],
       ),
       bottomNavigationBar: GlassNavBar(
-        items: [for (final t in _tabs) t.$1],
-        index: _index,
+        items: [for (final t in tabs) t.$2],
+        index: index,
         onChanged: (i) => setState(() {
-          _index = i;
-          _built.add(i);
+          _current = tabs[i].$1;
+          _built.add(_current);
         }),
       ),
     );

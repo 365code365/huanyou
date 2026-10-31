@@ -1,7 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/analytics.dart';
+import '../../core/api.dart';
 import '../../core/config.dart';
 import '../../core/format.dart';
 import '../../core/open_url.dart';
@@ -87,7 +90,8 @@ class _SettingsPageState extends State<SettingsPage> {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('已是最新版本'))));
       }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('检查失败：{0}', [e]))));
+      final msg = e is ApiException ? e.message : tr('检查失败，请稍后重试');
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     } finally {
       if (mounted) setState(() => _checking = false);
     }
@@ -137,6 +141,8 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ]),
           _Group(label: tr('关于'), children: [
+            // App Store builds are updated by the App Store, never in-app.
+            if (!AppScope.of(context).iapFace)
             MenuRow(
               key: const Key('settings-update'),
               icon: Icons.system_update_rounded,
@@ -223,7 +229,8 @@ class _AboutPage extends StatelessWidget {
   final String version;
   @override
   Widget build(BuildContext context) {
-    final base = AppConfig.apiBaseUrls.isEmpty ? null : AppConfig.apiBaseUrls.first;
+    // App Store face: no links to downloads outside the App Store.
+    final base = AppConfig.apiBaseUrls.isEmpty || AppScope.of(context).iapFace ? null : AppConfig.apiBaseUrls.first;
     return Scaffold(
       appBar: AppBar(title: Text(tr('关于{0}', [AppConfig.appName]))),
       body: ListView(padding: const EdgeInsets.fromLTRB(24, 24, 24, 32), children: [
@@ -259,8 +266,12 @@ class _AboutPage extends StatelessWidget {
             ),
           ),
         ],
-        const SizedBox(height: 24),
-        Center(child: Text(tr('内部测试版，仅限受邀用户使用'), style: AppText.caption.copyWith(color: AppColors.faint))),
+        // Not on iOS: App Review rejects builds that call themselves a test /
+        // invite-only version.
+        if (!Platform.isIOS) ...[
+          const SizedBox(height: 24),
+          Center(child: Text(tr('内部测试版，仅限受邀用户使用'), style: AppText.caption.copyWith(color: AppColors.faint))),
+        ],
       ]),
     );
   }

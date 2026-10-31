@@ -28,7 +28,7 @@ final class VpnPlugin: NSObject, FlutterStreamHandler {
   private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
     switch call.method {
     case "status":
-      loadManager { m in result(Self.statusName(m?.connection.status ?? .disconnected)) }
+      loadManager(emit: false) { m in result(Self.statusName(m?.connection.status ?? .disconnected)) }
     case "connect":
       guard let args = call.arguments as? [String: Any], let config = args["config"] as? String else {
         result(FlutterError(code: "bad_args", message: "缺少配置", details: nil))
@@ -43,13 +43,16 @@ final class VpnPlugin: NSObject, FlutterStreamHandler {
     }
   }
 
-  private func loadManager(_ done: @escaping (NETunnelProviderManager?) -> Void) {
+  /// emit: false on the connect / status paths, where the manager's current
+  /// status (still "disconnected" before the start) must not be reported:
+  /// it would flip the app from 连接中 back to 未连接 mid-connect.
+  private func loadManager(emit: Bool = true, _ done: @escaping (NETunnelProviderManager?) -> Void) {
     NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, _ in
       DispatchQueue.main.async {
         let m = managers?.first {
           ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == Self.tunnelBundleId
         }
-        if let m { self?.attach(m) }
+        if let m { self?.attach(m, emit: emit) }
         done(m)
       }
     }
@@ -84,7 +87,7 @@ final class VpnPlugin: NSObject, FlutterStreamHandler {
         details: nil))
       return
     }
-    loadManager { [weak self] existing in
+    loadManager(emit: false) { [weak self] existing in
       guard let self else { return }
       let m = existing ?? NETunnelProviderManager()
       let proto = NETunnelProviderProtocol()
@@ -105,7 +108,7 @@ final class VpnPlugin: NSObject, FlutterStreamHandler {
         }
         m.loadFromPreferences { _ in
           DispatchQueue.main.async {
-            self.attach(m)
+            self.attach(m, emit: false)
             do {
               self.wasConnecting = true
               try m.connection.startVPNTunnel()
@@ -119,13 +122,13 @@ final class VpnPlugin: NSObject, FlutterStreamHandler {
     }
   }
 
-  private func attach(_ m: NETunnelProviderManager) {
+  private func attach(_ m: NETunnelProviderManager, emit shouldEmit: Bool = true) {
     manager = m
     if let observer { NotificationCenter.default.removeObserver(observer) }
     observer = NotificationCenter.default.addObserver(
       forName: .NEVPNStatusDidChange, object: m.connection, queue: .main
     ) { [weak self] _ in self?.emit() }
-    emit()
+    if shouldEmit { emit() }
   }
 
   private func emit() {

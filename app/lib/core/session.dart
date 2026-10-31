@@ -26,6 +26,9 @@ class Session {
   /// derived from ANDROID_ID (survives reinstall); on iOS a random id is
   /// generated once and kept in the Keychain (also survives reinstall).
   /// Once resolved it is cached in secure storage so it never changes.
+  /// True once this install has resolved its device id (any sign-in before).
+  bool get hasDeviceId => (Prefs.get(_kDevice)?.length ?? 0) >= 8;
+
   Future<String> deviceId() async {
     final existing = Prefs.get(_kDevice);
     if (existing != null && existing.length >= 8) return existing;

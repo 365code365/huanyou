@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
+import '../core/config.dart';
 
 /// Desktop window chrome merged into the app (Windows / macOS).
 ///
@@ -38,7 +39,7 @@ class DesktopFrame extends StatelessWidget {
       minimumSize: s,
       maximumSize: s,
       center: true,
-      title: '环游',
+      title: AppConfig.appName,
       titleBarStyle: TitleBarStyle.hidden,
       windowButtonVisibility: true, // macOS traffic lights
     );
@@ -58,7 +59,10 @@ class DesktopFrame extends StatelessWidget {
     final d = displays.first;
     final screenH = d.size.height / d.devicePixelRatio;
     if (screenH <= 0) return size;
-    final h = size.height.clamp(560.0, screenH - 96);
+    // Not clamp(560, screenH - 96): on screens under 656 px that range is
+    // empty and clamp throws, and the window would never open.
+    final room = screenH - 96;
+    final h = room >= size.height ? size.height : (room < 480 ? 480.0 : room);
     return Size(size.width, h);
   }
 

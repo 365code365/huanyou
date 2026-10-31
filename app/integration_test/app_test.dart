@@ -90,7 +90,7 @@ void main() {
     // --- node page: pick the node → returns and auto-connects ---
     await t.tap(find.byKey(const Key('node-card')));
     await pumpUntil(t, find.text('选择节点'));
-    expect(find.text('智能选择'), findsOneWidget);
+    expect(find.text('自动选择'), findsOneWidget);
     await t.tap(find.textContaining(nodeName).last);
     await pumpUntil(t, find.byKey(const Key('connect-button')));
     // The Simulator cannot run Network Extensions, so the auto-connect reports that.
@@ -98,7 +98,7 @@ void main() {
     expect(find.byKey(const Key('node-card-name')), findsOneWidget);
     expect(find.textContaining(nodeName), findsWidgets);
 
-    // --- "智能选择" switches to cluster mode ---
+    // --- "自动选择" switches to cluster mode ---
     await t.tap(find.byKey(const Key('node-card')));
     await pumpUntil(t, find.byKey(const Key('node-auto')));
     await t.tap(find.byKey(const Key('node-auto')));

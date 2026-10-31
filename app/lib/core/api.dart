@@ -379,7 +379,18 @@ class ApiClient {
 
   final List<Uri> _bases;
   final http.Client _http = IOClient(_ApiConnections.client());
-  int _preferred = 0; // index of the last base URL that worked
+  static const _kPreferred = 'api_preferred';
+  // The base URL that worked last, kept across launches so a cold start does
+  // not wait for a blocked first URL to time out every time.
+  late int _preferred = () {
+    final i = _bases.indexWhere((b) => b.toString() == Prefs.get(_kPreferred));
+    return i < 0 ? 0 : i;
+  }();
+  void _prefer(int idx) {
+    if (idx == _preferred) return;
+    _preferred = idx;
+    Prefs.set(_kPreferred, _bases[idx].toString());
+  }
   String? token;
 
   // The app's platform and build, sent on /plans and /apps so the server can
@@ -565,12 +576,12 @@ class ApiClient {
         }
         if (resp.statusCode >= 200 && resp.statusCode < 300) {
           if (decoded is! Map<String, dynamic>) throw _NotOurs(resp.statusCode);
-          _preferred = idx;
+          _prefer(idx);
           return decoded;
         }
         final m = decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
         if (m['error'] is! String && resp.statusCode >= 500) throw _NotOurs(resp.statusCode); // proxy error page
-        _preferred = idx;
+        _prefer(idx);
         // Server messages are Chinese; packs may carry translations for them.
         final msg = m['message'] as String?;
         throw ApiException(resp.statusCode, m['error'] as String? ?? 'http_${resp.statusCode}',
@@ -578,6 +589,8 @@ class ApiClient {
       } on ApiException {
         rethrow;
       } on _NotOurs catch (e) {
+        lastError = e;
+      } on _ConnectFailed catch (e) {
         lastError = e;
       } on SocketException catch (e) {
         lastError = e;
@@ -594,17 +607,28 @@ class ApiClient {
     throw ApiException(0, 'network', _networkMessage(lastError));
   }
 
-  /// True when the request certainly never reached the server (the TLS
-  /// handshake failed, so no request bytes were sent).
-  static bool _neverSent(Object? e) => e is HandshakeException || e is TlsException;
+  /// True when the request certainly never reached our server: no
+  /// connection could be made (DNS, refused, timeout, TLS handshake), or what
+  /// answered was not our API (portal / block page). Safe to send elsewhere.
+  static bool _neverSent(Object? e) =>
+      e is _ConnectFailed || e is _NotOurs || e is HandshakeException || e is TlsException;
 
-  static String _networkMessage(Object? e) {
+  static String _networkMessage(Object? error) {
+    final e = error is _ConnectFailed ? error.cause : error;
     if (e is TimeoutException) return tr('连接服务器超时，请检查网络后重试');
     if (e is HandshakeException || e is TlsException || e is _NotOurs) {
       return tr('网络环境异常（可能需要先登录 Wi-Fi 认证页），请切换网络后重试');
     }
     return tr('无法连接服务器，请检查网络后重试');
   }
+}
+
+/// No connection to the API host could be made, so no request was sent.
+class _ConnectFailed implements Exception {
+  _ConnectFailed(this.cause);
+  final Object cause;
+  @override
+  String toString() => 'connect failed: $cause';
 }
 
 /// A response that is not from our API.
@@ -632,40 +656,75 @@ class _ApiConnections {
   static HttpClient client() {
     final c = HttpClient()
       ..idleTimeout = const Duration(seconds: 90)
-      ..connectionTimeout = const Duration(seconds: 8);
+      // Backstop only: open() below gives up after 10 s with _ConnectFailed,
+      // which (unlike HttpClient's own timeout) marks the request as unsent.
+      ..connectionTimeout = const Duration(seconds: 15);
     c.connectionFactory = (Uri uri, String? proxyHost, int? proxyPort) async {
       final port = uri.hasPort ? uri.port : (uri.scheme == 'https' ? 443 : 80);
+      var cancelled = false;
+      Socket? pending; // the socket being connected / handshaken right now
       Future<Socket> open() async {
         Object? last;
         final tried = <String>{};
         // Cached addresses first; if none answers (the server moved), a
         // fresh lookup and once more.
         for (final fresh in [false, true]) {
-          final addrs = fresh ? await _lookup(uri.host) : await _resolve(uri.host);
+          if (cancelled) break;
+          final List<InternetAddress> addrs;
+          try {
+            addrs = fresh ? await _lookup(uri.host) : await _resolve(uri.host);
+          } catch (e) {
+            last = e;
+            continue;
+          }
           for (final a in addrs.take(3)) {
+            if (cancelled) break;
             if (!tried.add(a.address)) continue;
             Socket? s;
             try {
-              s = await Socket.connect(a, port, timeout: const Duration(seconds: 6));
+              s = pending = await Socket.connect(a, port, timeout: const Duration(seconds: 6));
+              if (cancelled) {
+                s.destroy();
+                break;
+              }
               if (uri.scheme != 'https') return s;
-              return await SecureSocket.secure(s, host: uri.host);
+              // A blocked SNI can accept TCP and then never answer the TLS
+              // handshake: bound it, or the attempt hangs forever.
+              final tls = await SecureSocket.secure(s, host: uri.host).timeout(const Duration(seconds: 6));
+              if (cancelled) {
+                tls.destroy();
+                break;
+              }
+              return tls;
             } on SocketException catch (e) {
               last = e;
             } on HandshakeException catch (e) {
               // e.g. a stale cached IP now serving someone else's site
-              s?.destroy();
               last = e;
             } on TlsException catch (e) {
-              s?.destroy();
               last = e;
+            } on TimeoutException catch (e) {
+              last = e;
+            } finally {
+              pending = null;
             }
+            s?.destroy();
           }
           if (InternetAddress.tryParse(uri.host) != null) break;
         }
-        throw last ?? SocketException('no address for ${uri.host}');
+        throw _ConnectFailed(last ?? SocketException('no address for ${uri.host}'));
       }
 
-      return ConnectionTask.fromSocket(open(), () {});
+      void cancel() {
+        cancelled = true;
+        pending?.destroy();
+      }
+
+      final socket = open().timeout(const Duration(seconds: 10), onTimeout: () {
+        cancel();
+        throw _ConnectFailed(TimeoutException('connect ${uri.host}'));
+      });
+      return ConnectionTask.fromSocket(socket, cancel);
     };
     return c;
   }

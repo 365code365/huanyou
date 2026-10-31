@@ -21,6 +21,11 @@ class MainActivity : FlutterActivity() {
     private var pendingName: String? = null
     private var pendingResult: MethodChannel.Result? = null
 
+    // The status listener of this engine. The VPN service outlives the
+    // activity, so it is removed when the engine goes; otherwise every reopen
+    // would add one more listener posting to a dead engine.
+    private var statusListener: ((String, String?) -> Unit)? = null
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         CrashCatcher.install(this)
@@ -35,7 +40,15 @@ class MainActivity : FlutterActivity() {
                         result.error("bad_args", "缺少配置", null)
                         return@setMethodCallHandler
                     }
-                    XrayVpnService.profileFile(this).writeText(config)
+                    // Atomic: the service may read the profile at the same time
+                    // (a network-change restart) and must never see half a file.
+                    val f = XrayVpnService.profileFile(this)
+                    val tmp = java.io.File(f.parentFile, f.name + ".tmp")
+                    tmp.writeText(config)
+                    if (!tmp.renameTo(f)) {
+                        f.writeText(config)
+                        tmp.delete()
+                    }
                     connect(call.argument<String>("name") ?: "VPN", result)
                 }
                 "disconnect" -> {
@@ -72,19 +85,25 @@ class MainActivity : FlutterActivity() {
         }
 
         EventChannel(messenger, "vpn_platform/vpn_status").setStreamHandler(object : EventChannel.StreamHandler {
-            private var listener: ((String, String?) -> Unit)? = null
             override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
+                statusListener?.let { VpnState.removeListener(it) }
                 val l: (String, String?) -> Unit = { s, m -> events.success(mapOf("status" to s, "message" to m)) }
-                listener = l
+                statusListener = l
                 VpnState.addListener(l)
                 l(VpnState.status, VpnState.message)
             }
 
             override fun onCancel(arguments: Any?) {
-                listener?.let { VpnState.removeListener(it) }
-                listener = null
+                statusListener?.let { VpnState.removeListener(it) }
+                statusListener = null
             }
         })
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        statusListener?.let { VpnState.removeListener(it) }
+        statusListener = null
+        super.cleanUpFlutterEngine(flutterEngine)
     }
 
     private fun connect(name: String, result: MethodChannel.Result) {

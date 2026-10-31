@@ -179,15 +179,18 @@ Future<void> maybeShowAdPopup(BuildContext context) async {
                     errorBuilder: (_, _, _) => const SizedBox.shrink()),
               ),
             ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              if (a.title.isNotEmpty) Text(a.title, style: AppText.title),
-              if (a.text.isNotEmpty) ...[
-                const SizedBox(height: 6),
-                Text(a.text, style: AppText.bodySmall.copyWith(color: AppColors.sub)),
-              ],
-            ]),
+          // Long admin text scrolls instead of overflowing small screens.
+          Flexible(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                if (a.title.isNotEmpty) Text(a.title, style: AppText.title),
+                if (a.text.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(a.text, style: AppText.bodySmall.copyWith(color: AppColors.sub)),
+                ],
+              ]),
+            ),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),

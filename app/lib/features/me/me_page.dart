@@ -79,7 +79,17 @@ class _MePageState extends State<MePage> {
         child: ListView(
           padding: EdgeInsets.fromLTRB(18, 4, 18, MediaQuery.paddingOf(context).bottom + 24),
           children: [
-            if (u != null) _MemberCard(user: u, onUpgrade: () => openPlans(context)),
+            if (u != null)
+              _MemberCard(user: u, store: app.iapFace, onUpgrade: () => openPlans(context))
+            else if (app.loadFailed)
+              Card(
+                child: ListTile(
+                  leading: Icon(Icons.cloud_off_rounded, color: AppColors.danger),
+                  title: Text(tr('账号信息加载失败')),
+                  subtitle: Text(app.message ?? tr('请检查网络后重试')),
+                  trailing: TextButton(onPressed: app.refresh, child: Text(tr('重试'))),
+                ),
+              ),
             const SizedBox(height: 14),
             SectionCard(title: tr('近 30 天流量'), child: _UsageChart(days: _usage)),
             const SizedBox(height: 14),
@@ -131,7 +141,10 @@ class _MePageState extends State<MePage> {
             Padding(
               padding: EdgeInsets.symmetric(horizontal: 6),
               child: Text(
-                tr('本机已自动开通账号，卸载重装后会自动找回。需要充值时，把上方的充值 ID 发给客服即可。'),
+                // App Store face: no pointing to purchases outside the App Store.
+                app.iapFace
+                    ? tr('本机已自动开通账号，卸载重装后会自动找回。')
+                    : tr('本机已自动开通账号，卸载重装后会自动找回。需要充值时，把上方的充值 ID 发给客服即可。'),
                 style: TextStyle(fontSize: 13, color: AppColors.sub, height: 1.5),
               ),
             ),
@@ -152,8 +165,9 @@ class _MePageState extends State<MePage> {
 /// Dark membership card. The recharge ID is the user's only identity: large,
 /// copyable, and the thing support asks for when topping up.
 class _MemberCard extends StatelessWidget {
-  const _MemberCard({required this.user, required this.onUpgrade});
+  const _MemberCard({required this.user, required this.store, required this.onUpgrade});
   final User user;
+  final bool store; // App Store face: "账号 ID", not "充值 ID"
   final VoidCallback onUpgrade;
 
   @override
@@ -167,22 +181,33 @@ class _MemberCard extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(20, 18, 14, 20),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          Text(tr('充值 ID'), style: TextStyle(color: dim, fontSize: 13)),
+          Text(store ? tr('账号 ID') : tr('充值 ID'), style: TextStyle(color: dim, fontSize: 13)),
+          const SizedBox(width: 12),
           const Spacer(),
           if (user.hasAccount)
-            Text(user.email, style: const TextStyle(color: dim, fontSize: 12), overflow: TextOverflow.ellipsis),
+            Flexible(
+              flex: 4,
+              child: Text(user.email,
+                  maxLines: 1, style: const TextStyle(color: dim, fontSize: 12), overflow: TextOverflow.ellipsis),
+            ),
         ]),
         const SizedBox(height: 4),
         Row(children: [
-          Text(code.isEmpty ? '—' : code,
-              key: const Key('recharge-code'),
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 28,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 1,
-                fontFeatures: [FontFeature.tabularFigures()],
-              )),
+          Flexible(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(code.isEmpty ? '—' : code,
+                  key: const Key('recharge-code'),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 28,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1,
+                    fontFeatures: [FontFeature.tabularFigures()],
+                  )),
+            ),
+          ),
           const SizedBox(width: 6),
           IconButton(
             tooltip: tr('复制'),
@@ -191,7 +216,8 @@ class _MemberCard extends StatelessWidget {
                 ? null
                 : () {
                     Clipboard.setData(ClipboardData(text: code));
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(tr('充值 ID 已复制'))));
+                    ScaffoldMessenger.of(context)
+                        .showSnackBar(SnackBar(content: Text(store ? tr('账号 ID 已复制') : tr('充值 ID 已复制'))));
                   },
             icon: const Icon(Icons.copy_rounded, size: 18, color: dim),
           ),
@@ -232,14 +258,17 @@ class _MemberCard extends StatelessWidget {
           padding: const EdgeInsets.only(right: 6),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
-              Text(
-                e.quotaBytes > 0
-                    ? '${formatBytes(e.usedBytes)} / ${formatBytes(e.quotaBytes)}'
-                    : tr('已用 {0} · 不限流量', [formatBytes(e.usedBytes)]),
-                key: const Key('me-usage'),
-                style: const TextStyle(color: Colors.white, fontSize: 13, fontFeatures: [FontFeature.tabularFigures()]),
+              Expanded(
+                child: Text(
+                  e.quotaBytes > 0
+                      ? '${formatBytes(e.usedBytes)} / ${formatBytes(e.quotaBytes)}'
+                      : tr('已用 {0} · 不限流量', [formatBytes(e.usedBytes)]),
+                  key: const Key('me-usage'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white, fontSize: 13, fontFeatures: [FontFeature.tabularFigures()]),
+                ),
               ),
-              const Spacer(),
               if (e.periodEnd != null && e.quotaBytes > 0)
                 Text(tr('{0} 重置', [formatDate(e.periodEnd!)]), style: const TextStyle(color: dim, fontSize: 12)),
             ]),

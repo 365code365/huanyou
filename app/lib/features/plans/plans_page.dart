@@ -61,8 +61,10 @@ class _PlansPageState extends State<PlansPage> {
         paid = paid.where((p) => apple.containsKey(p.id)).toList();
       }
       if (!mounted) return;
+      AppScope.read(context).setIapFace(purchase.iap);
       final current = AppScope.read(context).user?.entitlement;
       setState(() {
+        _error = null;
         _plans = paid;
         _methods = methods;
         _purchase = purchase;
@@ -70,8 +72,20 @@ class _PlansPageState extends State<PlansPage> {
         _selected = paid.any((p) => p.id == current?.planId) ? current!.planId : (paid.isEmpty ? null : paid.first.id);
       });
     } on ApiException catch (e) {
-      setState(() => _error = e.message);
+      if (mounted) setState(() => _error = e.message);
+    } catch (e) {
+      // e.g. StoreKit unavailable: never leave the page on a spinner.
+      Analytics.reportError(e, StackTrace.current, kind: 'plans');
+      if (mounted) setState(() => _error = tr('加载失败，请重试'));
     }
+  }
+
+  void _retry() {
+    setState(() {
+      _error = null;
+      _plans = null;
+    });
+    _load();
   }
 
   Plan? get _plan => _plans?.where((p) => p.id == _selected).firstOrNull;
@@ -109,7 +123,8 @@ class _PlansPageState extends State<PlansPage> {
     } on ApiException catch (e) {
       _snack(e.message);
     } catch (e) {
-      _snack(tr('恢复失败：{0}', [e]));
+      Analytics.reportError(e, StackTrace.current, kind: 'iap_restore');
+      _snack(tr('恢复失败，请稍后重试'));
     } finally {
       if (mounted) setState(() => _restoring = false);
     }
@@ -165,7 +180,8 @@ class _PlansPageState extends State<PlansPage> {
     } on IapException catch (e) {
       if (!e.cancelled) _snack(e.message);
     } catch (e) {
-      _snack(tr('购买失败：{0}', [e]));
+      Analytics.reportError(e, StackTrace.current, kind: 'iap_buy');
+      _snack(tr('购买失败，请重试'));
     } finally {
       if (mounted) setState(() => _buying = false);
     }
@@ -217,7 +233,7 @@ class _PlansPageState extends State<PlansPage> {
     return Scaffold(
       appBar: AppBar(title: Text(tr('购买套餐'))),
       body: _error != null
-          ? Center(child: Text(_error!))
+          ? _ErrorRetry(message: _error!, onRetry: _retry)
           : plans == null
               ? const Center(child: CircularProgressIndicator())
               : ListView(
@@ -251,7 +267,7 @@ class _PlansPageState extends State<PlansPage> {
                         child: Column(children: [
                           Text(_purchase.iap ? tr('App Store 商品暂不可用，请稍后重试') : tr('暂无在售套餐'),
                               style: TextStyle(color: AppColors.sub)),
-                          if (_purchase.iap) TextButton(onPressed: _load, child: Text(tr('重试'))),
+                          if (_purchase.iap) TextButton(onPressed: _retry, child: Text(tr('重试'))),
                         ]),
                       ),
                     if (plans.isNotEmpty) _Terms(
@@ -536,4 +552,21 @@ class _Terms extends StatelessWidget {
       ]),
     );
   }
+}
+
+class _ErrorRetry extends StatelessWidget {
+  const _ErrorRetry({required this.message, required this.onRetry});
+  final String message;
+  final VoidCallback onRetry;
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Text(message, textAlign: TextAlign.center, style: TextStyle(color: AppColors.sub)),
+            const SizedBox(height: 12),
+            OutlinedButton(onPressed: onRetry, child: Text(tr('重试'))),
+          ]),
+        ),
+      );
 }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -7,6 +8,8 @@ import 'package:flutter/services.dart';
 import '../core/analytics.dart';
 import '../core/api.dart';
 import '../core/device.dart';
+import '../core/iap.dart';
+import '../core/prefs.dart';
 import '../core/node_quality.dart';
 import '../core/session.dart';
 import '../core/updater.dart';
@@ -93,6 +96,9 @@ class AppController extends ChangeNotifier {
   /// one finished within [minInterval] (unless forced).
   Future<void> probeNodes({bool force = false, Duration minInterval = const Duration(minutes: 2)}) async {
     if (probing || nodes.isEmpty) return;
+    // iOS routes the app's own sockets into the tunnel, so probes would time
+    // the local tun stack, not the path to each node: keep the last results.
+    if (Platform.isIOS && active) return;
     if (!force && probedAt != null && DateTime.now().difference(probedAt!) < minInterval) return;
     probing = true;
     notifyListeners();
@@ -126,14 +132,20 @@ class AppController extends ChangeNotifier {
   // Incremented by every connect and every cancel / disconnect; a connect
   // attempt that sees a newer value has been cancelled and stops quietly.
   int _attempt = 0;
-  int? _nativeAttempt; // the attempt that has started the native tunnel
+  int? _preNativeAttempt; // our connect attempt still loading the profile (nothing native yet)
   bool get active => status == VpnStatus.connected || status == VpnStatus.connecting;
 
   Future<void> init() async {
     // Tell the server which platform/build this is, so it serves the right
     // payment face (iOS App Review vs. normal) on /plans and /apps.
     api.clientPlatform = Device.platform;
-    Updater.info().then((i) => api.clientBuild = Updater.buildOf(i)).catchError((_) => 0);
+    // Awaited: /plans and /apps sent without the build would get the wrong face.
+    try {
+      api.clientBuild = Updater.buildOf(await Updater.info());
+    } catch (_) {}
+    // App Store transactions can arrive at any time (Ask to Buy, a purchase
+    // left unfinished last run): handled for the whole app run.
+    Iap.listen(api, onGranted: refreshUser);
     _statusSub = Vpn.statusStream().listen(_onStatus, onError: (_) {});
     try {
       status = await Vpn.status();
@@ -170,6 +182,7 @@ class AppController extends ChangeNotifier {
       notifyListeners();
       await deviceSignIn();
     }
+    unawaited(_loadFace());
     // Keep traffic / node health current while the app is open.
     _refreshTimer = Timer.periodic(const Duration(minutes: 1), (_) {
       if (loggedIn == true && foreground) refresh(quiet: true);
@@ -183,6 +196,8 @@ class AppController extends ChangeNotifier {
 
   Future<String?> _clipboardInviteCode() async {
     try {
+      // hasStrings() does not trigger the iOS "Allow Paste" prompt; getData does.
+      if (!await Clipboard.hasStrings()) return null;
       final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
       return text == null ? null : _invitePattern.firstMatch(text)?.group(1);
     } catch (_) {
@@ -195,10 +210,24 @@ class AppController extends ChangeNotifier {
   Future<void> deviceSignIn() => _signingIn ??= _deviceSignIn().whenComplete(() => _signingIn = null);
   Future<void>? _signingIn;
 
+  // Read once, on the very first sign-in of this install (no device id yet):
+  // later sign-ins (retries, logout, an expired token) must not read the
+  // clipboard again (on iOS every read can show the system paste prompt).
+  Future<String?>? _invite;
+
   Future<void> _deviceSignIn() async {
+    final wasIn = loggedIn == true;
+    if (loadFailed && !wasIn) {
+      // The splash shows the attempt is running again ("重试" tapped / timer).
+      loadFailed = false;
+      message = null;
+      notifyListeners();
+    }
     try {
+      _invite ??= session.hasDeviceId ? Future.value(null) : _clipboardInviteCode();
+      final invite = await _invite;
       final id = await session.deviceId();
-      final r = await api.device(id, Device.platform, inviteCode: await _clipboardInviteCode());
+      final r = await api.device(id, Device.platform, inviteCode: invite);
       await session.saveToken(r.token);
       api.token = r.token;
       user = r.user;
@@ -211,16 +240,21 @@ class AppController extends ChangeNotifier {
       await refresh();
     } catch (e) {
       // Any failure (network, unexpected response) retries with backoff:
-      // the splash must never get stuck without a way forward.
-      loggedIn = false;
-      loadFailed = true;
+      // the splash must never get stuck without a way forward. A user who
+      // was already in (a re-auth after an expired token failed) stays on
+      // the main screen: the tunnel keeps running and can still be stopped.
+      if (!wasIn) {
+        loggedIn = false;
+        loadFailed = true;
+      }
       message = e is ApiException && e.code != 'network' ? e.message : tr('网络连接失败，正在重试…');
       notifyListeners();
       _retryTimer?.cancel();
       final secs = min(30, 2 << min(_retryAttempt, 4));
       _retryAttempt++;
       _retryTimer = Timer(Duration(seconds: secs), () {
-        if (loggedIn != true) deviceSignIn();
+        // In the background the next resume retries instead (no wakeups).
+        if (foreground && (loggedIn != true || api.token == null)) deviceSignIn();
       });
     }
   }
@@ -358,6 +392,33 @@ class AppController extends ChangeNotifier {
     await deviceSignIn();
   }
 
+  // ---- iOS App Store review face ----
+  static const _kFace = 'iap_face';
+
+  /// The server serves this client the App Store face (Apple in-app purchase
+  /// only, iOS builds under review). Then the app must not point anywhere
+  /// outside the App Store to pay or to download: no "send your ID to support
+  /// to top up", no download page, no self-update. Cached so it is right from
+  /// the first frame; unknown on iOS counts as the review face.
+  bool iapFace = Platform.isIOS && Prefs.get(_kFace) != '0';
+
+  void setIapFace(bool v) {
+    if (!Platform.isIOS || v == iapFace) return;
+    iapFace = v;
+    Prefs.set(_kFace, v ? '1' : '0');
+    notifyListeners();
+  }
+
+  Future<void> _loadFace() async {
+    if (!Platform.isIOS || loggedIn != true) return;
+    try {
+      final (_, _, purchase) = await api.plansFull();
+      setIapFace(purchase.iap);
+    } catch (_) {
+      // keep the cached value; the plans page updates it too
+    }
+  }
+
   /// True while user / nodes failed to load and a retry is pending.
   bool loadFailed = false;
   Timer? _retryTimer;
@@ -386,7 +447,12 @@ class AppController extends ChangeNotifier {
       notifyListeners();
       unawaited(_probeAndAutoPick());
     } on ApiException catch (e) {
-      if (e.unauthorized) return _onUnauthorized();
+      if (e.unauthorized) {
+        // Not awaited: the re-auth ends with a refresh(), which would get
+        // this very (unfinished) refresh back and wait on itself forever.
+        Timer.run(_onUnauthorized);
+        return;
+      }
       if (user == null || nodes.isEmpty) {
         loadFailed = true;
         _scheduleRetry();
@@ -426,14 +492,14 @@ class AppController extends ChangeNotifier {
     final secs = min(30, 2 << min(_retryAttempt, 4)); // 2, 4, 8, 16, 30…
     _retryAttempt++;
     _retryTimer = Timer(Duration(seconds: secs), () {
-      if (loggedIn == true) refresh(quiet: true);
+      if (loggedIn == true && foreground) refresh(quiet: true);
     });
   }
 
   /// Called when the app returns to the foreground.
   void onResumed() {
     foreground = true;
-    if (loggedIn == true) {
+    if (loggedIn == true && api.token != null) {
       refresh(quiet: !loadFailed);
     } else {
       deviceSignIn();
@@ -500,7 +566,10 @@ class AppController extends ChangeNotifier {
   Future<void> cancelConnect() async {
     if (status != VpnStatus.connecting) return;
     Analytics.track('vpn_connect_cancel');
-    final startedNative = _nativeAttempt == _attempt;
+    // Only a connect of ours that is still loading the profile can be
+    // dropped silently; any other "connecting" (ours after Vpn.connect, or
+    // the native side reconnecting on its own) has to stop the tunnel.
+    final startedNative = _preNativeAttempt != _attempt;
     _attempt++;
     _wantConnected = false;
     _wasConnected = false;
@@ -577,7 +646,7 @@ class AppController extends ChangeNotifier {
   Future<ConnectResult> _connectOnce({bool switching = false}) async {
     final attempt = ++_attempt;
     // A cancel while switching stops the running tunnel.
-    if (switching) _nativeAttempt = attempt;
+    _preNativeAttempt = switching ? null : attempt;
     bool cancelled() => attempt != _attempt;
     status = VpnStatus.connecting;
     cancelling = false;
@@ -624,7 +693,7 @@ class AppController extends ChangeNotifier {
       if (cancelled()) return ConnectResult.cancelled;
       // From here a cancel has to stop the native tunnel (on mobile it keeps
       // connecting after Vpn.connect returns).
-      _nativeAttempt = attempt;
+      _preNativeAttempt = null;
       await Vpn.connect(profile.config, name: profile.node.name);
       if (cancelled()) return ConnectResult.cancelled;
       return ConnectResult.ok;

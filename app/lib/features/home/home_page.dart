@@ -111,8 +111,11 @@ class _TopBar extends StatelessWidget {
       const BrandMark(size: 30),
       const SizedBox(width: 10),
       Text(AppConfig.appName, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, letterSpacing: 0.2)),
+      const SizedBox(width: 12),
       const Spacer(),
-      Material(
+      Flexible(
+        flex: 6,
+        child: Material(
         color: warn ? AppColors.danger.withValues(alpha: 0.09) : AppColors.sunken,
         borderRadius: BorderRadius.circular(20),
         child: InkWell(
@@ -120,21 +123,27 @@ class _TopBar extends StatelessWidget {
           borderRadius: BorderRadius.circular(20),
           onTap: () => e == null ? app.refresh() : openPlans(context),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            // 10 + 10 vertical: a ≥ 40 dp touch target
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
               if (e?.paid == true) ...[
                 const Icon(Icons.workspace_premium_rounded, size: 15, color: AppColors.warning),
                 const SizedBox(width: 4),
               ],
-              Text(chip,
-                  key: const Key('plan-name'),
-                  style: TextStyle(
-                      fontSize: 13, fontWeight: FontWeight.w600, color: warn ? AppColors.danger : AppColors.ink)),
+              Flexible(
+                child: Text(chip,
+                    key: const Key('plan-name'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w600, color: warn ? AppColors.danger : AppColors.ink)),
+              ),
               const SizedBox(width: 2),
               Icon(Icons.chevron_right_rounded, size: 16, color: warn ? AppColors.danger : AppColors.sub),
             ]),
           ),
         ),
+      ),
       ),
     ]);
   }
@@ -338,7 +347,8 @@ class _ModeSegments extends StatelessWidget {
     final idx = modes.indexOf(app.mode);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Container(
-        height: 46,
+        // Grows with a large system font instead of clipping the labels.
+        height: 38 + MediaQuery.textScalerOf(context).scale(14) * 0.6,
         padding: const EdgeInsets.all(4),
         decoration: BoxDecoration(color: AppColors.sunken, borderRadius: BorderRadius.circular(14)),
         child: LayoutBuilder(builder: (context, c) {
@@ -369,12 +379,19 @@ class _ModeSegments extends StatelessWidget {
                     borderRadius: BorderRadius.circular(10),
                     onTap: app.status == VpnStatus.disconnecting ? null : () => onChanged(m),
                     child: Center(
-                      child: Text(m.label,
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: m == app.mode ? FontWeight.w700 : FontWeight.w500,
-                            color: m == app.mode ? AppColors.ink : AppColors.sub,
-                          )),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(m.label,
+                              maxLines: 1,
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: m == app.mode ? FontWeight.w700 : FontWeight.w500,
+                                color: m == app.mode ? AppColors.ink : AppColors.sub,
+                              )),
+                        ),
+                      ),
                     ),
                   ),
                 ),

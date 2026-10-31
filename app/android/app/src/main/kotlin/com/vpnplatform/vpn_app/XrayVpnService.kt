@@ -59,10 +59,17 @@ class XrayVpnService : VpnService() {
     private var pendingRestart: ScheduledFuture<*>? = null
     private var restarts = 0
 
+    // The newest start command. A stop only ends the service if no newer
+    // start arrived meanwhile (stopSelf(id)): otherwise a quick disconnect →
+    // connect could end with the core running in a destroyed service and the
+    // app showing "connected" with no tunnel.
+    @Volatile private var lastStartId = 0
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         CrashCatcher.install(this)
+        lastStartId = startId
         if (intent?.action == ACTION_DISCONNECT) {
-            worker.execute { stopVpn() }
+            worker.execute { stopVpn(startId = startId) }
             return START_NOT_STICKY
         }
         // ACTION_CONNECT, or started by the system for always-on VPN (action = android.net.VpnService).
@@ -119,18 +126,21 @@ class XrayVpnService : VpnService() {
             unwatchNetwork()
             cleanup()
             VpnState.set("error", e.message)
-            stopSelf()
+            stopSelf(lastStartId)
         }
     }
 
     /** reason != null tells the app the stop was not the user's choice (don't auto-reconnect). */
-    private fun stopVpn(reason: String? = null) {
+    private fun stopVpn(reason: String? = null, startId: Int = lastStartId) {
         VpnState.set("disconnecting")
         unwatchNetwork()
         cleanup()
         VpnState.set("disconnected", reason)
+        // A connect queued behind this stop keeps the service (and its
+        // foreground notification); it runs right after on this thread.
+        if (startId != lastStartId) return
         stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        stopSelf(startId)
     }
 
     private fun cleanup() {
@@ -162,6 +172,13 @@ class XrayVpnService : VpnService() {
                 worker.execute { onNetworkLost(network) }
             }
         }
+        // Start from the network the system actually uses. This app is excluded
+        // from its own VPN, so its active network is the underlying one; the
+        // first callback is not necessarily it (e.g. mobile data reported
+        // before Wi-Fi), and following that one would rebuild the tunnel on
+        // the wrong network changes.
+        currentNet = cm.activeNetwork
+        Log.w(TAG, "start network: $currentNet")
         try {
             // Listen (not request) for real, non-VPN internet networks; the
             // default-network callback would report our own VPN network.
@@ -237,7 +254,7 @@ class XrayVpnService : VpnService() {
 
     override fun onRevoke() {
         // Another VPN app took over or the user revoked permission in Settings.
-        worker.execute { stopVpn("revoked") }
+        worker.execute { stopVpn("revoked", lastStartId) }
     }
 
     override fun onDestroy() {

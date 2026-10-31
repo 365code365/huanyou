@@ -102,8 +102,9 @@ class _NodeListPageState extends State<NodeListPage> {
                 decoration: BoxDecoration(color: AppColors.sunken, shape: BoxShape.circle),
                 child: Icon(Icons.hub_rounded, color: AppColors.ink, size: 20),
               ),
-              title: tr('智能选择'),
-              subtitle: tr('集群模式 · 自动连接最优节点，断线自动切换（{0}/{1} 可用）', [usable, app.nodes.length]),
+              // "自动选择", not "智能…": 智能 is the name of the direct mode.
+              title: tr('自动选择'),
+              subtitle: tr('{0}/{1} 可用 · 集群模式，自动连接最优节点，断线自动切换', [usable, app.nodes.length]),
               selected: cluster,
               onTap: () => Navigator.pop(context, const AutoNodeChoice()),
             ),
@@ -119,14 +120,28 @@ class _NodeListPageState extends State<NodeListPage> {
               padding: const EdgeInsets.fromLTRB(4, 20, 0, 10),
               child: Row(children: [
                 Text(tr('全部节点'), style: TextStyle(color: AppColors.sub, fontSize: 13, fontWeight: FontWeight.w600)),
+                const SizedBox(width: 12),
                 const Spacer(),
-                _SortChips(value: _sort, onChanged: (s) => setState(() => _sort = s)),
+                Flexible(
+                  flex: 8,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerRight,
+                    child: _SortChips(value: _sort, onChanged: (s) => setState(() => _sort = s)),
+                  ),
+                ),
               ]),
             ),
             if (app.nodes.isEmpty)
               Padding(
-                padding: EdgeInsets.symmetric(vertical: 60),
-                child: Center(child: Text(tr('暂无可用节点'), style: TextStyle(color: AppColors.sub))),
+                padding: const EdgeInsets.symmetric(vertical: 60),
+                child: Column(children: [
+                  Text(app.loadFailed ? tr('节点加载失败') : tr('暂无可用节点'), style: TextStyle(color: AppColors.sub)),
+                  if (app.loadFailed) ...[
+                    const SizedBox(height: 10),
+                    OutlinedButton(onPressed: app.refresh, child: Text(tr('重试'))),
+                  ],
+                ]),
               ),
             for (final s in ordered)
               Padding(
@@ -231,9 +246,10 @@ class _SortChips extends StatelessWidget {
         for (final e in labels.entries)
           GestureDetector(
             onTap: () => onChanged(e.key),
+            behavior: HitTestBehavior.opaque,
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 160),
-              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
+              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
               decoration: BoxDecoration(
                 color: value == e.key ? AppColors.surface : Colors.transparent,
                 borderRadius: BorderRadius.circular(8),
@@ -392,7 +408,7 @@ Future<ConnectResult?> pickNodeAndConnect(BuildContext context) async {
 
 /// Kept for callers that only need a label for the current selection.
 String nodeLabel(AppController app) {
-  if (app.mode == ConnectMode.cluster) return tr('智能选择');
+  if (app.mode == ConnectMode.cluster) return tr('自动选择');
   if (app.mode == ConnectMode.ai) return tr('AI 稳定线路');
   final Node? n = app.selectedNode;
   if (n != null) return n.name;

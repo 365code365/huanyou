@@ -345,6 +345,26 @@
   "请在 App 内购买": "Please purchase in the app",
   "购买凭证无效": "Invalid purchase receipt",
   "购买凭证校验失败，请稍后重试": "Could not verify the purchase. Please try again later.",
-  "购买已恢复，套餐已生效": "Purchase restored. Your plan is active."
+  "购买已恢复，套餐已生效": "Purchase restored. Your plan is active.",
+  "App Store 暂时无法发起购买，请稍后重试": "The App Store can't start the purchase right now. Please try again later.",
+  "购买已完成，正在等待服务器确认，稍后会自动到账；也可在购买页点「恢复购买」": "Purchase complete. Waiting for server confirmation; your plan will be added automatically. You can also tap \"Restore Purchases\" on the plans page.",
+  "等待支付结果超时，如已扣款会自动到账，也可稍后点「恢复购买」": "Timed out waiting for the payment result. If you were charged, your plan will be added automatically, or tap \"Restore Purchases\" later.",
+  "购买失败，请重试": "Purchase failed. Please try again.",
+  "加载失败，请重试": "Failed to load. Please try again.",
+  "恢复失败，请稍后重试": "Restore failed. Please try again later.",
+  "账号信息加载失败": "Couldn't load account info",
+  "请检查网络后重试": "Check your network and try again",
+  "本机已自动开通账号，卸载重装后会自动找回。": "This device was signed up automatically and is recognized again after a reinstall.",
+  "账号 ID": "Account ID",
+  "账号 ID 已复制": "Account ID copied",
+  "检查失败，请稍后重试": "Check failed. Please try again later.",
+  "自动选择": "Auto select",
+  "{0}/{1} 可用 · 集群模式，自动连接最优节点，断线自动切换": "{0}/{1} available · Cluster mode: connects to the best node and switches automatically if it drops",
+  "节点加载失败": "Failed to load nodes",
+  "已支付": "Paid",
+  "待支付": "Awaiting payment",
+  "已关闭": "Closed",
+  "更新失败，请稍后重试，或在浏览器中下载": "Update failed. Try again later or download it in the browser.",
+  "无法打开下载链接，请稍后在官网下载": "Can't open the download link. Please download it from the website later."
  }
 }

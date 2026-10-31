@@ -50,10 +50,14 @@ class _ReferralPageState extends State<ReferralPage> {
       if (mounted) setState(() => _ref = r);
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.message);
+    } catch (_) {
+      if (mounted) setState(() => _error = tr('加载失败'));
     }
   }
 
-  void _snack(String msg) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  void _snack(String msg) {
+    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
 
   void _copy(String text, String what) {
     Clipboard.setData(ClipboardData(text: text));
@@ -109,7 +113,19 @@ class _ReferralPageState extends State<ReferralPage> {
     return Scaffold(
       appBar: AppBar(title: Text(tr('邀请好友'))),
       body: _error != null
-          ? Center(child: Text(_error!, style: TextStyle(color: AppColors.sub)))
+          ? Center(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Text(_error!, style: TextStyle(color: AppColors.sub)),
+                const SizedBox(height: 12),
+                OutlinedButton(
+                  onPressed: () {
+                    setState(() => _error = null);
+                    _load();
+                  },
+                  child: Text(tr('重试')),
+                ),
+              ]),
+            )
           : r == null
               ? const Center(child: CircularProgressIndicator())
               : !r.enabled
@@ -343,7 +359,10 @@ class _ActionButton extends StatelessWidget {
             child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
               Icon(icon, size: 19, color: fg),
               const SizedBox(width: 6),
-              Text(label, style: TextStyle(color: fg, fontSize: 14, fontWeight: FontWeight.w600)),
+              Flexible(
+                child: Text(label,
+                    maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: fg, fontSize: 14, fontWeight: FontWeight.w600)),
+              ),
             ]),
           ),
         ),

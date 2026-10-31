@@ -10,11 +10,11 @@ import '../../i18n/i18n.dart';
 /// Brand icon + colour per contact type (types come from the admin panel).
 (FaIconData, Color) contactStyle(String type) => switch (type) {
       'telegram' => (FontAwesomeIcons.telegram, const Color(0xFF229ED9)),
-      'x' => (FontAwesomeIcons.xTwitter, const Color(0xFF111111)),
+      'x' => (FontAwesomeIcons.xTwitter, AppColors.ink), // follows dark mode
       'instagram' => (FontAwesomeIcons.instagram, const Color(0xFFE1306C)),
       'facebook' => (FontAwesomeIcons.facebook, const Color(0xFF1877F2)),
       'youtube' => (FontAwesomeIcons.youtube, const Color(0xFFFF0000)),
-      'tiktok' => (FontAwesomeIcons.tiktok, const Color(0xFF111111)),
+      'tiktok' => (FontAwesomeIcons.tiktok, AppColors.ink),
       'discord' => (FontAwesomeIcons.discord, const Color(0xFF5865F2)),
       'whatsapp' => (FontAwesomeIcons.whatsapp, const Color(0xFF25D366)),
       'wechat' => (FontAwesomeIcons.weixin, const Color(0xFF07C160)),

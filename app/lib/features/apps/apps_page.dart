@@ -71,13 +71,18 @@ class _AppsPageState extends State<AppsPage> {
                               padding: const EdgeInsets.fromLTRB(4, 12, 4, 10),
                               child: Text(e.key, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
                             ),
-                            GridView.count(
-                              crossAxisCount: 2,
+                            GridView(
                               shrinkWrap: true,
                               physics: const NeverScrollableScrollPhysics(),
-                              mainAxisSpacing: 12,
-                              crossAxisSpacing: 12,
-                              childAspectRatio: 1.25,
+                              // Height from the content (grows with the system
+                              // font size), not a fixed aspect ratio that
+                              // overflows on small screens / large fonts.
+                              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 2,
+                                mainAxisSpacing: 12,
+                                crossAxisSpacing: 12,
+                                mainAxisExtent: _AppCard.height(context),
+                              ),
                               children: [for (final a in e.value) _AppCard(app: a)],
                             ),
                           ],
@@ -91,6 +96,12 @@ class _AppsPageState extends State<AppsPage> {
 class _AppCard extends StatelessWidget {
   const _AppCard({required this.app});
   final AppRec app;
+
+  /// padding + icon + gap + title + subtitle, scaled like the text.
+  static double height(BuildContext context) {
+    final t = MediaQuery.textScalerOf(context);
+    return 28 + 42 + 14 + t.scale(15) * 1.4 + 2 + t.scale(12) * 1.45 + 4;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -121,7 +132,7 @@ class _AppCard extends StatelessWidget {
               const Spacer(),
               Icon(Icons.north_east_rounded, size: 18, color: AppColors.faint),
             ]),
-            const Spacer(),
+            const SizedBox(height: 14),
             Text(app.name, maxLines: 1, overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
             const SizedBox(height: 2),
@@ -138,7 +149,7 @@ class _AppCard extends StatelessWidget {
         height: 42,
         decoration: BoxDecoration(gradient: AppColors.brandGradient),
         alignment: Alignment.center,
-        child: Text(app.name.characters.first,
+        child: Text(app.name.isEmpty ? '?' : app.name.characters.first,
             style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.w700)),
       );
 }

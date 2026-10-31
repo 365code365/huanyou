@@ -61,8 +61,9 @@ class _UpdateDialogState extends State<_UpdateDialog> {
       await DesktopUpdater.installAndRestart(pkg); // quits the app
     } on UpdateException catch (e) {
       if (mounted) setState(() => _error = e.message);
-    } catch (e) {
-      if (mounted) setState(() => _error = tr('更新失败：{0}', [e]));
+    } catch (e, st) {
+      Analytics.reportError(e, st, kind: 'update');
+      if (mounted) setState(() => _error = tr('更新失败，请稍后重试，或在浏览器中下载'));
     } finally {
       if (mounted) {
         setState(() {
@@ -87,6 +88,8 @@ class _UpdateDialogState extends State<_UpdateDialog> {
       }
     } on UpdateException catch (e) {
       if (mounted) setState(() => _error = e.message);
+    } catch (_) {
+      if (mounted) setState(() => _error = tr('无法打开下载链接，请稍后在官网下载'));
     }
   }
 
