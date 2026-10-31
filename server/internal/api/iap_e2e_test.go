@@ -224,6 +224,49 @@ func TestIOSReviewFace(t *testing.T) {
 		e.fk.bundleID = "com.huanyou.vpn"
 	})
 
+	t.Run("legal links and pages", func(t *testing.T) {
+		m := e.call("GET", "/api/v1/plans?platform=ios&build=7", "", nil, 200, nil)
+		legal := m["legal"].(map[string]any)
+		for _, k := range []string{"terms_url", "privacy_url"} {
+			u, _ := legal[k].(string)
+			resp, err := http.Get(u)
+			if err != nil || resp.StatusCode != 200 {
+				t.Fatalf("%s %q: %v %v", k, u, err, resp)
+			}
+			resp.Body.Close()
+		}
+	})
+
+	t.Run("restore on a new phone joins the buying account", func(t *testing.T) {
+		// The old phone (e.tok) bought month with txn 1000000777 above.
+		var tok2 struct{ Token string }
+		e.call("POST", "/api/v1/auth/device", "", map[string]string{"device_id": "iap-device-0002", "platform": "ios"}, 200, &tok2)
+		m := e.call("POST", "/api/v1/iap/restore", tok2.Token, map[string]string{"receipt": "r-month"}, 200, nil)
+		if m["granted"].(float64) != 0 || m["linked_to"] == "" {
+			t.Fatalf("restore: %v", m)
+		}
+		user := m["user"].(map[string]any)
+		if user["linked"] != true || user["entitlement"].(map[string]any)["plan_id"] != "month" {
+			t.Fatalf("new phone not sharing the plan: %v", user)
+		}
+		// Restoring again is harmless.
+		e.call("POST", "/api/v1/iap/restore", tok2.Token, map[string]string{"receipt": "r-month"}, 200, nil)
+	})
+
+	t.Run("restore grants a purchase that was never verified", func(t *testing.T) {
+		var tok3 struct{ Token string }
+		e.call("POST", "/api/v1/auth/device", "", map[string]string{"device_id": "iap-device-0003", "platform": "ios"}, 200, &tok3)
+		e.fk.byReceipt["r-year"] = []iapItem{{ProductID: "com.huanyou.year", TransactionID: "2000000888"}}
+		m := e.call("POST", "/api/v1/iap/restore", tok3.Token, map[string]string{"receipt": "r-year"}, 200, nil)
+		if m["granted"].(float64) != 1 || m["linked_to"] != "" {
+			t.Fatalf("restore: %v", m)
+		}
+	})
+
+	t.Run("restore with nothing to restore", func(t *testing.T) {
+		e.call("POST", "/api/v1/iap/restore", e.tok, map[string]string{"receipt": "r-empty"}, 404, nil)
+	})
+
 	t.Run("flip the review build off: iOS returns to the gateway face", func(t *testing.T) {
 		_, err := e.srv.live.Update(func(c *config.Catalog) error { c.Payment.IOSReviewBuild = 0; return nil }, func(*config.Catalog) error { return nil })
 		if err != nil {

@@ -18,6 +18,7 @@ export interface Plan {
   hidden: boolean
   sort: number
   hot: boolean // 🔥 HOT badge in the app
+  ios_product_id?: string // App Store product id; empty = plan id
   free?: boolean // response only
 }
 
@@ -565,6 +566,8 @@ export interface PaymentSettings {
   disabled_notice: string
   gateway: GatewaySettings
   ios_review_build: number
+  terms_url: string // empty = built-in {public_url}/legal/terms
+  privacy_url: string // empty = built-in {public_url}/legal/privacy
 }
 
 export interface Ad {

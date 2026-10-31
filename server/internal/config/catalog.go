@@ -61,6 +61,11 @@ type PaymentConfig struct {
 	// before review; set it back to 0 after approval to flip those users to
 	// the gateway. 0 = off (gateway for everyone).
 	IOSReviewBuild int `json:"ios_review_build"`
+	// TermsURL / PrivacyURL are linked from the purchase page (Apple requires
+	// both next to any subscription purchase). Empty = the built-in pages
+	// served by the API at /legal/terms and /legal/privacy.
+	TermsURL   string `json:"terms_url"`
+	PrivacyURL string `json:"privacy_url"`
 }
 
 // IOSIAPFace reports whether an iOS client at build should see the Apple
@@ -391,6 +396,9 @@ var DefaultAIDomains = []string{
 
 var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 
+// iapProductPattern is what App Store Connect accepts as a product id.
+var iapProductPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._]{0,99}$`)
+
 // Normalize fills defaults and validates the catalog. Safe to call repeatedly.
 func (c *Catalog) Normalize() error {
 	if c.TrafficPeriodDays <= 0 {
@@ -512,8 +520,20 @@ func (c *Catalog) Normalize() error {
 }
 
 func (c *Catalog) validatePlans() error {
-	seen := map[string]bool{}
-	for _, p := range c.Plans {
+	seen, products := map[string]bool{}, map[string]string{}
+	for i := range c.Plans {
+		p := &c.Plans[i]
+		p.IOSProductID = strings.TrimSpace(p.IOSProductID)
+		if p.ID != c.FreePlan {
+			pid := p.IAPProductID()
+			if p.IOSProductID != "" && !iapProductPattern.MatchString(pid) {
+				return fmt.Errorf("套餐 %s 的 App Store 产品 ID %q 只能包含字母、数字、. 和 _", p.ID, pid)
+			}
+			if other, dup := products[pid]; dup {
+				return fmt.Errorf("套餐 %s 和 %s 使用了同一个 App Store 产品 ID %q", other, p.ID, pid)
+			}
+			products[pid] = p.ID
+		}
 		switch {
 		case !idPattern.MatchString(p.ID):
 			return fmt.Errorf("套餐 ID %q 只能包含小写字母、数字、- 和 _", p.ID)
@@ -739,6 +759,15 @@ func (c *Catalog) normalizeExtras() error {
 	g.PayLink, g.Name = strings.TrimSpace(g.PayLink), strings.TrimSpace(g.Name)
 	if g.Name == "" {
 		g.Name = "在线支付"
+	}
+	p.TermsURL, p.PrivacyURL = strings.TrimSpace(p.TermsURL), strings.TrimSpace(p.PrivacyURL)
+	for _, u := range []string{p.TermsURL, p.PrivacyURL} {
+		if u != "" && !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") {
+			return errors.New("用户协议 / 隐私政策链接必须是 http(s) 地址")
+		}
+	}
+	if p.IOSReviewBuild < 0 {
+		p.IOSReviewBuild = 0
 	}
 	g.QueryURL = strings.TrimSpace(g.QueryURL)
 	local := func(u string) bool {

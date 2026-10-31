@@ -77,7 +77,8 @@ func (s *Server) handlePlans(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"plans": plans, "methods": methods, "pay_mode": payMode,
-		"purchase": map[string]any{"enabled": enabled, "notice": cat.Payment.DisabledNotice}})
+		"purchase": map[string]any{"enabled": enabled, "notice": cat.Payment.DisabledNotice},
+		"legal":    s.legalLinks()})
 }
 
 // payMethods lists the payment options: the link gateway first (when

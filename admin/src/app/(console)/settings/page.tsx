@@ -218,6 +218,15 @@ function PaymentTab({ loaded, onSaved }: { loaded: Loaded; onSaved: (p: PaymentS
           extra="0 = 关闭（所有 iOS 用户用网页支付）。填写后，构建号 ≥ 此值的 iOS 客户端进入「审核面」（Apple 内购）。请填「版本发布」里提交审核的那个 iOS 构建号。">
           <InputNumber min={0} max={1000000} style={{ width: 200 }} placeholder="0" />
         </Form.Item>
+        <h4 className="form-section">用户协议 / 隐私政策</h4>
+        <Alert type="info" showIcon style={{ marginBottom: 16 }}
+          message="App 购买页底部会显示《用户协议》《隐私政策》链接（苹果审核要求）。留空则使用系统内置页面：{对外地址}/legal/terms 和 /legal/privacy；App Store Connect 的「隐私政策网址」也可填内置地址。" />
+        <Form.Item name="terms_url" label="用户协议链接" rules={[{ pattern: /^https?:\/\//, message: '必须是 http(s) 地址' }]}>
+          <Input allowClear placeholder="留空 = 内置 /legal/terms" />
+        </Form.Item>
+        <Form.Item name="privacy_url" label="隐私政策链接" rules={[{ pattern: /^https?:\/\//, message: '必须是 http(s) 地址' }]}>
+          <Input allowClear placeholder="留空 = 内置 /legal/privacy" />
+        </Form.Item>
         <h4 className="form-section">支付中心（下单链接）</h4>
         <Form.Item name={['gateway', 'enabled']} label="启用" valuePropName="checked"><Switch /></Form.Item>
         <Form.Item name={['gateway', 'name']} label="App 显示名称"><Input maxLength={20} placeholder="在线支付" /></Form.Item>

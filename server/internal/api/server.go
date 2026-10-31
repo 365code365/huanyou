@@ -101,6 +101,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/orders", s.authed(s.handleListOrders))
 	mux.HandleFunc("GET /api/v1/orders/{id}", s.authed(s.handleGetOrder))
 	mux.HandleFunc("POST /api/v1/iap/verify", s.authed(s.handleIAPVerify))
+	mux.HandleFunc("POST /api/v1/iap/restore", s.authed(s.handleIAPRestore))
+	mux.HandleFunc("GET /legal/{doc}", s.handleLegal)
 
 	// Payment provider callbacks (GET for 易支付, POST for Alipay / mock).
 	mux.HandleFunc("/pay/notify/{provider}", s.handleNotify)

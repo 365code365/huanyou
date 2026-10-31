@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:in_app_purchase/in_app_purchase.dart' show ProductDetails;
 
 import '../../core/api.dart';
 import '../../core/format.dart';
@@ -34,6 +35,10 @@ class _PlansPageState extends State<PlansPage> {
   String? _error;
   bool _buying = false;
   PurchaseState _purchase = const PurchaseState(enabled: true, notice: '');
+  // iOS IAP face: Apple's product details per plan id (localized price).
+  // Only plans Apple returns a product for are offered there.
+  Map<String, ProductDetails> _apple = {};
+  bool _restoring = false;
 
   @override
   void initState() {
@@ -45,12 +50,23 @@ class _PlansPageState extends State<PlansPage> {
     try {
       final (plans, methods, purchase) = await AppScope.read(context).api.plansFull();
       Analytics.track('plans_view');
-      final paid = plans.where((p) => !p.free).toList();
+      var paid = plans.where((p) => !p.free).toList();
+      var apple = <String, ProductDetails>{};
+      if (purchase.iap) {
+        // App Store face: prices come from Apple (the user's storefront and
+        // currency), never from our backend, so the page always matches what
+        // the App Store charges.
+        final byProduct = await Iap.products({for (final p in paid) _productId(p)});
+        apple = {for (final p in paid) if (byProduct[_productId(p)] != null) p.id: byProduct[_productId(p)]!};
+        paid = paid.where((p) => apple.containsKey(p.id)).toList();
+      }
+      if (!mounted) return;
       final current = AppScope.read(context).user?.entitlement;
       setState(() {
         _plans = paid;
         _methods = methods;
         _purchase = purchase;
+        _apple = apple;
         _selected = paid.any((p) => p.id == current?.planId) ? current!.planId : (paid.isEmpty ? null : paid.first.id);
       });
     } on ApiException catch (e) {
@@ -59,6 +75,49 @@ class _PlansPageState extends State<PlansPage> {
   }
 
   Plan? get _plan => _plans?.where((p) => p.id == _selected).firstOrNull;
+
+  static String _productId(Plan p) => p.iapProductId.isNotEmpty ? p.iapProductId : p.id;
+
+  /// The price shown for [p]: Apple's localized price on the IAP face, our
+  /// backend price on the web face.
+  String _price(Plan p) => _purchase.iap ? (_apple[p.id]?.price ?? '') : formatYuan(p.priceCents);
+
+  /// "约 ¥20/月" for plans of two months or more ("" otherwise).
+  String _perMonth(Plan p) {
+    if (p.durationDays < 60) return '';
+    if (!_purchase.iap) return tr('约 {0}/月', [formatYuan(p.priceCents * 30 ~/ p.durationDays)]);
+    final pd = _apple[p.id];
+    if (pd == null) return '';
+    final v = pd.rawPrice * 30 / p.durationDays;
+    return tr('约 {0}/月', ['${pd.currencySymbol}${v.toStringAsFixed(v >= 100 ? 0 : 2)}']);
+  }
+
+  Future<void> _restore() async {
+    setState(() => _restoring = true);
+    try {
+      final app = AppScope.read(context);
+      final r = await Iap.restore(app.api);
+      await app.refreshUser();
+      if (!mounted) return;
+      _snack(r.linkedTo.isNotEmpty
+          ? tr('已恢复：本机已加入原购买账号 {0} 的订阅', [r.linkedTo])
+          : r.granted > 0
+              ? tr('已恢复 {0} 笔购买', [r.granted])
+              : tr('购买已恢复，套餐已生效'));
+    } on IapException catch (e) {
+      if (!e.cancelled) _snack(e.message);
+    } on ApiException catch (e) {
+      _snack(e.message);
+    } catch (e) {
+      _snack(tr('恢复失败：{0}', [e]));
+    } finally {
+      if (mounted) setState(() => _restoring = false);
+    }
+  }
+
+  Future<void> _openLegal(String url) async {
+    if (url.isEmpty || !await openUrl(Uri.parse(url))) _snack(tr('无法打开页面'));
+  }
 
   Future<void> _buy() async {
     final plan = _plan;
@@ -96,7 +155,7 @@ class _PlansPageState extends State<PlansPage> {
     setState(() => _buying = true);
     try {
       await Iap.buy(
-        productId: plan.iapProductId.isNotEmpty ? plan.iapProductId : plan.id,
+        productId: _productId(plan),
         planId: plan.id,
         api: AppScope.read(context).api,
       );
@@ -179,6 +238,8 @@ class _PlansPageState extends State<PlansPage> {
                         padding: const EdgeInsets.only(bottom: 12),
                         child: _PlanCard(
                           plan: p,
+                          price: _price(p),
+                          perMonth: _perMonth(p),
                           selected: p.id == _selected,
                           current: cur?.paid == true && cur?.planId == p.id,
                           onTap: () => setState(() => _selected = p.id),
@@ -186,9 +247,21 @@ class _PlansPageState extends State<PlansPage> {
                       ),
                     if (plans.isEmpty)
                       Padding(
-                        padding: EdgeInsets.only(top: 80),
-                        child: Center(child: Text(tr('暂无在售套餐'), style: TextStyle(color: AppColors.sub))),
+                        padding: const EdgeInsets.only(top: 80),
+                        child: Column(children: [
+                          Text(_purchase.iap ? tr('App Store 商品暂不可用，请稍后重试') : tr('暂无在售套餐'),
+                              style: TextStyle(color: AppColors.sub)),
+                          if (_purchase.iap) TextButton(onPressed: _load, child: Text(tr('重试'))),
+                        ]),
                       ),
+                    if (plans.isNotEmpty) _Terms(
+                      purchase: _purchase,
+                      plan: _plan,
+                      price: _plan == null ? '' : _price(_plan!),
+                      restoring: _restoring,
+                      onRestore: _restore,
+                      onOpen: _openLegal,
+                    ),
                   ],
                 ),
       bottomNavigationBar: _plan == null
@@ -203,7 +276,7 @@ class _PlansPageState extends State<PlansPage> {
                 child: Row(children: [
                   Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Text(tr('合计'), style: TextStyle(color: AppColors.sub, fontSize: 12)),
-                    Text(formatYuan(_plan!.priceCents),
+                    Text(_price(_plan!),
                         style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: AppColors.primary)),
                   ]),
                   const SizedBox(width: 20),
@@ -228,15 +301,22 @@ class _PlansPageState extends State<PlansPage> {
 }
 
 class _PlanCard extends StatelessWidget {
-  const _PlanCard({required this.plan, required this.selected, required this.current, required this.onTap});
+  const _PlanCard(
+      {required this.plan,
+      required this.price,
+      required this.perMonth,
+      required this.selected,
+      required this.current,
+      required this.onTap});
   final Plan plan;
+  final String price; // already formatted (Apple's price on the IAP face)
+  final String perMonth; // "约 ¥20/月" or ""
   final bool selected;
   final bool current;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final perMonth = plan.durationDays >= 60 ? plan.priceCents * 30 ~/ plan.durationDays : 0;
     final features = [
       tr('{0} / 周期', [formatTraffic(plan.trafficGb)]),
       formatSpeed(plan.speedMbps * 1000),
@@ -292,11 +372,10 @@ class _PlanCard extends StatelessWidget {
                   ]),
                 ),
                 Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                  Text(formatYuan(plan.priceCents),
+                  Text(price,
                       style: TextStyle(
                           fontSize: 24, fontWeight: FontWeight.w800, color: selected ? AppColors.primary : AppColors.ink)),
-                  if (perMonth > 0)
-                    Text(tr('约 {0}/月', [formatYuan(perMonth)]), style: TextStyle(fontSize: 11, color: AppColors.sub)),
+                  if (perMonth.isNotEmpty) Text(perMonth, style: TextStyle(fontSize: 11, color: AppColors.sub)),
                 ]),
               ]),
               const SizedBox(height: 14),
@@ -397,6 +476,64 @@ class _HotBadge extends StatelessWidget {
       ),
       child: const Text('🔥 HOT',
           style: TextStyle(fontSize: 11, height: 1.3, fontWeight: FontWeight.w800, color: Colors.white, letterSpacing: 0.4)),
+    );
+  }
+}
+
+/// Purchase terms under the plans. On the App Store face this is what Apple
+/// requires next to a subscription purchase: what is bought, how long, the
+/// price, that it does not renew, who charges, and links to the terms and the
+/// privacy policy, plus 恢复购买.
+class _Terms extends StatelessWidget {
+  const _Terms(
+      {required this.purchase,
+      required this.plan,
+      required this.price,
+      required this.restoring,
+      required this.onRestore,
+      required this.onOpen});
+  final PurchaseState purchase;
+  final Plan? plan;
+  final String price;
+  final bool restoring;
+  final VoidCallback onRestore;
+  final void Function(String url) onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final small = TextStyle(fontSize: 12, height: 1.6, color: AppColors.sub);
+    final link = TextStyle(fontSize: 12, color: AppColors.primary, fontWeight: FontWeight.w600);
+    final p = plan;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (purchase.iap && p != null)
+          Text(
+            tr('「{0}」{1}，有效期 {2} 天，购买后立即生效。本套餐为非续期订阅，到期不会自动续费，可再次购买续期；续费同一套餐在原到期时间上顺延。付款将在确认购买时从您的 Apple ID 账户扣除。',
+                [p.name, price, p.durationDays]),
+            style: small,
+          )
+        else if (p != null)
+          Text(tr('「{0}」{1}，有效期 {2} 天，付款成功后立即生效，到期不会自动扣费。', [p.name, price, p.durationDays]), style: small),
+        const SizedBox(height: 8),
+        Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 4, children: [
+          if (purchase.termsUrl.isNotEmpty)
+            InkWell(onTap: () => onOpen(purchase.termsUrl), child: Text(tr('《用户协议》'), style: link)),
+          if (purchase.privacyUrl.isNotEmpty)
+            InkWell(onTap: () => onOpen(purchase.privacyUrl), child: Text(tr('《隐私政策》'), style: link)),
+          if (purchase.iap) ...[
+            Text('·', style: small),
+            restoring
+                ? const SizedBox.square(dimension: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                : InkWell(
+                    key: const Key('restore-purchases'), onTap: onRestore, child: Text(tr('恢复购买'), style: link)),
+          ],
+        ]),
+        if (purchase.iap) ...[
+          const SizedBox(height: 6),
+          Text(tr('换了新手机？用购买时的 Apple ID 点「恢复购买」，或在原设备「我的 → 多设备」生成令牌让新设备加入。'), style: small),
+        ],
+      ]),
     );
   }
 }

@@ -126,6 +126,13 @@ export default function PlansPage() {
               <Switch />
             </Form.Item>
           </Space>
+          {!editingFree && (
+            <Form.Item name="ios_product_id" label="App Store 产品 ID"
+              rules={[{ pattern: /^[A-Za-z0-9][A-Za-z0-9._]{0,99}$/, message: '只能包含字母、数字、. 和 _' }]}
+              extra="仅 iOS 审核面（Apple 内购）使用。留空 = 使用套餐 ID；需与 App Store Connect 里的「非续期订阅」产品 ID 完全一致。App 内显示的价格以 App Store 返回为准。">
+              <Input allowClear placeholder="留空 = 套餐 ID" />
+            </Form.Item>
+          )}
         </Form>
       </Drawer>
     </div>

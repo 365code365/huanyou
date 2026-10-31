@@ -45,6 +45,7 @@ dependencies:
   window_manager: ^0.5.2
   crypto: ^3.0.8
   in_app_purchase: ^3.2.0 # iOS App Store in-app purchase (A/B payment face)
+  in_app_purchase_storekit: ^0.4.16 # receipt refresh for 恢复购买
 
 dev_dependencies:
   flutter_test:

@@ -103,11 +103,23 @@ class Plan {
 /// [mode] is how to pay: "gateway" (web / custom) or "iap" (Apple in-app
 /// purchase, shown to App Review on iOS). "gateway" by default.
 class PurchaseState {
-  const PurchaseState({required this.enabled, required this.notice, this.mode = 'gateway'});
+  const PurchaseState(
+      {required this.enabled, required this.notice, this.mode = 'gateway', this.termsUrl = '', this.privacyUrl = ''});
   final bool enabled;
   final String notice;
   final String mode;
+  final String termsUrl; // 用户协议, linked from the purchase page
+  final String privacyUrl; // 隐私政策
   bool get iap => mode == 'iap';
+}
+
+/// Result of "恢复购买".
+class RestoreResult {
+  RestoreResult.fromJson(Map<String, dynamic> j)
+      : granted = (j['granted'] as num?)?.toInt() ?? 0,
+        linkedTo = j['linked_to'] as String? ?? '';
+  final int granted; // purchases newly granted to this device
+  final String linkedTo; // recharge id of the account this device joined ("" = none)
 }
 
 /// One home banner / launch popup from GET /api/v1/ads.
@@ -451,19 +463,27 @@ class ApiClient {
   Future<(List<Plan>, List<PayMethod>, PurchaseState)> plansFull() async {
     final j = await _send('GET', '/api/v1/plans', query: _clientTag);
     final p = j['purchase'] as Map<String, dynamic>?;
+    final legal = j['legal'] as Map<String, dynamic>?;
     return (
       (j['plans'] as List).map((e) => Plan.fromJson(e as Map<String, dynamic>)).toList(),
       (j['methods'] as List).map((e) => PayMethod.fromJson(e as Map<String, dynamic>)).toList(),
       PurchaseState(
           enabled: p?['enabled'] as bool? ?? true,
           notice: p?['notice'] as String? ?? '',
-          mode: j['pay_mode'] as String? ?? 'gateway'),
+          mode: j['pay_mode'] as String? ?? 'gateway',
+          termsUrl: legal?['terms_url'] as String? ?? '',
+          privacyUrl: legal?['privacy_url'] as String? ?? ''),
     );
   }
 
   /// Verifies an App Store purchase receipt (iOS IAP face) and grants the plan.
   Future<void> verifyIap(String planId, String receipt) =>
       _send('POST', '/api/v1/iap/verify', body: {'plan_id': planId, 'receipt': receipt});
+
+  /// "恢复购买": sends the App Store receipt; the server grants unredeemed
+  /// purchases or joins this device to the account that bought them.
+  Future<RestoreResult> restoreIap(String receipt) async =>
+      RestoreResult.fromJson(await _send('POST', '/api/v1/iap/restore', body: {'receipt': receipt}));
 
   Future<Ads> ads() async => Ads.fromJson(await _send('GET', '/api/v1/ads'));
 

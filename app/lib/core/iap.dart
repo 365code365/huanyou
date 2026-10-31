@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:in_app_purchase/in_app_purchase.dart';
-
+import 'package:in_app_purchase_storekit/in_app_purchase_storekit.dart';
 import 'api.dart';
 import '../i18n/i18n.dart';
 
@@ -13,9 +13,9 @@ import '../i18n/i18n.dart';
 /// plan. On non-iOS platforms every method is a no-op.
 ///
 /// Setup required before this works in review / production:
-///  - In App Store Connect create an in-app purchase product per paid plan,
-///    whose Product ID equals the plan's `iap_product_id` (the plan id, or the
-///    plan's `ios_product_id` override).
+///  - In App Store Connect create a 非续期订阅 (non-renewing subscription)
+///    product per paid plan, whose Product ID equals the plan's
+///    `iap_product_id` (the plan id, or the plan's `ios_product_id` override).
 ///  - Enable the In-App Purchase capability in the iOS target.
 ///  - Set the App-Specific Shared Secret in the admin config (apple_iap).
 class IapException implements Exception {
@@ -38,16 +38,44 @@ class Iap {
     }
   }
 
+  /// Apple's product details (localized price, currency) for [ids], keyed by
+  /// product id. Products Apple doesn't return (not created / not approved
+  /// yet) are missing from the map. Cached for the session.
+  static final Map<String, ProductDetails> _products = {};
+
+  static Future<Map<String, ProductDetails>> products(Set<String> ids) async {
+    final missing = ids.where((id) => !_products.containsKey(id)).toSet();
+    if (missing.isNotEmpty && await available()) {
+      final resp = await _iap.queryProductDetails(missing);
+      for (final p in resp.productDetails) {
+        _products[p.id] = p;
+      }
+    }
+    return {for (final id in ids) if (_products[id] != null) id: _products[id]!};
+  }
+
+  /// "恢复购买": refreshes the App Store receipt of the signed-in Apple ID and
+  /// lets the server restore what it contains.
+  static Future<RestoreResult> restore(ApiClient api) async {
+    if (!await available()) throw IapException(tr('当前设备不支持 App 内购买'));
+    final add = _iap.getPlatformAddition<InAppPurchaseStoreKitPlatformAddition>();
+    PurchaseVerificationData? data;
+    try {
+      data = await add.refreshPurchaseVerificationData(); // may ask the user to sign in to the App Store
+    } catch (_) {
+      data = null;
+    }
+    final receipt = data?.serverVerificationData ?? '';
+    if (receipt.isEmpty) throw IapException(tr('当前 Apple ID 没有可恢复的购买'));
+    return api.restoreIap(receipt);
+  }
+
   /// Buys [productId] for [planId]; once Apple confirms, verifies the receipt
   /// with the server so the plan is granted. Completes on success, throws
   /// [IapException] otherwise (cancelled=true when the user backed out).
   static Future<void> buy({required String productId, required String planId, required ApiClient api}) async {
     if (!await available()) throw IapException(tr('当前设备不支持 App 内购买'));
-    final resp = await _iap.queryProductDetails({productId});
-    ProductDetails? pd;
-    for (final p in resp.productDetails) {
-      if (p.id == productId) pd = p;
-    }
+    final pd = (await products({productId}))[productId];
     if (pd == null) throw IapException(tr('商品暂不可用，请稍后重试'));
 
     final done = Completer<void>();
@@ -85,8 +113,9 @@ class Iap {
     );
 
     try {
-      // VPN plans are fixed-duration (non-renewing): a consumable product.
-      await _iap.buyConsumable(purchaseParam: PurchaseParam(productDetails: pd), autoConsume: true);
+      // Plans are fixed-duration non-renewing subscriptions: they stay in the
+      // App Store receipt, which is what makes 恢复购买 possible.
+      await _iap.buyNonConsumable(purchaseParam: PurchaseParam(productDetails: pd));
       await done.future.timeout(const Duration(minutes: 5));
     } on TimeoutException {
       throw IapException(tr('等待支付结果超时，如已扣款请稍后在「我的」查看'));
