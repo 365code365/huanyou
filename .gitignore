@@ -34,4 +34,5 @@ doc/
 
 doc/服务器.txt
 doc/证书.zip
-doc/get-udid(1).mobileconfig.backup/
+doc/get-udid(1).mobileconfig
+.backup/
