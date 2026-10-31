@@ -452,6 +452,10 @@ function GuardTab({ value, onSaved }: { value: GuardSettings; onSaved: (g: Guard
         <NumberUnit min={10} max={100000} unit="次" />
       </Form.Item>
       <Form.Item name="ban_minutes" label="自动封禁时长"><NumberUnit min={1} max={10080} unit="分钟" /></Form.Item>
+      <Form.Item name="new_devices_per_ip_day" label="单 IP 每天新开设备上限"
+        extra="同一 IP（IPv6 按 /64）一天最多新开通的设备账号数，防止脚本批量刷免费体验和邀请奖励。其中最多 3 个能记邀请奖励。学校、公司或运营商共享出口 IP 时可适当调大">
+        <NumberUnit min={1} max={100000} unit="个" />
+      </Form.Item>
       <Form.Item name="allow_ips" label="白名单 IP" extra="公司网络、支付中心、监控服务等，不受限流和封禁">
         <Select mode="tags" tokenSeparators={[',', ' ']} placeholder="IP 或网段，回车添加" />
       </Form.Item>

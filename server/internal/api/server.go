@@ -48,6 +48,7 @@ type Server struct {
 	iap       iapVerifier  // App Store receipt verification (iap.go), nil = not configured
 	nonces    nonceCache   // request nonces seen (secure.go)
 	envLogged sync.Map     // user id -> last integrity log (secure.go)
+	signups   signupGuard  // new device accounts per network (signup_guard.go)
 }
 
 func New(cfg *config.API, live *config.LiveCatalog, st *store.Store, issuer *auth.Issuer, mon *monitor.Monitor) (*Server, error) {
@@ -191,14 +192,31 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 		platform = ""
 	}
 	existing, lookErr := s.store.UserByDeviceID(r.Context(), id)
+	if lookErr != nil && !errors.Is(lookErr, store.ErrNotFound) {
+		s.internal(w, lookErr)
+		return
+	}
+	isNew := existing == nil
+	invite := strings.TrimSpace(strings.ToUpper(body.InviteCode))
+	if isNew {
+		ok, credit := s.signups.allow(s.clientIP(r), s.cat().Guard.NewDevicesPerIPDay, invite != "", time.Now())
+		if !ok {
+			slog.Warn("new device accounts over the daily limit", "ip", s.clientIP(r))
+			writeErr(w, http.StatusTooManyRequests, "too_many_devices", "当前网络今天新开通的设备过多，请明天再试或更换网络")
+			return
+		}
+		if !credit {
+			invite = ""
+		}
+	}
 	u, err := s.store.DeviceUser(r.Context(), id, platform)
 	if err != nil {
 		s.internal(w, err)
 		return
 	}
 	// Apply an invite only for a genuinely new device account.
-	if errors.Is(lookErr, store.ErrNotFound) || existing == nil {
-		s.applyInvite(r, u, strings.TrimSpace(strings.ToUpper(body.InviteCode)))
+	if isNew {
+		s.applyInvite(r, u, invite)
 		if fresh, e := s.store.UserByID(r.Context(), u.ID); e == nil {
 			u = fresh
 		}

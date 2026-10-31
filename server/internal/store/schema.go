@@ -3,7 +3,10 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"log/slog"
+	"regexp"
 	"strings"
 )
 
@@ -598,7 +601,7 @@ func (s *Store) migrateSQLite(ctx context.Context) error {
 		return fmt.Errorf("数据库版本 %d 比本程序（%d）新，请升级程序", v, len(sqliteMigrations))
 	}
 	if v == len(sqliteMigrations) {
-		return nil
+		return repairSQLite(ctx, conn)
 	}
 	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
 		return err
@@ -636,11 +639,76 @@ func (s *Store) migrateSQLite(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	if rows.Next() {
+	bad := rows.Next()
+	rows.Close()
+	if bad {
 		return fmt.Errorf("foreign_key_check failed after migration")
 	}
-	return rows.Err()
+	return repairSQLite(ctx, conn)
+}
+
+var addColumnRe = regexp.MustCompile(`ALTER TABLE (\w+) ADD COLUMN (\w+) ([^;]+);`)
+
+// repairSQLite brings a database that is at the current version but ran an
+// earlier draft of a migration up to the real schema: every column the
+// migrations add must exist, and releases are unique per ABI. (A database
+// upgraded by a development build had releases without "abi", which made
+// every update check fail.) Idempotent and cheap; runs at every start.
+func repairSQLite(ctx context.Context, conn *sql.Conn) error {
+	cols := map[string]map[string]bool{}
+	has := func(table, col string) (bool, error) {
+		if cols[table] == nil {
+			rows, err := conn.QueryContext(ctx, `SELECT name FROM pragma_table_info(?)`, table)
+			if err != nil {
+				return false, err
+			}
+			m := map[string]bool{}
+			for rows.Next() {
+				var n string
+				if err := rows.Scan(&n); err != nil {
+					rows.Close()
+					return false, err
+				}
+				m[n] = true
+			}
+			rows.Close()
+			cols[table] = m
+		}
+		return cols[table][col], nil
+	}
+	for _, m := range sqliteMigrations {
+		for _, a := range addColumnRe.FindAllStringSubmatch(m.sql, -1) {
+			table, col, def := a[1], a[2], strings.TrimSpace(a[3])
+			if strings.HasSuffix(table, "_new") {
+				continue // rebuilt and renamed inside its migration
+			}
+			ok, err := has(table, col)
+			if err != nil || ok || len(cols[table]) == 0 {
+				if err != nil {
+					return err
+				}
+				continue // present, or the table itself is gone (dropped later)
+			}
+			if _, err := conn.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, col, def)); err != nil {
+				return fmt.Errorf("schema repair %s.%s: %w", table, col, err)
+			}
+			cols[table][col] = true
+			slog.Warn("schema repaired: column added", "table", table, "column", col)
+		}
+	}
+	var idx string
+	err := conn.QueryRowContext(ctx, `SELECT COALESCE(sql, '') FROM sqlite_master WHERE type = 'index' AND name = 'releases_platform_build'`).Scan(&idx)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if !strings.Contains(idx, "abi") {
+		if _, err := conn.ExecContext(ctx, `DROP INDEX IF EXISTS releases_platform_build;
+CREATE UNIQUE INDEX releases_platform_build ON releases(platform, build, abi);`); err != nil {
+			return fmt.Errorf("schema repair releases index: %w", err)
+		}
+		slog.Warn("schema repaired: releases unique per abi")
+	}
+	return nil
 }
 
 func (s *Store) migrateRemote(ctx context.Context) error {

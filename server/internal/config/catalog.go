@@ -146,6 +146,9 @@ type GuardConfig struct {
 	// BlockTampered refuses requests from apps that detect a debugger or a
 	// hooking framework (Frida, Xposed …) on the device. Off = only logged.
 	BlockTampered bool `json:"block_tampered"`
+	// NewDevicesPerIPDay: new device accounts one IP (IPv6: one /64) may
+	// create per day (default 30); stops scripted free-trial / invite farming.
+	NewDevicesPerIPDay int `json:"new_devices_per_ip_day"`
 }
 
 // RiskConfig controls IP recording and the suspicious-behaviour lists.
@@ -854,6 +857,10 @@ func (c *Catalog) normalizeExtras() error {
 		gd.BanMinutes = 30
 	}
 	gd.BanMinutes = min(gd.BanMinutes, 7*24*60)
+	if gd.NewDevicesPerIPDay <= 0 {
+		gd.NewDevicesPerIPDay = 30
+	}
+	gd.NewDevicesPerIPDay = min(gd.NewDevicesPerIPDay, 100000)
 	signers := []string{}
 	for _, v := range gd.AppSigners {
 		v = strings.ToLower(strings.NewReplacer(":", "", " ", "").Replace(strings.TrimSpace(v)))

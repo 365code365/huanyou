@@ -515,6 +515,7 @@
   "请求已失效，请重试": "This request has expired. Please try again.",
   "请求过大": "Request too large",
   "检测到非官方安装包，请从官网下载正版应用": "Unofficial app detected. Please download the official app from our website.",
-  "检测到调试或注入工具，已停止服务。请关闭相关工具后重试": "A debugging or injection tool was detected, so service has stopped. Close it and try again."
+  "检测到调试或注入工具，已停止服务。请关闭相关工具后重试": "A debugging or injection tool was detected, so service has stopped. Close it and try again.",
+  "当前网络今天新开通的设备过多，请明天再试或更换网络": "Too many new devices were set up on this network today. Please try again tomorrow or use another network."
  }
 }

@@ -600,6 +600,7 @@ export interface GuardSettings {
   require_signed: boolean // refuse unsigned requests (app ≤ 1.2.4)
   app_signers: string[] // official Android signing cert SHA-256 (hex); empty = not checked
   block_tampered: boolean // refuse devices reporting a debugger / hooking tool
+  new_devices_per_ip_day: number // new device accounts per IP (IPv6 /64) per day
 }
 
 export interface AutoBan {

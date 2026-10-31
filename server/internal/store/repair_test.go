@@ -1,0 +1,57 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"path/filepath"
+	"testing"
+
+	_ "modernc.org/sqlite"
+)
+
+// A database at the current version that ran an earlier draft of migration 9
+// (no releases.abi, old unique index) is repaired at open.
+func TestRepairDraftSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vpn.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`DROP INDEX releases_platform_build`,
+		`ALTER TABLE releases DROP COLUMN abi`,
+		`CREATE UNIQUE INDEX releases_platform_build ON releases(platform, build)`,
+	} {
+		if _, err := raw.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	raw.Close()
+
+	st, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	for _, abi := range []string{"arm64-v8a", "armeabi-v7a"} {
+		if _, err := st.CreateRelease(ctx, &Release{Platform: "android", Version: "1.2.5", Build: 9, URL: "https://x/a.apk", ABI: abi, Published: true}); err != nil {
+			t.Fatalf("release %s after repair: %v", abi, err)
+		}
+	}
+	if r, err := st.LatestRelease(ctx, "android", "armeabi-v7a"); err != nil || r.ABI != "armeabi-v7a" {
+		t.Fatalf("latest: %+v %v", r, err)
+	}
+	// Second open: nothing left to repair, still fine.
+	st2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st2.Close()
+}
