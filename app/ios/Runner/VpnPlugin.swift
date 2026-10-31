@@ -1,4 +1,5 @@
 import Flutter
+import MachO
 import NetworkExtension
 
 /// Flutter bridge that drives the PacketTunnel extension through NETunnelProviderManager.
@@ -18,6 +19,19 @@ final class VpnPlugin: NSObject, FlutterStreamHandler {
       .setMethodCallHandler(plugin.handle)
     FlutterEventChannel(name: "vpn_platform/vpn_status", binaryMessenger: registrar.messenger())
       .setStreamHandler(plugin)
+    // Integrity report for the API (lib/core/integrity.dart). Other device
+    // methods are not implemented on iOS (the app falls back on its own).
+    FlutterMethodChannel(name: "vpn_platform/device", binaryMessenger: registrar.messenger())
+      .setMethodCallHandler { call, result in
+        if call.method == "integrity" {
+          DispatchQueue.global(qos: .utility).async {
+            let r = Integrity.check()
+            DispatchQueue.main.async { result(r) }
+          }
+        } else {
+          result(FlutterMethodNotImplemented)
+        }
+      }
     #if !targetEnvironment(simulator)
       // Clean up the "需要更新" entry left in Settings by a build without the extension.
       if !tunnelExtensionInstalled { removeStaleProfiles() }
@@ -174,5 +188,70 @@ final class VpnPlugin: NSObject, FlutterStreamHandler {
   func onCancel(withArguments _: Any?) -> FlutterError? {
     sink = nil
     return nil
+  }
+}
+
+/// dbg: a debugger is attached (P_TRACED); hook: Frida / Substrate / other
+/// injection libraries are loaded, or frida-server listens locally; root:
+/// jailbreak traces. Reported to the server, which decides.
+enum Integrity {
+  static func check() -> [String: Any] {
+    ["dbg": debugged(), "hook": hooked(), "root": jailbroken()]
+  }
+
+  private static func debugged() -> Bool {
+    var info = kinfo_proc()
+    var size = MemoryLayout<kinfo_proc>.stride
+    var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+    guard sysctl(&mib, UInt32(mib.count), &info, &size, nil, 0) == 0 else { return false }
+    return (info.kp_proc.p_flag & P_TRACED) != 0
+  }
+
+  private static let hookLibs = ["frida", "gadget", "substrate", "substitute", "libhooker", "tweakinject", "cycript", "sslkillswitch", "ellekit"]
+
+  private static func hooked() -> Bool {
+    for i in 0..<_dyld_image_count() {
+      guard let c = _dyld_get_image_name(i) else { continue }
+      let name = String(cString: c).lowercased()
+      if hookLibs.contains(where: { name.contains($0) }) { return true }
+    }
+    return fridaPort()
+  }
+
+  private static func fridaPort() -> Bool {
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    guard fd >= 0 else { return false }
+    defer { close(fd) }
+    var addr = sockaddr_in()
+    addr.sin_family = sa_family_t(AF_INET)
+    addr.sin_port = in_port_t(UInt16(27042).bigEndian)
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+    // Non-blocking connect with a short wait.
+    let flags = fcntl(fd, F_GETFL, 0)
+    _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+    let rc = withUnsafePointer(to: &addr) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+    }
+    if rc == 0 { return true }
+    guard errno == EINPROGRESS else { return false }
+    var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+    guard poll(&pfd, 1, 150) == 1 else { return false }
+    var err: Int32 = 0
+    var len = socklen_t(MemoryLayout<Int32>.size)
+    getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len)
+    return err == 0
+  }
+
+  private static func jailbroken() -> Bool {
+    let paths = ["/Applications/Cydia.app", "/Applications/Sileo.app", "/var/jb", "/private/var/lib/apt",
+                 "/usr/sbin/sshd", "/bin/bash", "/etc/apt", "/private/var/stash"]
+    if paths.contains(where: { FileManager.default.fileExists(atPath: $0) }) { return true }
+    // A sandboxed app cannot write outside its container.
+    let probe = "/private/huanyou-jb-probe"
+    if (try? "x".write(toFile: probe, atomically: false, encoding: .utf8)) != nil {
+      try? FileManager.default.removeItem(atPath: probe)
+      return true
+    }
+    return false
   }
 }

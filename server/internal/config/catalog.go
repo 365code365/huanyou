@@ -133,6 +133,19 @@ type GuardConfig struct {
 	BanMinutes    int  `json:"ban_minutes"`     // automatic ban length (default 30)
 	// AllowIPs are never blocked (office, payment center, monitoring).
 	AllowIPs []string `json:"allow_ips"`
+
+	// ---- app request security (see api/secure.go) ----
+	// RequireSigned refuses app requests without a session signature, i.e.
+	// app versions from before signed requests (≤ 1.2.4). Turn it on once
+	// those versions are no longer in use.
+	RequireSigned bool `json:"require_signed"`
+	// AppSigners: SHA-256 of the official Android signing certificate(s),
+	// lowercase hex. Requests from an Android app signed by anyone else (a
+	// repackaged / modified app) are refused. Empty = not checked.
+	AppSigners []string `json:"app_signers"`
+	// BlockTampered refuses requests from apps that detect a debugger or a
+	// hooking framework (Frida, Xposed …) on the device. Off = only logged.
+	BlockTampered bool `json:"block_tampered"`
 }
 
 // RiskConfig controls IP recording and the suspicious-behaviour lists.
@@ -841,6 +854,18 @@ func (c *Catalog) normalizeExtras() error {
 		gd.BanMinutes = 30
 	}
 	gd.BanMinutes = min(gd.BanMinutes, 7*24*60)
+	signers := []string{}
+	for _, v := range gd.AppSigners {
+		v = strings.ToLower(strings.NewReplacer(":", "", " ", "").Replace(strings.TrimSpace(v)))
+		if v == "" {
+			continue
+		}
+		if len(v) != 64 || strings.Trim(v, "0123456789abcdef") != "" {
+			return fmt.Errorf("签名证书指纹 %q 应为 64 位十六进制（SHA-256）", v)
+		}
+		signers = append(signers, v)
+	}
+	gd.AppSigners = signers
 	return nil
 }
 

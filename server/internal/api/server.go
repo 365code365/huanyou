@@ -46,6 +46,8 @@ type Server struct {
 	guard     guardState   // request flood / abuse protection (guard.go)
 	events    eventBuffer  // app analytics (analytics.go)
 	iap       iapVerifier  // App Store receipt verification (iap.go), nil = not configured
+	nonces    nonceCache   // request nonces seen (secure.go)
+	envLogged sync.Map     // user id -> last integrity log (secure.go)
 }
 
 func New(cfg *config.API, live *config.LiveCatalog, st *store.Store, issuer *auth.Issuer, mon *monitor.Monitor) (*Server, error) {
@@ -71,13 +73,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/device", s.rateLimited(s.handleDevice))
 	mux.HandleFunc("POST /api/v1/auth/register", s.rateLimited(s.handleRegister))
 	mux.HandleFunc("POST /api/v1/auth/login", s.rateLimited(s.handleLogin))
+	mux.HandleFunc("POST /api/v1/auth/rekey", s.rateLimited(s.handleRekey))
 	mux.HandleFunc("GET /api/v1/me", s.authed(s.handleMe))
 	mux.HandleFunc("GET /api/v1/nodes", s.authed(s.handleNodes))
 	mux.HandleFunc("GET /api/v1/profile", s.authed(s.handleProfile))
 	mux.HandleFunc("GET /api/v1/usage", s.authed(s.handleUsage))
 	mux.HandleFunc("GET /api/v1/referral", s.authed(s.handleReferral))
 	mux.HandleFunc("POST /api/v1/referral/bind", s.authed(s.handleReferralBind))
-	mux.HandleFunc("GET /api/v1/contacts", s.handleContacts)
+	mux.HandleFunc("GET /api/v1/contacts", s.optionalSession(s.handleContacts))
 	mux.HandleFunc("GET /api/v1/devices", s.authed(s.handleDevices))
 	mux.HandleFunc("POST /api/v1/devices/code", s.authed(s.handleDeviceCode))
 	mux.HandleFunc("POST /api/v1/devices/join", s.authed(s.handleDeviceJoin))
@@ -92,11 +95,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /dl/{name}", s.handleDownloadFile)
 	mux.HandleFunc("GET /dl/releases/{name}", s.handleReleaseFile)
 	mux.HandleFunc("GET /dl/releases/{id}/manifest.plist", s.handleIOSManifest)
-	mux.HandleFunc("GET /api/v1/app/update", s.handleAppUpdate)
-	mux.HandleFunc("GET /api/v1/apps", s.handleApps)
-	mux.HandleFunc("GET /api/v1/i18n", s.handleLanguages)
-	mux.HandleFunc("GET /api/v1/i18n/{code}", s.handleLanguagePack)
-	mux.HandleFunc("GET /api/v1/plans", s.handlePlans)
+	mux.HandleFunc("GET /api/v1/app/update", s.optionalSession(s.handleAppUpdate))
+	mux.HandleFunc("GET /api/v1/apps", s.optionalSession(s.handleApps))
+	mux.HandleFunc("GET /api/v1/i18n", s.optionalSession(s.handleLanguages))
+	mux.HandleFunc("GET /api/v1/i18n/{code}", s.optionalSession(s.handleLanguagePack))
+	mux.HandleFunc("GET /api/v1/plans", s.optionalSession(s.handlePlans))
 	mux.HandleFunc("POST /api/v1/orders", s.authed(s.handleCreateOrder))
 	mux.HandleFunc("GET /api/v1/orders", s.authed(s.handleListOrders))
 	mux.HandleFunc("GET /api/v1/orders/{id}", s.authed(s.handleGetOrder))
@@ -109,16 +112,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /pay/return", s.handleReturn)
 	mux.HandleFunc("GET /pay/mock/{id}", s.handleMockPay)
 	mux.HandleFunc("POST "+gatewayNotifyPath, s.handleGatewayNotify)
-	mux.HandleFunc("POST /api/v1/events", s.handleEvents)
-	mux.HandleFunc("POST /api/v1/crash", s.handleCrash)
-	mux.HandleFunc("GET /api/v1/ads", s.handleAds)
+	mux.HandleFunc("POST /api/v1/events", s.optionalSession(s.handleEvents))
+	mux.HandleFunc("POST /api/v1/crash", s.optionalSession(s.handleCrash))
+	mux.HandleFunc("GET /api/v1/ads", s.optionalSession(s.handleAds))
 	mux.HandleFunc("GET /dl/ads/{name}", s.handleAdImage)
 
 	mux.HandleFunc("GET /internal/v1/users", s.handleNodeUsers)
 	mux.HandleFunc("POST /internal/v1/traffic", s.handleTraffic)
 
 	s.registerAdmin(mux)
-	return s.withAccessLog(withRecover(s.withGuard(s.withRiskIP(mux))))
+	return withServerTime(s.withAccessLog(withRecover(s.withGuard(s.withRiskIP(mux)))))
 }
 
 // ---- app endpoints ----
@@ -127,6 +130,7 @@ type credentials struct {
 	Email      string `json:"email"`
 	Password   string `json:"password"`
 	InviteCode string `json:"invite_code"`
+	Pub        string `json:"pub"` // X25519 key for the session (secure.go)
 }
 
 type tokenResponse struct {
@@ -172,6 +176,7 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 		DeviceID   string `json:"device_id"`
 		Platform   string `json:"platform"`
 		InviteCode string `json:"invite_code"`
+		Pub        string `json:"pub"` // X25519 key for the session (secure.go); "" = app before 1.2.5
 	}
 	if !decode(w, r, &body) {
 		return
@@ -198,7 +203,7 @@ func (s *Server) handleDevice(w http.ResponseWriter, r *http.Request) {
 			u = fresh
 		}
 	}
-	s.respondToken(w, r, u)
+	s.respondToken(w, r, u, body.Pub)
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
@@ -237,7 +242,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if fresh, e := s.store.UserByID(r.Context(), u.ID); e == nil {
 		u = fresh
 	}
-	s.respondToken(w, r, u)
+	s.respondToken(w, r, u, c.Pub)
 }
 
 // applyInvite links a new user to an inviter's code and grants referral bonuses.
@@ -280,15 +285,23 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "bad_credentials", "邮箱或密码错误")
 		return
 	}
-	s.respondToken(w, r, u)
+	s.respondToken(w, r, u, c.Pub)
 }
 
-func (s *Server) respondToken(w http.ResponseWriter, r *http.Request, u *store.User) {
+func (s *Server) respondToken(w http.ResponseWriter, r *http.Request, u *store.User, clientPub string) {
 	if _, blocked := s.blockedUser(r.Context(), u); blocked {
 		writeErr(w, http.StatusForbidden, "account_blocked", "账号已被限制使用，请联系客服")
 		return
 	}
 	s.recordIP(u.ID, s.clientIP(r), "api", "", 1)
+	if clientPub != "" {
+		s.respondSession(w, r, u, clientPub)
+		return
+	}
+	if s.cat().Guard.RequireSigned {
+		writeErr(w, http.StatusUpgradeRequired, "upgrade_required", "当前版本过旧，请更新到最新版本")
+		return
+	}
 	tok, exp, err := s.issuer.Issue(u.ID)
 	if err != nil {
 		s.internal(w, err)
@@ -558,11 +571,24 @@ func (s *Server) authed(h func(http.ResponseWriter, *http.Request, *store.User))
 			writeErr(w, http.StatusUnauthorized, "unauthorized", "请先登录")
 			return
 		}
-		uid, err := s.issuer.Verify(tok)
+		uid, key, err := s.issuer.VerifySession(tok)
 		if err != nil {
 			writeErr(w, http.StatusUnauthorized, "unauthorized", "登录已失效，请重新登录")
 			return
 		}
+		if key == nil && s.cat().Guard.RequireSigned {
+			// 401 so the app signs in again (getting a session key); apps too
+			// old to do that are told to update.
+			writeErr(w, http.StatusUnauthorized, "key_required", "当前版本过旧，请更新到最新版本")
+			return
+		}
+		sw, done, se := s.secureSession(w, r, uid, key)
+		if se != nil {
+			se.write(w)
+			return
+		}
+		defer done()
+		w = sw
 		u, err := s.store.UserByID(r.Context(), uid)
 		if errors.Is(err, store.ErrNotFound) {
 			writeErr(w, http.StatusUnauthorized, "unauthorized", "账号不存在")

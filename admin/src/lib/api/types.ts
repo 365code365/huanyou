@@ -597,6 +597,9 @@ export interface GuardSettings {
   errors_per_10m: number
   ban_minutes: number
   allow_ips: string[]
+  require_signed: boolean // refuse unsigned requests (app ≤ 1.2.4)
+  app_signers: string[] // official Android signing cert SHA-256 (hex); empty = not checked
+  block_tampered: boolean // refuse devices reporting a debugger / hooking tool
 }
 
 export interface AutoBan {

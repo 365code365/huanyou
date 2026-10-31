@@ -501,6 +501,20 @@
   "非常规端口": "Unusual ports",
   "面对主动探测，服务器把连接交给真实网站，探测方拿到的是真证书、真页面，无从判断。": "Against active probing, the server hands the connection to a real website: the prober gets a real certificate and a real page, and can't tell.",
   "高可用": "High availability",
-  "默认": "Default"
+  "默认": "Default",
+  "前往官网下载": "Download from the official site",
+  "安装包已被修改": "This app has been modified",
+  "这不是官方发布的{0}，为了你的账号和数据安全已停止运行。请卸载后从官网下载正版应用。": "This is not an official release of {0}, so it stopped to keep your account and data safe. Please uninstall it and download the official app from our website.",
+  "密钥协商失败，请重试": "Key exchange failed. Please try again.",
+  "已是安全会话": "Already a secure session",
+  "当前版本过旧，请更新到最新版本": "This version is too old. Please update to the latest version.",
+  "缺少公钥": "Missing public key",
+  "设备时间不正确，请在系统设置中开启自动设置时间": "Your device time is wrong. Turn on automatic date & time in system settings.",
+  "请求签名缺失，请更新到最新版本": "Request signature missing. Please update to the latest version.",
+  "请求签名无效": "Invalid request signature",
+  "请求已失效，请重试": "This request has expired. Please try again.",
+  "请求过大": "Request too large",
+  "检测到非官方安装包，请从官网下载正版应用": "Unofficial app detected. Please download the official app from our website.",
+  "检测到调试或注入工具，已停止服务。请关闭相关工具后重试": "A debugging or injection tool was detected, so service has stopped. Close it and try again."
  }
 }

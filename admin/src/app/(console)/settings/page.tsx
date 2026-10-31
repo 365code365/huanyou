@@ -455,6 +455,21 @@ function GuardTab({ value, onSaved }: { value: GuardSettings; onSaved: (g: Guard
       <Form.Item name="allow_ips" label="白名单 IP" extra="公司网络、支付中心、监控服务等，不受限流和封禁">
         <Select mode="tags" tokenSeparators={[',', ' ']} placeholder="IP 或网段，回车添加" />
       </Form.Item>
+        <h4 className="form-section">App 请求安全（防抓包 / 防篡改）</h4>
+        <Alert type="info" showIcon style={{ marginBottom: 16 }}
+          message="1.2.5 起，App 与服务器用登录时协商的会话密钥给每个请求签名（防伪造、防重放），返回内容全部加密，并且只信任官方证书（装了抓包证书也看不到内容）。下面三项决定对旧版本和可疑设备的处理。" />
+        <Form.Item name="require_signed" label="拒绝未签名的旧版本请求" valuePropName="checked"
+          extra="开启后 1.2.4 及更早版本无法登录和使用，会提示更新。建议等「数据分析」里旧版本用户基本升级后再开。">
+          <Switch />
+        </Form.Item>
+        <Form.Item name="app_signers" label="官方安卓签名证书（SHA-256）"
+          extra="填写后，被重新打包（签名不同）的安卓 App 一律拒绝服务。打包脚本 scripts/build_android.sh 会打印这个值；留空不检查。">
+          <Select mode="tags" tokenSeparators={[',', ' ', '\n']} placeholder="631b7059…（64 位十六进制）" open={false} />
+        </Form.Item>
+        <Form.Item name="block_tampered" label="拒绝检测到调试 / Hook 工具的设备" valuePropName="checked"
+          extra="App 会上报是否检测到调试器、Frida、Xposed 等注入工具。关闭时只记日志；开启后这些设备无法使用。Root / 越狱本身不拦截。">
+          <Switch />
+        </Form.Item>
       <Form.Item label=" " colon={false}><SaveBar busy={busy} onSave={save} /></Form.Item>
     </Form>
   )

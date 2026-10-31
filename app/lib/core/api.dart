@@ -7,6 +7,8 @@ import 'package:http/io_client.dart';
 
 import '../i18n/i18n.dart';
 import 'config.dart';
+import 'integrity.dart';
+import 'secure.dart';
 import 'prefs.dart';
 
 class ApiException implements Exception {
@@ -369,9 +371,10 @@ class Profile {
 }
 
 class AuthResult {
-  AuthResult(this.token, this.user);
+  AuthResult(this.token, this.user, this.keys);
   final String token;
   final User user;
+  final SessionKeys? keys; // null only against a server from before session keys
 }
 
 class ApiClient {
@@ -393,6 +396,14 @@ class ApiClient {
   }
   String? token;
 
+  /// The session's keys (secure.dart); with them every request is signed and
+  /// responses arrive encrypted.
+  SessionKeys? keys;
+
+  // Server clock minus ours (seconds), from X-HY-Time: request signatures
+  // carry the time, and a phone's clock can be far off.
+  int _clockOffset = 0;
+
   // The app's platform and build, sent on /plans and /apps so the server can
   // serve the right face (iOS App Review vs. normal). Set once at startup.
   String clientPlatform = '';
@@ -402,12 +413,31 @@ class ApiClient {
   /// No-login authentication: exchanges a stable device id for a session token,
   /// provisioning an account on first contact.
   Future<AuthResult> device(String deviceId, String platform, {String? inviteCode}) async {
-    final body = {'device_id': deviceId, 'platform': platform};
+    final kx = await KeyExchange.start();
+    final body = {'device_id': deviceId, 'platform': platform, 'pub': kx.publicB64};
     if (inviteCode != null && inviteCode.trim().isNotEmpty) {
       body['invite_code'] = inviteCode.trim();
     }
-    final j = await _send('POST', '/api/v1/auth/device', body: body);
-    return AuthResult(j['token'] as String, User.fromJson(j['user'] as Map<String, dynamic>));
+    return _authResult(await _send('POST', '/api/v1/auth/device', body: body), kx);
+  }
+
+  /// Upgrades a token saved by an app version from before session keys.
+  Future<AuthResult> rekey() async {
+    final kx = await KeyExchange.start();
+    return _authResult(await _send('POST', '/api/v1/auth/rekey', body: {'pub': kx.publicB64}), kx);
+  }
+
+  /// A sign-in reply: sealed for this client (token + account), or plain
+  /// from a server without session keys.
+  Future<AuthResult> _authResult(Map<String, dynamic> j, KeyExchange kx) async {
+    final sealed = j['sealed'];
+    if (sealed is String && j['server_pub'] is String) {
+      final k = await kx.finish(j['server_pub'] as String);
+      final plain = await openSealed(k.enc, [...utf8.encode('auth:'), ...kx.publicKey], base64Decode(sealed));
+      final m = jsonDecode(utf8.decode(plain)) as Map<String, dynamic>;
+      return AuthResult(m['token'] as String, User.fromJson(m['user'] as Map<String, dynamic>), k);
+    }
+    return AuthResult(j['token'] as String, User.fromJson(j['user'] as Map<String, dynamic>), null);
   }
 
   Future<AuthResult> login(String email, String password) =>
@@ -417,12 +447,12 @@ class ApiClient {
       _auth('/api/v1/auth/register', email, password, inviteCode: inviteCode);
 
   Future<AuthResult> _auth(String path, String email, String password, {String? inviteCode}) async {
-    final body = {'email': email, 'password': password};
+    final kx = await KeyExchange.start();
+    final body = {'email': email, 'password': password, 'pub': kx.publicB64};
     if (inviteCode != null && inviteCode.trim().isNotEmpty) {
       body['invite_code'] = inviteCode.trim();
     }
-    final j = await _send('POST', path, body: body);
-    return AuthResult(j['token'] as String, User.fromJson(j['user'] as Map<String, dynamic>));
+    return _authResult(await _send('POST', path, body: body), kx);
   }
 
   Future<Referral> referral() async => Referral.fromJson(await _send('GET', '/api/v1/referral'));
@@ -546,7 +576,39 @@ class ApiClient {
   /// is never created twice.
   Future<Map<String, dynamic>> _send(String method, String path,
       {Map<String, dynamic>? body, Map<String, String>? query}) async {
+    try {
+      return await _sendOnce(method, path, body: body, query: query);
+    } on _ClockSkew {
+      // The clock offset was just corrected from the server's reply: once more.
+      try {
+        return await _sendOnce(method, path, body: body, query: query);
+      } on _ClockSkew {
+        // Not 401: this is no reason to sign in again.
+        throw ApiException(400, 'bad_time', tr('设备时间不正确，请在系统设置中开启自动设置时间'));
+      }
+    }
+  }
+
+  /// Signs [req] (secure.dart); returns the nonce, which also binds the
+  /// encrypted reply to this request.
+  String _sign(http.Request req, SessionKeys k, List<int> body) {
+    final ts = '${DateTime.now().millisecondsSinceEpoch ~/ 1000 + _clockOffset}';
+    final nonce = newNonce();
+    final full = req.url.path;
+    final i = full.indexOf('/api/');
+    final path = i > 0 ? full.substring(i) : full;
+    final env = Integrity.env;
+    req.headers['X-HY-TS'] = ts;
+    req.headers['X-HY-Nonce'] = nonce;
+    if (env.isNotEmpty) req.headers['X-HY-Env'] = env;
+    req.headers['X-HY-Sig'] = signRequest(k, canonicalRequest(req.method, path, req.url.query, ts, nonce, env, body));
+    return nonce;
+  }
+
+  Future<Map<String, dynamic>> _sendOnce(String method, String path,
+      {Map<String, dynamic>? body, Map<String, String>? query}) async {
     Object? lastError;
+    final payload = body == null ? const <int>[] : utf8.encode(jsonEncode(body));
     final read = method == 'GET';
     final tries = _bases.length < 2 && read ? 2 : _bases.length;
     for (var i = 0; i < tries; i++) {
@@ -562,14 +624,32 @@ class ApiClient {
           ..headers['Content-Type'] = 'application/json'
           ..headers['Accept'] = 'application/json';
         if (token != null) req.headers['Authorization'] = 'Bearer $token';
-        if (body != null) req.body = jsonEncode(body);
+        if (body != null) req.bodyBytes = payload;
+        // Fresh nonce per attempt: a retry is a new request.
+        final k = token != null ? keys : null;
+        final nonce = k == null ? null : _sign(req, k, payload);
         final resp = await _http
             .send(req)
             .timeout(const Duration(seconds: 12))
             .then((r) => http.Response.fromStream(r).timeout(const Duration(seconds: 20)));
+        final serverTime = int.tryParse(resp.headers['x-hy-time'] ?? '');
+        if (serverTime != null) _clockOffset = serverTime - DateTime.now().millisecondsSinceEpoch ~/ 1000;
+        List<int> bytes = resp.bodyBytes;
+        final enc = resp.headers['x-hy-enc'];
+        if (enc != null) {
+          // Sealed reply: only for a signed request, bound to its nonce. Any
+          // change on the way (or a stranger answering) fails to open.
+          if (k == null || nonce == null) throw _NotOurs(resp.statusCode);
+          try {
+            bytes = await openSealed(k.enc, utf8.encode('resp:$nonce'), bytes);
+            if (enc.contains('z')) bytes = gzip.decode(bytes);
+          } catch (_) {
+            throw _NotOurs(resp.statusCode);
+          }
+        }
         final Object? decoded;
         try {
-          decoded = resp.bodyBytes.isEmpty ? <String, dynamic>{} : jsonDecode(utf8.decode(resp.bodyBytes));
+          decoded = bytes.isEmpty ? <String, dynamic>{} : jsonDecode(utf8.decode(bytes));
         } on FormatException {
           // Not our API (portal login page, hijacked DNS, CDN block page).
           throw _NotOurs(resp.statusCode);
@@ -582,6 +662,7 @@ class ApiClient {
         final m = decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
         if (m['error'] is! String && resp.statusCode >= 500) throw _NotOurs(resp.statusCode); // proxy error page
         _prefer(idx);
+        if (m['error'] == 'bad_time' && serverTime != null) throw const _ClockSkew();
         // Server messages are Chinese; packs may carry translations for them.
         final msg = m['message'] as String?;
         throw ApiException(resp.statusCode, m['error'] as String? ?? 'http_${resp.statusCode}',
@@ -621,6 +702,11 @@ class ApiClient {
     }
     return tr('无法连接服务器，请检查网络后重试');
   }
+}
+
+/// The server refused the request time; the clock offset has been corrected.
+class _ClockSkew implements Exception {
+  const _ClockSkew();
 }
 
 /// No connection to the API host could be made, so no request was sent.
@@ -690,7 +776,10 @@ class _ApiConnections {
               if (uri.scheme != 'https') return s;
               // A blocked SNI can accept TCP and then never answer the TLS
               // handshake: bound it, or the attempt hangs forever.
-              final tls = await SecureSocket.secure(s, host: uri.host).timeout(const Duration(seconds: 6));
+              // Release builds only accept the pinned CA roots (secure.dart).
+              final pin = pinningEnabled && !isLocalHost(uri.host);
+              final tls = await SecureSocket.secure(s, host: uri.host, context: pin ? pinnedContext() : null)
+                  .timeout(const Duration(seconds: 6));
               if (cancelled) {
                 tls.destroy();
                 break;

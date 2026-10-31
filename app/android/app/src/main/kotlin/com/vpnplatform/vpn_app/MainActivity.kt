@@ -70,6 +70,11 @@ class MainActivity : FlutterActivity() {
                 // Primary CPU ABI, so the update check offers the matching APK.
                 "abi" -> result.success(Build.SUPPORTED_ABIS.firstOrNull() ?: "")
                 "model" -> result.success("${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE})")
+                // Integrity report for the API (Integrity.kt); off the main thread.
+                "integrity" -> Thread {
+                    val m = Integrity.check(applicationContext)
+                    runOnUiThread { result.success(m) }
+                }.start()
                 // Native crash saved by CrashCatcher in the previous run; returned once.
                 "takeCrash" -> result.success(CrashCatcher.take(this))
                 // App cache (images, WebView, temp files): size in bytes / clear.

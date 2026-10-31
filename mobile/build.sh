@@ -30,6 +30,10 @@ build_android() {
   gomobile bind -v -target=android/arm64,android/arm -androidapi 24 \
     -trimpath -ldflags="$LDFLAGS" -javapkg=com.vpnplatform \
     -o "$APP/android/app/libs/vpncore.aar" ./vpncore
+  # gomobile's consumer rule keeps all of com.vpnplatform.**, which would
+  # also stop R8 from obfuscating the app's own classes (com.vpnplatform.
+  # vpn_app). The app keeps the core's packages itself (proguard-rules.pro).
+  zip -q -d "$APP/android/app/libs/vpncore.aar" proguard.txt
   echo "-> $APP/android/app/libs/vpncore.aar"
 }
 

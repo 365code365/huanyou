@@ -165,6 +165,11 @@ class AppController extends ChangeNotifier {
     nodeId = await session.nodeId();
     final token = await session.token();
     api.token = token;
+    api.keys = session.keys();
+    // Token saved by an app version from before session keys: upgrade it in
+    // the background (email accounts stay signed in; the old token keeps
+    // working meanwhile). Offline / old server: tried again next start.
+    if (token != null && api.keys == null) unawaited(_upgradeToken());
     if (token != null) {
       // Show the last known account and nodes right away (no spinner on a
       // normal start); the refresh below replaces them within a moment.
@@ -194,6 +199,16 @@ class AppController extends ChangeNotifier {
     _refreshTimer = Timer.periodic(const Duration(minutes: 1), (_) {
       if (loggedIn == true && foreground) refresh(quiet: true);
     });
+  }
+
+  Future<void> _upgradeToken() async {
+    try {
+      final r = await api.rekey();
+      if (r.keys == null) return;
+      await session.saveAuth(r);
+      api.token = r.token;
+      api.keys = r.keys;
+    } catch (_) {}
   }
 
   /// The invite landing page copies "环游邀请码 ABCDEFG" before the download
@@ -235,8 +250,9 @@ class AppController extends ChangeNotifier {
       final invite = await _invite;
       final id = await session.deviceId();
       final r = await api.device(id, Device.platform, inviteCode: invite);
-      await session.saveToken(r.token);
+      await session.saveAuth(r);
       api.token = r.token;
+      api.keys = r.keys;
       user = r.user;
       loadFailed = false;
       _retryAttempt = 0;
@@ -388,8 +404,9 @@ class AppController extends ChangeNotifier {
 
   Future<void> _signIn(Future<AuthResult> f) async {
     final r = await f;
-    await session.saveToken(r.token);
+    await session.saveAuth(r);
     api.token = r.token;
+    api.keys = r.keys;
     user = r.user;
     loggedIn = true;
     notifyListeners();
@@ -400,6 +417,7 @@ class AppController extends ChangeNotifier {
     if (active) await disconnect();
     await session.clear();
     api.token = null;
+    api.keys = null;
     user = null;
     nodes = [];
     loadFailed = false;
@@ -504,6 +522,7 @@ class AppController extends ChangeNotifier {
     }
     _lastReauth = now;
     api.token = null;
+    api.keys = null;
     await deviceSignIn();
   }
 

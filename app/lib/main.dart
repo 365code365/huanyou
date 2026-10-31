@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'core/open_url.dart';
+import 'core/integrity.dart';
 import 'package:flutter/services.dart';
 
 import 'core/updater.dart';
@@ -43,7 +45,7 @@ Future<void> _main() async {
   };
   // One secure-storage read for everything (no network), so the first frame
   // is already in the right language and palette.
-  await Future.wait([Prefs.load(), DesktopFrame.init()]);
+  await Future.wait([Prefs.load(), DesktopFrame.init(), Integrity.check()]);
   I18n.instance.load();
   Appearance.instance.load();
   AppColors.dark = Appearance.instance.isDark;
@@ -53,7 +55,45 @@ Future<void> _main() async {
     ..maximumSizeBytes = 24 << 20
     ..maximumSize = 200;
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(statusBarColor: Colors.transparent));
+  if (Integrity.tampered) {
+    // Signed by someone other than us: a repackaged app. Don't run it.
+    runApp(const _TamperedApp());
+    return;
+  }
   runApp(VpnApp(controller: AppController()));
+}
+
+class _TamperedApp extends StatelessWidget {
+  const _TamperedApp();
+
+  @override
+  Widget build(BuildContext context) {
+    final base = AppConfig.apiBaseUrls.isEmpty ? null : AppConfig.apiBaseUrls.first;
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: Scaffold(
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+              const Icon(Icons.gpp_bad_rounded, size: 56, color: Color(0xFFD64545)),
+              const SizedBox(height: 16),
+              Text(tr('安装包已被修改'), style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 10),
+              Text(tr('这不是官方发布的{0}，为了你的账号和数据安全已停止运行。请卸载后从官网下载正版应用。', [AppConfig.appName]),
+                  textAlign: TextAlign.center, style: const TextStyle(height: 1.5)),
+              const SizedBox(height: 24),
+              if (base != null)
+                FilledButton(
+                  onPressed: () => openUrl(base.replace(path: '/download')),
+                  child: Text(tr('前往官网下载')),
+                ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class VpnApp extends StatefulWidget {

@@ -4,6 +4,7 @@ import 'dart:math';
 import 'api.dart';
 import 'device.dart';
 import 'prefs.dart';
+import 'secure.dart';
 
 /// Persists the login token, chosen node/mode, the last profile (so the app
 /// can reconnect even when the API is temporarily unreachable) and the last
@@ -11,6 +12,7 @@ import 'prefs.dart';
 /// secure storage and are read through the in-memory [Prefs] mirror.
 class Session {
   static const _kToken = 'token';
+  static const _kKeys = 'session_keys';
   static const _kNode = 'node_id';
   static const _kMode = 'mode';
   static const _kProfile = 'profile';
@@ -21,6 +23,14 @@ class Session {
 
   Future<String?> token() async => Prefs.get(_kToken);
   Future<void> saveToken(String t) => Prefs.set(_kToken, t);
+
+  /// The session keys bound to the token (secure.dart); kept in secure
+  /// storage like the token.
+  SessionKeys? keys() => SessionKeys.decode(Prefs.get(_kKeys));
+  Future<void> saveKeys(SessionKeys? k) => Prefs.set(_kKeys, k?.encode());
+
+  /// Saves a sign-in result (token and its keys together).
+  Future<void> saveAuth(AuthResult r) => Future.wait([saveToken(r.token), saveKeys(r.keys)]);
 
   /// A stable id for this device used for no-login auth. On Android it is
   /// derived from ANDROID_ID (survives reinstall); on iOS a random id is
@@ -109,7 +119,7 @@ class Session {
   /// same device account (and reinstall recognition still works).
   Future<void> clear() async {
     await Future.wait([
-      for (final k in [_kToken, _kNode, _kMode, _kProfile, _kMe, _kNodes]) Prefs.remove(k),
+      for (final k in [_kToken, _kKeys, _kNode, _kMode, _kProfile, _kMe, _kNodes]) Prefs.remove(k),
     ]);
   }
 }

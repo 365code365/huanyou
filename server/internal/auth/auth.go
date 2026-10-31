@@ -2,6 +2,12 @@
 package auth
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hkdf"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"strconv"
 	"time"
@@ -83,4 +89,83 @@ func (i *Issuer) Verify(token string) (int64, error) {
 		return 0, err
 	}
 	return strconv.ParseInt(claims.Subject, 10, 64)
+}
+
+// ---- session-bound tokens ----
+//
+// A session token carries the client's session key (negotiated by X25519 at
+// sign-in, never sent in the clear), wrapped with AES-GCM under a key derived
+// from the JWT secret. The server recovers it on every request to check the
+// request signature and to encrypt the response; a stolen token alone can
+// neither sign requests nor read responses.
+
+type sessionClaims struct {
+	jwt.RegisteredClaims
+	SK string `json:"sk"`
+}
+
+func (i *Issuer) wrapAEAD() (cipher.AEAD, error) {
+	k, err := hkdf.Key(sha256.New, i.secret, nil, "huanyou-token-wrap-v1", 32)
+	if err != nil {
+		return nil, err
+	}
+	b, err := aes.NewCipher(k)
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(b)
+}
+
+// IssueSession is Issue with a session key bound to the token.
+func (i *Issuer) IssueSession(userID int64, key []byte) (string, time.Time, error) {
+	aead, err := i.wrapAEAD()
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", time.Time{}, err
+	}
+	sub := strconv.FormatInt(userID, 10)
+	sealed := aead.Seal(nonce, nonce, key, []byte(sub))
+	exp := time.Now().Add(i.ttl)
+	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, sessionClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   sub,
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ExpiresAt: jwt.NewNumericDate(exp),
+		},
+		SK: base64.RawURLEncoding.EncodeToString(sealed),
+	})
+	s, err := tok.SignedString(i.secret)
+	return s, exp, err
+}
+
+// VerifySession returns the user ID and, for a session token, its session
+// key (nil for a token issued before session keys).
+func (i *Issuer) VerifySession(token string) (int64, []byte, error) {
+	var claims sessionClaims
+	_, err := jwt.ParseWithClaims(token, &claims, func(*jwt.Token) (any, error) { return i.secret, nil },
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+		jwt.WithExpirationRequired())
+	if err != nil {
+		return 0, nil, err
+	}
+	uid, err := strconv.ParseInt(claims.Subject, 10, 64)
+	if err != nil || claims.Subject == "admin" {
+		return 0, nil, errors.New("not a user token")
+	}
+	if claims.SK == "" {
+		return uid, nil, nil
+	}
+	sealed, err := base64.RawURLEncoding.DecodeString(claims.SK)
+	aead, aerr := i.wrapAEAD()
+	if err != nil || aerr != nil || len(sealed) < aead.NonceSize() {
+		return 0, nil, errors.New("bad session key")
+	}
+	key, err := aead.Open(nil, sealed[:aead.NonceSize()], sealed[aead.NonceSize():], []byte(claims.Subject))
+	if err != nil {
+		return 0, nil, errors.New("bad session key")
+	}
+	return uid, key, nil
 }
