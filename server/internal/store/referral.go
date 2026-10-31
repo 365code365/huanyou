@@ -100,7 +100,7 @@ func (s *Store) ApplyReferral(ctx context.Context, newUserID, inviterID int64,
 
 	out := &ReferralResult{InviterID: inviterID, RewardPlanID: planID}
 	if inviteeDays > 0 {
-		if err := grantPlanTx(ctx, tx, newUserID, planID, inviteeDays, now); err != nil {
+		if err := grantBonusTx(ctx, tx, newUserID, planID, inviteeDays, now); err != nil {
 			return nil, err
 		}
 		out.InviteeDays = inviteeDays
@@ -111,7 +111,7 @@ func (s *Store) ApplyReferral(ctx context.Context, newUserID, inviterID int64,
 			return nil, err
 		}
 		if maxInvites == 0 || invited <= maxInvites {
-			if err := grantPlanTx(ctx, tx, inviterID, planID, inviterDays, now); err != nil {
+			if err := grantBonusTx(ctx, tx, inviterID, planID, inviterDays, now); err != nil {
 				return nil, err
 			}
 			out.InviterDays = inviterDays
@@ -121,4 +121,18 @@ func (s *Store) ApplyReferral(ctx context.Context, newUserID, inviterID int64,
 		return nil, err
 	}
 	return out, nil
+}
+
+// grantBonusTx gives reward days: a user with an active paid plan gets them
+// on that plan (a bonus must never swap a better plan for the reward plan);
+// otherwise the reward plan is granted.
+func grantBonusTx(ctx context.Context, tx *txx, userID int64, rewardPlan string, days int, now time.Time) error {
+	u, err := lockUser(ctx, tx, userID)
+	if err != nil {
+		return err
+	}
+	if u.PaidPlanActive(now) {
+		return grantPlanTx(ctx, tx, userID, u.PlanID, days, now)
+	}
+	return grantPlanTx(ctx, tx, userID, rewardPlan, days, now)
 }

@@ -184,3 +184,45 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "…"
 }
+
+// Chat sends one system + user message to the configured OpenAI-compatible
+// API and returns the reply text (used for log analysis in the admin panel).
+func Chat(ctx context.Context, cfg AIConfig, system, user string) (string, error) {
+	if !cfg.Ready() {
+		return "", errors.New("未配置 AI 接口")
+	}
+	body, _ := json.Marshal(map[string]any{
+		"model":       cfg.Model,
+		"temperature": 0.2,
+		"messages": []map[string]string{
+			{"role": "system", "content": system},
+			{"role": "user", "content": user},
+		},
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(cfg.BaseURL, "/")+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("AI 接口请求失败：%w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("AI 接口返回 %d：%s", resp.StatusCode, truncate(string(raw), 300))
+	}
+	var out struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil || len(out.Choices) == 0 {
+		return "", fmt.Errorf("AI 接口返回格式不正确：%s", truncate(string(raw), 300))
+	}
+	return strings.TrimSpace(out.Choices[0].Message.Content), nil
+}

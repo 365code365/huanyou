@@ -100,8 +100,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /pay/return", s.handleReturn)
 	mux.HandleFunc("GET /pay/mock/{id}", s.handleMockPay)
 	mux.HandleFunc("POST "+gatewayNotifyPath, s.handleGatewayNotify)
-	mux.HandleFunc("POST "+gatewayQueryPath, s.handleGatewayQuery)
-
 	mux.HandleFunc("POST /api/v1/events", s.handleEvents)
 	mux.HandleFunc("POST /api/v1/crash", s.handleCrash)
 	mux.HandleFunc("GET /api/v1/ads", s.handleAds)
@@ -111,7 +109,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /internal/v1/traffic", s.handleTraffic)
 
 	s.registerAdmin(mux)
-	return withRecover(s.withGuard(s.withRiskIP(mux)))
+	return s.withAccessLog(withRecover(s.withGuard(s.withRiskIP(mux))))
 }
 
 // ---- app endpoints ----
@@ -557,15 +555,26 @@ func (s *Server) rateLimited(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// clientIP is the caller's address. Behind our own reverse proxy
+// (trust_proxy_header) it is the LAST X-Forwarded-For entry: the one the
+// proxy added. Earlier entries come from the client and can be forged
+// ("X-Forwarded-For: 127.0.0.1" would otherwise pass as loopback and skip
+// the request guard and rate limits). The header is only honoured when the
+// request really comes from a proxy on loopback / a private network.
 func (s *Server) clientIP(r *http.Request) string {
-	if s.cfg.TrustProxyHeader {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			return strings.TrimSpace(strings.Split(xff, ",")[0])
-		}
-	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
+	}
+	if s.cfg.TrustProxyHeader {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			if peer := net.ParseIP(host); peer != nil && (peer.IsLoopback() || peer.IsPrivate()) {
+				parts := strings.Split(xff, ",")
+				if ip := strings.TrimSpace(parts[len(parts)-1]); net.ParseIP(ip) != nil {
+					return ip
+				}
+			}
+		}
 	}
 	return host
 }

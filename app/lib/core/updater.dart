@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:package_info_plus/package_info_plus.dart';
 
 import 'api.dart';
@@ -12,8 +14,12 @@ class Updater {
 
   /// The pubspec build number (the part after +). Per-ABI Android APKs carry
   /// versionCode = abi * 1000 + build (Flutter's --split-per-abi scheme), so
-  /// strip the ABI prefix; build numbers must therefore stay below 1000.
-  static int buildOf(PackageInfo i) => (int.tryParse(i.buildNumber) ?? 0) % 1000;
+  /// on Android the ABI prefix is stripped (build numbers must stay below
+  /// 1000 there). Other platforms report the build number as it is.
+  static int buildOf(PackageInfo i) {
+    final n = int.tryParse(i.buildNumber) ?? 0;
+    return Platform.isAndroid ? n % 1000 : n;
+  }
 
   static Future<AppUpdate?> check(ApiClient api) async {
     final platform = Device.platform;

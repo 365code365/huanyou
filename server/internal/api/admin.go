@@ -97,6 +97,7 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 	a("POST /admin/api/ads/upload", s.adminAdUpload)
 	a("POST /admin/api/payment/keys", s.adminGatewayKeys)
 	a("POST /admin/api/payment/test-link", s.adminGatewayTest)
+	a("POST /admin/api/payment/test-query", s.adminGatewayTestQuery)
 	a("GET /admin/api/payment/doc", s.adminPaymentDoc)
 	a("GET /admin/api/risk/autobans", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"items": s.autoBans()})
@@ -105,7 +106,7 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": s.liftAutoBan(r.URL.Query().Get("ip"))})
 	})
 	s.registerAdminDB(a)
-
+	s.registerAdminLogs(a)
 	a("GET /admin/api/settings", s.adminGetSettings)
 	a("PUT /admin/api/settings", s.adminPutSettings)
 
@@ -672,7 +673,7 @@ func (s *Server) adminGetSettings(w http.ResponseWriter, _ *http.Request) {
 		"ads":      c.Ads,
 		"guard":    c.Guard,
 		"endpoints": map[string]string{
-			"notify": s.cfg.PublicURL + gatewayNotifyPath, "query": s.cfg.PublicURL + gatewayQueryPath,
+			"notify": s.cfg.PublicURL + gatewayNotifyPath,
 			"return": s.cfg.PublicURL + "/pay/return",
 		},
 		// Read-only: these come from api.json / environment.

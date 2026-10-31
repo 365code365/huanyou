@@ -53,17 +53,23 @@ type PaymentConfig struct {
 	Gateway        GatewayConfig `json:"gateway"`
 }
 
-// GatewayConfig is the "下单链接" integration (docs in the admin panel): the
-// app opens PayLink with signed order parameters; the payment center calls
-// our fixed notify and query endpoints with encrypted, signed envelopes.
+// GatewayConfig is the "下单链接" integration with an external payment
+// center (docs in the admin panel):
+//   - the app opens PayLink (the center's checkout) with signed order parameters;
+//   - the center POSTs the result to our fixed notify endpoint;
+//   - we POST to the center's QueryURL to ask for an order's status (when a
+//     notification is late or lost, while the user waits, and periodically).
+//
+// Notify and query both use encrypted, signed envelopes.
 type GatewayConfig struct {
 	Enabled    bool   `json:"enabled"`
 	Name       string `json:"name"`        // method name shown in the app, default 在线支付
 	PayLink    string `json:"pay_link"`    // https URL of the payment center's checkout page
+	QueryURL   string `json:"query_url"`   // https URL of the center's order query API ("" = rely on notify only)
 	MerchantID string `json:"merchant_id"` // generated in the admin panel
 	SignKey    string `json:"sign_key"`    // hex, HMAC-SHA256
 	EncKey     string `json:"enc_key"`     // hex, 32 bytes, AES-256-GCM
-	// AllowIPs optionally restricts who may call notify / query (empty = any).
+	// AllowIPs optionally restricts who may call the notify endpoint (empty = any).
 	AllowIPs []string `json:"allow_ips"`
 }
 
@@ -702,8 +708,15 @@ func (c *Catalog) normalizeExtras() error {
 	if g.Name == "" {
 		g.Name = "在线支付"
 	}
-	if g.PayLink != "" && !strings.HasPrefix(g.PayLink, "https://") && !strings.HasPrefix(g.PayLink, "http://127.0.0.1") {
+	g.QueryURL = strings.TrimSpace(g.QueryURL)
+	local := func(u string) bool {
+		return strings.HasPrefix(u, "http://127.0.0.1") || strings.HasPrefix(u, "http://localhost")
+	}
+	if g.PayLink != "" && !strings.HasPrefix(g.PayLink, "https://") && !local(g.PayLink) {
 		return errors.New("下单链接必须是 https 地址")
+	}
+	if g.QueryURL != "" && !strings.HasPrefix(g.QueryURL, "https://") && !local(g.QueryURL) {
+		return errors.New("订单查询接口必须是 https 地址")
 	}
 	if g.Enabled {
 		if g.PayLink == "" || g.MerchantID == "" || len(g.SignKey) < 32 || len(g.EncKey) != 64 {

@@ -24,6 +24,7 @@ import type {
   LangPack,
   CloneEvent,
   CloneRequest,
+  LogEntry,
   ServerInfo,
   Release,
   Contact,
@@ -178,7 +179,17 @@ export const api = {
   payment: {
     keys: () => http.post<{ merchant_id: string; sign_key: string; enc_key: string }>('/payment/keys'),
     testLink: () => http.post<{ url: string }>('/payment/test-link'),
+    testQuery: (orderId: string) =>
+      http.post<{ ok: boolean; found?: boolean; order_id: string; ms: number; message?: string; order?: Record<string, unknown> }>(
+        '/payment/test-query', { order_id: orderId }),
     doc: () => http.get<{ markdown: string }>('/payment/doc'),
+  },
+
+  logs: {
+    list: (q: { after?: number; level?: string; q?: string; limit?: number; wait?: number }) =>
+      http.get<{ items: LogEntry[]; last_id: number; started_at: string }>('/logs', q),
+    ask: (body: { question: string; level?: string; q?: string; limit?: number }) =>
+      http.post<{ answer: string; lines: number }>('/logs/ask', body),
   },
 
   ads: {
@@ -193,7 +204,7 @@ export const api = {
         payment: PaymentSettings
         ads: AdsSettings
         guard: GuardSettings
-        endpoints: { notify: string; query: string; return: string }
+        endpoints: { notify: string; return: string }
       }>('/settings'),
     save: (s: Settings) => http.put<Settings>('/settings', s),
     saveSection: <T,>(section: 'payment' | 'ads' | 'guard', body: T) => http.put<T>(`/settings/${section}`, body),

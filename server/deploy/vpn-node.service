@@ -17,6 +17,8 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+# /var/lib/vpn-node: last user list, so a restart during an API outage keeps serving users.
+StateDirectory=vpn-node
 
 [Install]
 WantedBy=multi-user.target

@@ -88,20 +88,29 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun connect(name: String, result: MethodChannel.Result) {
+        val consent = VpnService.prepare(this)
+        if (consent != null) {
+            // A newer connect replaces one still waiting for the dialog: the
+            // older call must still complete, or its Dart future hangs.
+            pendingResult?.error("cancelled", null, null)
+            pendingName = name
+            pendingResult = result
+            // Only the VPN dialog now; asking for the notification permission
+            // at the same moment made some ROMs cancel the VPN dialog.
+            startActivityForResult(consent, REQ_VPN) // system "allow VPN connection" dialog
+        } else {
+            askNotificationPermission()
+            startVpnService(name)
+            result.success(null)
+        }
+    }
+
+    /** Optional: lets the "connected" notification show. VPN works either way. */
+    private fun askNotificationPermission() {
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
-            // Optional: lets the "connected" notification show. VPN works either way.
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIF)
-        }
-        val consent = VpnService.prepare(this)
-        if (consent != null) {
-            pendingName = name
-            pendingResult = result
-            startActivityForResult(consent, REQ_VPN) // system "allow VPN connection" dialog
-        } else {
-            startVpnService(name)
-            result.success(null)
         }
     }
 
@@ -121,6 +130,7 @@ class MainActivity : FlutterActivity() {
         if (resultCode == Activity.RESULT_OK) {
             startVpnService(pendingName ?: "VPN")
             result.success(null)
+            askNotificationPermission()
         } else {
             result.error("permission_denied", "需要允许 VPN 连接权限", null)
         }

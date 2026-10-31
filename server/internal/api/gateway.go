@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 	"sync"
 
 	"vpnplatform/server/internal/config"
@@ -14,11 +13,11 @@ import (
 	"vpnplatform/server/internal/store"
 )
 
-// The "下单链接" payment gateway: fixed endpoints the payment center calls.
+// The "下单链接" payment gateway (an external payment center). The center
+// calls our fixed notify endpoint; we call the center's query API.
 const (
 	gatewayMethod     = "gateway"
 	gatewayNotifyPath = "/pay/gateway/notify"
-	gatewayQueryPath  = "/pay/gateway/query"
 )
 
 type gatewayCache struct {
@@ -35,14 +34,14 @@ func (s *Server) gateway() *payment.Gateway {
 	if g.MerchantID == "" || g.SignKey == "" || g.EncKey == "" {
 		return nil
 	}
-	key := g.PayLink + "|" + g.MerchantID + "|" + g.SignKey + "|" + g.EncKey
+	key := g.PayLink + "|" + g.QueryURL + "|" + g.MerchantID + "|" + g.SignKey + "|" + g.EncKey
 	c := &s.gw
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.key == key {
 		return c.gw
 	}
-	gw, err := payment.NewGateway(g.PayLink, g.MerchantID, g.SignKey, g.EncKey)
+	gw, err := payment.NewGateway(g.PayLink, g.QueryURL, g.MerchantID, g.SignKey, g.EncKey)
 	if err != nil {
 		slog.Warn("payment gateway config invalid", "err", err)
 		return nil
@@ -119,7 +118,7 @@ func (s *Server) handleGatewayNotify(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"code": "SUCCESS"}) // nothing to do
 		return
 	}
-	err := s.completeOrder(r.Context(), &payment.Notification{OrderID: o.OutTradeNo, TradeNo: o.TradeNo, AmountCents: o.Amount, Paid: true})
+	err := s.completeOrder(r.Context(), &payment.Notification{OrderID: o.OutTradeNo, TradeNo: o.TradeNo, AmountCents: o.Amount, Paid: true}, gatewayMethod)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		gatewayFail(w, http.StatusNotFound, "ORDER_NOT_FOUND", "order not found")
@@ -129,35 +128,4 @@ func (s *Server) handleGatewayNotify(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusOK, map[string]string{"code": "SUCCESS"})
 	}
-}
-
-// handleGatewayQuery: the payment center reads an order (sealed response).
-func (s *Server) handleGatewayQuery(w http.ResponseWriter, r *http.Request) {
-	var q payment.GatewayOrder
-	gw, ok := s.openGateway(w, r, &q)
-	if !ok {
-		return
-	}
-	o, err := s.store.OrderByID(r.Context(), q.OutTradeNo)
-	if errors.Is(err, store.ErrNotFound) {
-		gatewayFail(w, http.StatusNotFound, "ORDER_NOT_FOUND", "order not found")
-		return
-	} else if err != nil {
-		s.internal(w, err)
-		return
-	}
-	resp := payment.GatewayOrder{OutTradeNo: o.ID, Amount: o.AmountCents, Currency: "CNY",
-		Status: strings.ToUpper(o.Status), CreatedAt: o.CreatedAt.Unix()}
-	if p := s.cat().Plan(o.PlanID); p != nil {
-		resp.Subject = p.Name
-	}
-	if o.PaidAt != nil {
-		resp.PaidAt = o.PaidAt.Unix()
-	}
-	env, err := gw.Seal(resp)
-	if err != nil {
-		s.internal(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, env)
 }

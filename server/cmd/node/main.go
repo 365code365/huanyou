@@ -12,6 +12,8 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -55,6 +57,8 @@ func main() {
 		Xray:     x,
 		Stats:    st,
 		Fair:     fair,
+		// systemd StateDirectory=vpn-node sets $STATE_DIRECTORY.
+		CacheFile: cacheFile(),
 	}).Run(ctx)
 	slog.Info("shutting down")
 }
@@ -99,4 +103,13 @@ func keygen() {
 func fatal(msg string, err error) {
 	slog.Error(msg, "err", err)
 	os.Exit(1)
+}
+
+// cacheFile is where the last user list is kept: the systemd state directory,
+// or next to nothing (no cache) when run by hand without one.
+func cacheFile() string {
+	if d := os.Getenv("STATE_DIRECTORY"); d != "" {
+		return filepath.Join(strings.Split(d, ":")[0], "users.json")
+	}
+	return ""
 }

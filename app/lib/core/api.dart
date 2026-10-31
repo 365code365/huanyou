@@ -486,38 +486,60 @@ class ApiClient {
   }
 
   /// Tries each base URL, starting from the last one that worked.
-  /// Only network-level failures move on to the next URL; HTTP errors are returned.
+  /// Network-level failures (and responses that are not our JSON, e.g. a
+  /// captive portal or a blocking page) move on to the next URL; API errors
+  /// are returned as they are.
+  ///
+  /// Reads (GET) are retried once on the same URL when a kept-alive
+  /// connection turns out to be dead. Writes are only re-sent elsewhere when
+  /// the connection could not be made at all, so an order or a device link
+  /// is never created twice.
   Future<Map<String, dynamic>> _send(String method, String path,
       {Map<String, dynamic>? body, Map<String, String>? query}) async {
     Object? lastError;
-    // With a single API URL, one quick retry: a kept-alive connection can
-    // die when the network changes (e.g. the VPN coming up).
-    final tries = _bases.length < 2 ? 2 : _bases.length;
+    final read = method == 'GET';
+    final tries = _bases.length < 2 && read ? 2 : _bases.length;
     for (var i = 0; i < tries; i++) {
+      if (i > 0 && !read && !_neverSent(lastError)) break;
+      if (i > 0 && _bases.length < 2 && lastError is TimeoutException) break;
       final idx = (_preferred + i) % _bases.length;
-      // Same URL again only for reads (a POST may have reached the server).
-      if (i > 0 && _bases.length < 2 && (lastError is TimeoutException || method != 'GET')) break;
-      final uri = _bases[idx].replace(path: path, queryParameters: query);
+      final base = _bases[idx];
+      // Keep a path prefix on the base URL (e.g. https://x.com/vpn).
+      final prefix = base.path.endsWith('/') ? base.path.substring(0, base.path.length - 1) : base.path;
+      final uri = base.replace(path: prefix + path, queryParameters: query);
       try {
         final req = http.Request(method, uri)
           ..headers['Content-Type'] = 'application/json'
           ..headers['Accept'] = 'application/json';
         if (token != null) req.headers['Authorization'] = 'Bearer $token';
         if (body != null) req.body = jsonEncode(body);
-        final resp = await http.Response.fromStream(
-            await _http.send(req).timeout(const Duration(seconds: 12)));
-        _preferred = idx;
-        final decoded = resp.body.isEmpty ? <String, dynamic>{} : jsonDecode(utf8.decode(resp.bodyBytes));
+        final resp = await _http
+            .send(req)
+            .timeout(const Duration(seconds: 12))
+            .then((r) => http.Response.fromStream(r).timeout(const Duration(seconds: 20)));
+        final Object? decoded;
+        try {
+          decoded = resp.bodyBytes.isEmpty ? <String, dynamic>{} : jsonDecode(utf8.decode(resp.bodyBytes));
+        } on FormatException {
+          // Not our API (portal login page, hijacked DNS, CDN block page).
+          throw _NotOurs(resp.statusCode);
+        }
         if (resp.statusCode >= 200 && resp.statusCode < 300) {
-          return decoded as Map<String, dynamic>;
+          if (decoded is! Map<String, dynamic>) throw _NotOurs(resp.statusCode);
+          _preferred = idx;
+          return decoded;
         }
         final m = decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
+        if (m['error'] is! String && resp.statusCode >= 500) throw _NotOurs(resp.statusCode); // proxy error page
+        _preferred = idx;
         // Server messages are Chinese; packs may carry translations for them.
         final msg = m['message'] as String?;
         throw ApiException(resp.statusCode, m['error'] as String? ?? 'http_${resp.statusCode}',
             msg != null ? tr(msg) : tr('请求失败 ({0})', [resp.statusCode]));
       } on ApiException {
         rethrow;
+      } on _NotOurs catch (e) {
+        lastError = e;
       } on SocketException catch (e) {
         lastError = e;
       } on TimeoutException catch (e) {
@@ -526,10 +548,32 @@ class ApiClient {
         lastError = e;
       } on HandshakeException catch (e) {
         lastError = e;
+      } on TlsException catch (e) {
+        lastError = e;
       }
     }
-    throw ApiException(0, 'network', tr('无法连接服务器，请检查网络 ({0})', [lastError]));
+    throw ApiException(0, 'network', _networkMessage(lastError));
   }
+
+  /// True when the request certainly never reached the server (the TLS
+  /// handshake failed, so no request bytes were sent).
+  static bool _neverSent(Object? e) => e is HandshakeException || e is TlsException;
+
+  static String _networkMessage(Object? e) {
+    if (e is TimeoutException) return tr('连接服务器超时，请检查网络后重试');
+    if (e is HandshakeException || e is TlsException || e is _NotOurs) {
+      return tr('网络环境异常（可能需要先登录 Wi-Fi 认证页），请切换网络后重试');
+    }
+    return tr('无法连接服务器，请检查网络后重试');
+  }
+}
+
+/// A response that is not from our API.
+class _NotOurs implements Exception {
+  _NotOurs(this.status);
+  final int status;
+  @override
+  String toString() => 'unexpected response (HTTP $status)';
 }
 
 /// Connections to the API.
@@ -561,11 +605,19 @@ class _ApiConnections {
           final addrs = fresh ? await _lookup(uri.host) : await _resolve(uri.host);
           for (final a in addrs.take(3)) {
             if (!tried.add(a.address)) continue;
+            Socket? s;
             try {
-              final s = await Socket.connect(a, port, timeout: const Duration(seconds: 6));
+              s = await Socket.connect(a, port, timeout: const Duration(seconds: 6));
               if (uri.scheme != 'https') return s;
               return await SecureSocket.secure(s, host: uri.host);
             } on SocketException catch (e) {
+              last = e;
+            } on HandshakeException catch (e) {
+              // e.g. a stale cached IP now serving someone else's site
+              s?.destroy();
+              last = e;
+            } on TlsException catch (e) {
+              s?.destroy();
               last = e;
             }
           }
@@ -584,15 +636,34 @@ class _ApiConnections {
     if (ip != null) return [ip];
     final hit = _cache[host] ?? _load(host);
     if (hit != null) {
-      // Stale: use it now, refresh in the background.
-      if (DateTime.now().difference(hit.$2) > _fresh) unawaited(_lookup(host).catchError((_) => hit.$1));
+      if (hit.$2.millisecondsSinceEpoch == 0) {
+        // From disk, first use since start: the server may have moved since
+        // (e.g. the app was not opened for weeks), so give a fresh lookup a
+        // moment before falling back to the saved address.
+        try {
+          return await _lookup(host).timeout(const Duration(milliseconds: 1500));
+        } catch (_) {
+          // Wait only once: from now on refresh in the background.
+          _cache[host] = (hit.$1, DateTime.now().subtract(_fresh * 2));
+          unawaited(_lookup(host).then((_) {}, onError: (_) {}));
+          return hit.$1;
+        }
+      }
+      // Stale in memory: use it now, refresh in the background.
+      if (DateTime.now().difference(hit.$2) > _fresh) unawaited(_lookup(host).then((_) {}, onError: (_) {}));
       return hit.$1;
     }
     return _lookup(host);
   }
 
+  // Any address family: IPv6-only / NAT64 networks (common on iOS) need AAAA
+  // or synthesized addresses; IPv4 is tried first when both exist.
   static Future<List<InternetAddress>> _lookup(String host) =>
-      _inflight[host] ??= InternetAddress.lookup(host, type: InternetAddressType.IPv4)
+      _inflight[host] ??= InternetAddress.lookup(host)
+          .then((l) => [
+                ...l.where((a) => a.type == InternetAddressType.IPv4),
+                ...l.where((a) => a.type != InternetAddressType.IPv4),
+              ])
           .timeout(const Duration(seconds: 5))
           .then((list) {
         if (list.isEmpty) throw SocketException('no address for $host');

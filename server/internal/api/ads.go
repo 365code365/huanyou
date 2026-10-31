@@ -1,9 +1,11 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	_ "embed"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -179,12 +181,47 @@ func (s *Server) adminGatewayTest(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	u, err := gw.PayURL(payment.Order{ID: "VPTEST" + time.Now().Format("20060102150405"), AmountCents: 100, Subject: "测试订单"},
-		s.cfg.PublicURL+gatewayNotifyPath, s.cfg.PublicURL+gatewayQueryPath, s.cfg.PublicURL+"/pay/return?order=VPTEST")
+		s.cfg.PublicURL+gatewayNotifyPath, s.cfg.PublicURL+"/pay/return?order=VPTEST")
 	if err != nil {
 		s.internal(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"url": u})
+}
+
+// adminGatewayTestQuery calls the payment center's query API for an order
+// number (a real order, or any test number) and shows what came back, so the
+// integration can be checked from the admin panel.
+func (s *Server) adminGatewayTestQuery(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		OrderID string `json:"order_id"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	gw := s.gateway()
+	if gw == nil || gw.QueryURL == "" {
+		writeErr(w, http.StatusBadRequest, "not_configured", "请先填写订单查询接口并保存")
+		return
+	}
+	id := strings.TrimSpace(body.OrderID)
+	if id == "" {
+		id = "VPTEST" + time.Now().Format("20060102150405")
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	o, err := gw.QueryOrder(ctx, id)
+	ms := time.Since(start).Milliseconds()
+	switch {
+	case errors.Is(err, payment.ErrOrderUnknown):
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "found": false, "order_id": id, "ms": ms,
+			"message": "支付中心返回 404 ORDER_NOT_FOUND（接口和密钥正常，只是没有这个订单）"})
+	case err != nil:
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "order_id": id, "ms": ms, "message": err.Error()})
+	default:
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "found": true, "order_id": id, "ms": ms, "order": o})
+	}
 }
 
 //go:embed payment_doc.md
@@ -203,10 +240,14 @@ func (s *Server) adminPaymentDoc(w http.ResponseWriter, _ *http.Request) {
 	if link == "" {
 		link = "https://你的收银台/checkout"
 	}
+	queryURL := g.QueryURL
+	if queryURL == "" {
+		queryURL = "https://你的支付中心/api/order/query"
+	}
 	var b strings.Builder
 	_ = paymentDocTmpl.Execute(&b, map[string]string{
 		"MerchantID": mid, "PayLink": link,
-		"NotifyURL": s.cfg.PublicURL + gatewayNotifyPath, "QueryURL": s.cfg.PublicURL + gatewayQueryPath,
+		"NotifyURL": s.cfg.PublicURL + gatewayNotifyPath, "QueryURL": queryURL,
 	})
 	writeJSON(w, http.StatusOK, map[string]string{"markdown": b.String()})
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -27,16 +28,19 @@ type Syncer struct {
 	Xray     *Xray
 	Stats    *Stats
 	Fair     *FairShare // optional; receives the node bandwidth from the API
-
-	client  http.Client
-	current map[string]string // email -> uuid
-	etag    string            // last user list version; the API answers 304 if unchanged
-	blocked string            // last applied blocked-source list (joined), to skip no-op updates
+	// CacheFile keeps the last user list on disk, so a node that restarts
+	// while the API is unreachable still serves its users ("" = no cache).
+	CacheFile string
+	client    http.Client
+	current   map[string]string // email -> uuid
+	etag      string            // last user list version; the API answers 304 if unchanged
+	blocked   string            // last applied blocked-source list (joined), to skip no-op updates
 }
 
 func (s *Syncer) Run(ctx context.Context) {
 	s.client.Timeout = 15 * time.Second
 	s.current = map[string]string{}
+	s.loadCache(ctx)
 	t := time.NewTicker(s.Interval)
 	defer t.Stop()
 	redial := time.Now()
@@ -147,9 +151,29 @@ func (s *Syncer) syncUsers(ctx context.Context) error {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return fmt.Errorf("GET /internal/v1/users: status %d: %s", resp.StatusCode, b)
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&body); err != nil {
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	if err != nil {
 		return err
 	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return err
+	}
+	if err := s.apply(ctx, body.Users, body.BandwidthMbps, body.BlockedIPs); err != nil {
+		return err
+	}
+	s.etag = resp.Header.Get("ETag")
+	s.saveCache(raw)
+	return nil
+}
+
+// apply makes Xray serve exactly users (plus speed limits and blocked sources).
+func (s *Syncer) apply(ctx context.Context, users []remoteUser, bandwidthMbps int, blockedIPs []string) error {
+	var body struct {
+		Users         []remoteUser
+		BandwidthMbps int
+		BlockedIPs    []string
+	}
+	body.Users, body.BandwidthMbps, body.BlockedIPs = users, bandwidthMbps, blockedIPs
 	if s.Fair != nil {
 		s.Fair.SetBandwidth(body.BandwidthMbps)
 	}
@@ -191,6 +215,42 @@ func (s *Syncer) syncUsers(ctx context.Context) error {
 	if added+removed > 0 {
 		slog.Info("users synced", "added", added, "removed", removed, "total", len(s.current))
 	}
-	s.etag = resp.Header.Get("ETag")
 	return nil
+}
+
+// loadCache restores the last user list at start (before the API answers).
+func (s *Syncer) loadCache(ctx context.Context) {
+	if s.CacheFile == "" {
+		return
+	}
+	if fi, err := os.Stat(s.CacheFile); err != nil || time.Since(fi.ModTime()) > 7*24*time.Hour {
+		return // none, or too old to trust (plans have changed since)
+	}
+	raw, err := os.ReadFile(s.CacheFile)
+	if err != nil {
+		return
+	}
+	var body struct {
+		Users         []remoteUser `json:"users"`
+		BandwidthMbps int          `json:"bandwidth_mbps"`
+		BlockedIPs    []string     `json:"blocked_ips"`
+	}
+	if json.Unmarshal(raw, &body) != nil {
+		return
+	}
+	if err := s.apply(ctx, body.Users, body.BandwidthMbps, body.BlockedIPs); err == nil {
+		slog.Info("users restored from cache", "users", len(body.Users))
+	}
+}
+
+// saveCache writes the list atomically (owner-only: it holds user UUIDs).
+func (s *Syncer) saveCache(raw []byte) {
+	if s.CacheFile == "" {
+		return
+	}
+	tmp := s.CacheFile + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, s.CacheFile)
 }

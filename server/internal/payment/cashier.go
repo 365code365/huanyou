@@ -273,12 +273,17 @@ func (c *Cashier) sign(env *Envelope) string {
 // call POSTs a sealed request and opens the sealed response. Non-2xx responses
 // carry a plain {"code","message"} error body.
 func (c *Cashier) call(ctx context.Context, path string, req, resp any) error {
+	return c.callURL(ctx, c.APIURL+path, path, req, resp)
+}
+
+// callURL is call against a full URL; label names it in errors.
+func (c *Cashier) callURL(ctx context.Context, target, path string, req, resp any) error {
 	env, err := c.Seal(req, time.Now())
 	if err != nil {
 		return err
 	}
 	b, _ := json.Marshal(env)
-	hr, err := http.NewRequestWithContext(ctx, http.MethodPost, c.APIURL+path, bytes.NewReader(b))
+	hr, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(b))
 	if err != nil {
 		return err
 	}

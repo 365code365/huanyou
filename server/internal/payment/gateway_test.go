@@ -12,11 +12,11 @@ func TestGatewayLinkAndEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g, err := NewGateway("https://pay.example.com/checkout", mid, sk, ek)
+	g, err := NewGateway("https://pay.example.com/checkout", "", mid, sk, ek)
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := g.PayURL(Order{ID: "VP1", AmountCents: 2500, Subject: "月套餐"}, "https://a/n", "https://a/q", "https://a/r")
+	raw, err := g.PayURL(Order{ID: "VP1", AmountCents: 2500, Subject: "月套餐"}, "https://a/n", "https://a/r")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestGatewayLinkAndEnvelope(t *testing.T) {
 	}
 
 	// The payment center seals a notification with the same keys.
-	center, _ := NewGateway("", mid, sk, ek)
+	center, _ := NewGateway("", "", mid, sk, ek)
 	env, err := center.Seal(GatewayOrder{OutTradeNo: "VP1", Amount: 2500, Status: StatusPaid})
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +52,7 @@ func TestGatewayLinkAndEnvelope(t *testing.T) {
 		t.Fatalf("tampered data: %v", err)
 	}
 	_, _, other, _ := NewKeys()
-	bad, _ := NewGateway("", mid, sk, other)
+	bad, _ := NewGateway("", "", mid, sk, other)
 	env3, _ := bad.Seal(GatewayOrder{OutTradeNo: "VP1"})
 	if err := g.Open(env3, &got); err == nil {
 		t.Fatal("wrong enc key accepted")

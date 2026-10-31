@@ -8,12 +8,22 @@ import '../../theme/app_theme.dart';
 import '../../i18n/i18n.dart';
 import '../../core/analytics.dart';
 
-/// Shows the update dialog. A forced update can't be dismissed.
-Future<void> showUpdateDialog(BuildContext context, AppUpdate u) => showDialog<void>(
+bool _updateDialogOpen = false;
+
+/// Shows the update dialog (once at a time). A forced update can't be dismissed.
+Future<void> showUpdateDialog(BuildContext context, AppUpdate u) async {
+  if (_updateDialogOpen) return;
+  _updateDialogOpen = true;
+  try {
+    await showDialog<void>(
       context: context,
       barrierDismissible: !u.force,
       builder: (_) => PopScope(canPop: !u.force, child: _UpdateDialog(update: u)),
     );
+  } finally {
+    _updateDialogOpen = false;
+  }
+}
 
 class _UpdateDialog extends StatefulWidget {
   const _UpdateDialog({required this.update});

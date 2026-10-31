@@ -12,7 +12,10 @@ class AppConfig {
 
   static const _raw = String.fromEnvironment(
     'API_BASE_URLS',
-    defaultValue: 'http://10.0.2.2:8080', // Android emulator -> host machine
+    // A release build made without --dart-define must still work: it gets
+    // the production API. Debug builds talk to the host machine from the
+    // Android emulator.
+    defaultValue: bool.fromEnvironment('dart.vm.product') ? 'https://net-w.51aihelp.com' : 'http://10.0.2.2:8080',
   );
 
   static List<Uri> get apiBaseUrls => _raw

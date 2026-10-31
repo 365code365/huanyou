@@ -553,6 +553,7 @@ export interface GatewaySettings {
   enabled: boolean
   name: string
   pay_link: string
+  query_url: string
   merchant_id: string
   sign_key: string
   enc_key: string
@@ -651,4 +652,12 @@ export interface Crash {
   first_at: string
   last_at: string
   resolved: boolean
+}
+
+export interface LogEntry {
+  id: number
+  time: string
+  level: 'DEBUG' | 'INFO' | 'WARN' | 'ERROR'
+  msg: string
+  attrs: string
 }

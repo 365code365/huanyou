@@ -268,7 +268,7 @@ class XrayVpnService : VpnService() {
         )
         val n: Notification = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_lock_lock)
-            .setContentTitle("已连接")
+            .setContentTitle("环游 VPN 已开启")
             .setContentText(name)
             .setContentIntent(launchIntent())
             .setOngoing(true)

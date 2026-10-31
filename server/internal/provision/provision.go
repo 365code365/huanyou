@@ -477,6 +477,12 @@ test -f /etc/vpn/node.json || { echo "::fail no /etc/vpn/node.json"; exit 1; }
 cp -f /usr/local/bin/vpn-node /usr/local/bin/vpn-node.prev 2>/dev/null || true
 install -m 0755 -o root -g root /tmp/vpn-node.bin /usr/local/bin/vpn-node
 rm -f /tmp/vpn-node.bin /tmp/vpn-upgrade.sh
+# Older installs: give the node a state directory for its user-list cache.
+if ! grep -q StateDirectory /etc/systemd/system/vpn-node.service 2>/dev/null; then
+  mkdir -p /etc/systemd/system/vpn-node.service.d
+  printf '[Service]\nStateDirectory=vpn-node\n' > /etc/systemd/system/vpn-node.service.d/state.conf
+  systemctl daemon-reload
+fi
 ` + tuneScript + `
 systemctl restart vpn-node
 echo "::upgraded"

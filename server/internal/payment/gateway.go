@@ -1,12 +1,14 @@
 package payment
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
@@ -14,23 +16,25 @@ import (
 	"time"
 )
 
-// Gateway is the "下单链接" integration: the simplest way for a payment
-// center to plug in.
+// Gateway is the "下单链接" integration with an external payment center:
+// the simplest way for a payment center to plug in.
 //
-//  1. Order: the app opens PayLink?<signed params>. The URL carries the order
-//     number, amount and our callback URLs, signed with HMAC-SHA256 so the
-//     amount can't be edited in the address bar.
-//  2. Notify: after payment the center POSTs an encrypted, signed envelope to
-//     our fixed notify URL.
-//  3. Query: the center may POST to our fixed query URL to read an order
-//     (status, amount) before charging or to reconcile.
+//  1. Order: the app opens PayLink?<signed params> (the center's checkout).
+//     The URL carries the order number, amount and our notify URL, signed with
+//     HMAC-SHA256 so the amount can't be edited in the address bar.
+//  2. Notify (center -> us): after payment the center POSTs an encrypted,
+//     signed envelope to our fixed notify URL.
+//  3. Query (us -> center): we POST an envelope to the center's QueryURL to
+//     read an order's status, so a late or lost notification doesn't leave a
+//     paying user waiting.
 //
 // Envelopes use the same AES-256-GCM + HMAC-SHA256 scheme as the cashier
 // protocol (see Cashier.Seal / Open): timestamp window, single-use nonce,
 // constant-time signature check, authenticated decryption.
 type Gateway struct {
-	PayLink string
-	codec   *Cashier
+	PayLink  string
+	QueryURL string // the center's order query API; "" = notifications only
+	codec    *Cashier
 }
 
 // GatewayOrder is the decrypted payload of notify / query.
@@ -40,12 +44,12 @@ type GatewayOrder struct {
 	Amount     int64  `json:"amount"` // cents
 	Currency   string `json:"currency,omitempty"`
 	Subject    string `json:"subject,omitempty"`
-	Status     string `json:"status,omitempty"` // PENDING | PAID
+	Status     string `json:"status,omitempty"` // PENDING | PAID | CLOSED
 	CreatedAt  int64  `json:"created_at,omitempty"`
 	PaidAt     int64  `json:"paid_at,omitempty"`
 }
 
-func NewGateway(payLink, merchantID, signKeyHex, encKeyHex string) (*Gateway, error) {
+func NewGateway(payLink, queryURL, merchantID, signKeyHex, encKeyHex string) (*Gateway, error) {
 	sk, err := hex.DecodeString(signKeyHex)
 	if err != nil || len(sk) < 16 {
 		return nil, errors.New("gateway: sign_key must be hex, at least 16 bytes")
@@ -57,7 +61,8 @@ func NewGateway(payLink, merchantID, signKeyHex, encKeyHex string) (*Gateway, er
 	if merchantID == "" {
 		return nil, errors.New("gateway: merchant_id required")
 	}
-	return &Gateway{PayLink: payLink, codec: &Cashier{MerchantID: merchantID, SignKey: sk, EncKey: ek}}, nil
+	return &Gateway{PayLink: payLink, QueryURL: queryURL, codec: &Cashier{MerchantID: merchantID, SignKey: sk, EncKey: ek,
+		HTTP: &http.Client{Timeout: httpTimout}}}, nil
 }
 
 // NewKeys generates a merchant id and fresh keys (hex).
@@ -98,14 +103,14 @@ func (g *Gateway) signParams(p map[string]string) string {
 }
 
 // LinkParams are the signed parameters appended to PayLink.
-func (g *Gateway) LinkParams(o Order, notifyURL, queryURL, returnURL string, now time.Time) (map[string]string, error) {
+func (g *Gateway) LinkParams(o Order, notifyURL, returnURL string, now time.Time) (map[string]string, error) {
 	nb := make([]byte, 16)
 	if _, err := rand.Read(nb); err != nil {
 		return nil, err
 	}
 	p := map[string]string{
 		"merchant_id": g.codec.MerchantID, "out_trade_no": o.ID, "amount": strconv.FormatInt(o.AmountCents, 10),
-		"currency": "CNY", "subject": o.Subject, "notify_url": notifyURL, "query_url": queryURL,
+		"currency": "CNY", "subject": o.Subject, "notify_url": notifyURL,
 		"return_url": returnURL, "timestamp": strconv.FormatInt(now.Unix(), 10),
 		"expire_at": strconv.FormatInt(now.Add(orderTTL).Unix(), 10), "nonce": hex.EncodeToString(nb),
 	}
@@ -114,8 +119,8 @@ func (g *Gateway) LinkParams(o Order, notifyURL, queryURL, returnURL string, now
 }
 
 // PayURL is PayLink with the signed order parameters.
-func (g *Gateway) PayURL(o Order, notifyURL, queryURL, returnURL string) (string, error) {
-	p, err := g.LinkParams(o, notifyURL, queryURL, returnURL, time.Now())
+func (g *Gateway) PayURL(o Order, notifyURL, returnURL string) (string, error) {
+	p, err := g.LinkParams(o, notifyURL, returnURL, time.Now())
 	if err != nil {
 		return "", err
 	}
@@ -151,5 +156,45 @@ func (g *Gateway) VerifyLink(q url.Values, now time.Time) error {
 // Open verifies and decrypts an envelope from the payment center.
 func (g *Gateway) Open(env *Envelope, v any) error { return g.codec.Open(env, v, time.Now()) }
 
-// Seal encrypts and signs a response to the payment center.
+// Seal encrypts and signs a message to the payment center.
 func (g *Gateway) Seal(v any) (*Envelope, error) { return g.codec.Seal(v, time.Now()) }
+
+// ErrQueryNotConfigured: no QueryURL, so only notifications complete orders.
+var ErrQueryNotConfigured = errors.New("gateway: query_url not configured")
+
+// ErrOrderUnknown: the payment center has no such order (the user never
+// reached the checkout, or it expired there).
+var ErrOrderUnknown = errors.New("gateway: order unknown to the payment center")
+
+// QueryOrder asks the payment center for an order (us -> center). The sealed
+// response must be for the same order; a 404 ORDER_NOT_FOUND is ErrOrderUnknown.
+func (g *Gateway) QueryOrder(ctx context.Context, orderID string) (*GatewayOrder, error) {
+	if g.QueryURL == "" {
+		return nil, ErrQueryNotConfigured
+	}
+	var resp GatewayOrder
+	err := g.codec.callURL(ctx, g.QueryURL, "query", GatewayOrder{OutTradeNo: orderID}, &resp)
+	if err != nil {
+		if strings.Contains(err.Error(), "HTTP 404") {
+			return nil, ErrOrderUnknown
+		}
+		return nil, err
+	}
+	if resp.OutTradeNo != orderID {
+		return nil, errors.New("gateway: query response is for another order")
+	}
+	if resp.Currency != "" && resp.Currency != "CNY" {
+		return nil, fmt.Errorf("gateway: unexpected currency %q", resp.Currency)
+	}
+	resp.Status = strings.ToUpper(strings.TrimSpace(resp.Status))
+	return &resp, nil
+}
+
+// Query implements Querier: the order as a payment notification.
+func (g *Gateway) Query(ctx context.Context, orderID string) (*Notification, error) {
+	o, err := g.QueryOrder(ctx, orderID)
+	if err != nil {
+		return nil, err
+	}
+	return &Notification{OrderID: o.OutTradeNo, TradeNo: o.TradeNo, AmountCents: o.Amount, Paid: o.Status == StatusPaid}, nil
+}

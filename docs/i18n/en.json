@@ -311,6 +311,11 @@
   "启动超时，请重试": "Startup timed out, please try again",
   "正在取消": "Cancelling",
   "缺少连接组件 huanyou-core，请重新安装": "The huanyou-core component is missing, please reinstall",
-  "再次点按可取消": "Tap again to cancel"
+  "再次点按可取消": "Tap again to cancel",
+  "连接服务器超时，请检查网络后重试": "Connection to the server timed out. Check your network and try again.",
+  "网络环境异常（可能需要先登录 Wi-Fi 认证页），请切换网络后重试": "Network problem (you may need to sign in to the Wi-Fi first). Switch networks and try again.",
+  "无法连接服务器，请检查网络后重试": "Cannot reach the server. Check your network and try again.",
+  "登录状态异常，请稍后重试": "Sign-in problem, please try again later.",
+  "登录已刷新，请再点一次连接": "Sign-in refreshed, tap connect again."
  }
 }

@@ -229,6 +229,9 @@ func (s *Server) Run(ctx context.Context) {
 	defer flush.Stop()
 	clean := time.NewTicker(6 * time.Hour)
 	defer clean.Stop()
+	reconcile := time.NewTicker(time.Minute)
+	defer reconcile.Stop()
+	tick := 0
 	s.cleanup(ctx)
 	for {
 		select {
@@ -243,6 +246,9 @@ func (s *Server) Run(ctx context.Context) {
 			s.flushEvents(ctx)
 		case <-clean.C:
 			s.cleanup(ctx)
+		case <-reconcile.C:
+			tick++
+			s.reconcileOrders(ctx, tick)
 		}
 	}
 }

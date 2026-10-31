@@ -117,8 +117,7 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request, u *st
 	po := payment.Order{ID: o.ID, AmountCents: o.AmountCents, Subject: plan.Name}
 	var payURL string
 	if gw != nil {
-		payURL, err = gw.PayURL(po, s.cfg.PublicURL+gatewayNotifyPath, s.cfg.PublicURL+gatewayQueryPath,
-			s.cfg.PublicURL+"/pay/return?order="+o.ID)
+		payURL, err = gw.PayURL(po, s.cfg.PublicURL+gatewayNotifyPath, s.cfg.PublicURL+"/pay/return?order="+o.ID)
 	} else {
 		payURL, err = prov.PayURL(po, req.Method,
 			s.cfg.PublicURL+"/pay/notify/"+prov.Name(),
@@ -152,24 +151,27 @@ func (s *Server) handleGetOrder(w http.ResponseWriter, r *http.Request, u *store
 // (callbacks can be delayed or lost). Throttled per order. Returns the
 // refreshed order if it turned out to be paid, else nil.
 func (s *Server) queryProvider(ctx context.Context, o *store.Order) *store.Order {
-	if time.Since(o.CreatedAt) < 3*time.Second || time.Since(o.CreatedAt) > 2*time.Hour {
+	if time.Since(o.CreatedAt) < 3*time.Second || time.Since(o.CreatedAt) > 24*time.Hour {
 		return nil
 	}
-	q, ok := s.providerFor(o.Method).(payment.Querier)
-	if !ok || !s.limiter.allow("query:"+o.ID) {
+	q := s.querierFor(o.Method)
+	if q == nil || !s.limiter.allow("query:"+o.ID) {
 		return nil
 	}
 	qctx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
 	n, err := q.Query(qctx, o.ID)
 	if err != nil {
-		slog.Warn("payment query failed", "order", o.ID, "err", err)
+		if !errors.Is(err, payment.ErrOrderUnknown) {
+			slog.Warn("payment query failed", "order", o.ID, "err", err)
+		}
 		return nil
 	}
 	if !n.Paid {
 		return nil
 	}
-	if err := s.completeOrder(ctx, n); err != nil {
+	slog.Info("payment confirmed by active query", "order", o.ID, "method", o.Method)
+	if err := s.completeOrder(ctx, n, o.Method); err != nil {
 		slog.Error("payment query complete failed", "order", o.ID, "err", err)
 		return nil
 	}
@@ -178,6 +180,57 @@ func (s *Server) queryProvider(ctx context.Context, o *store.Order) *store.Order
 		return nil
 	}
 	return fresh
+}
+
+// reconcileOrders actively queries the providers about recent unpaid orders,
+// so a payment whose notification was lost still completes even if the user
+// closed the app: every minute for orders under 2 hours old, every 15 minutes
+// up to 24 hours (payment centers retry notifications for about that long).
+func (s *Server) reconcileOrders(ctx context.Context, tick int) { s.reconcileAt(ctx, time.Now(), tick) }
+
+func (s *Server) reconcileAt(ctx context.Context, now time.Time, tick int) {
+	check := func(from, to time.Time) {
+		orders, err := s.store.PendingOrders(ctx, from, to, 200)
+		if err != nil {
+			slog.Warn("reconcile orders", "err", err)
+			return
+		}
+		for _, o := range orders {
+			if ctx.Err() != nil {
+				return
+			}
+			if s.querierFor(o.Method) != nil {
+				s.queryProvider(ctx, o)
+			}
+		}
+	}
+	check(now.Add(-2*time.Hour), now.Add(-20*time.Second))
+	if tick%15 == 0 {
+		check(now.Add(-24*time.Hour), now.Add(-2*time.Hour))
+	}
+}
+
+// querierFor is the provider that can be asked about orders placed with method.
+func (s *Server) querierFor(method string) payment.Querier {
+	if method == gatewayMethod {
+		if gw := s.gateway(); gw != nil && gw.QueryURL != "" {
+			return gw
+		}
+		return nil
+	}
+	q, _ := s.providerFor(method).(payment.Querier)
+	return q
+}
+
+// paidVia: may a report from via complete an order placed with method?
+func (s *Server) paidVia(method, via string) bool {
+	if via == method {
+		return true
+	}
+	if p := s.providerFor(method); p != nil {
+		return p.Name() == via
+	}
+	return false
 }
 
 func (s *Server) handleListOrders(w http.ResponseWriter, r *http.Request, u *store.User) {
@@ -211,7 +264,7 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(prov.Ack()))
 		return
 	}
-	if err := s.completeOrder(r.Context(), n); err != nil {
+	if err := s.completeOrder(r.Context(), n, prov.Name()); err != nil {
 		slog.Error("payment notify failed", "provider", prov.Name(), "order", n.OrderID, "err", err)
 		http.Error(w, "fail", http.StatusBadRequest) // provider will retry
 		return
@@ -219,10 +272,16 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(prov.Ack()))
 }
 
-func (s *Server) completeOrder(ctx context.Context, n *payment.Notification) error {
+// completeOrder grants an order reported paid. via is who reported it: the
+// order's own method (active query), "gateway", or a provider name (notify);
+// a provider can only complete orders that were placed with it.
+func (s *Server) completeOrder(ctx context.Context, n *payment.Notification, via string) error {
 	o, err := s.store.OrderByID(ctx, n.OrderID)
 	if err != nil {
 		return err
+	}
+	if !s.paidVia(o.Method, via) {
+		return fmt.Errorf("order %s was placed with %q, not %q", o.ID, o.Method, via)
 	}
 	if o.AmountCents != n.AmountCents {
 		return fmt.Errorf("amount mismatch: order %d, paid %d", o.AmountCents, n.AmountCents)

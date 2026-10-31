@@ -1,7 +1,7 @@
 'use client'
-import { CopyOutlined, FileTextOutlined, KeyOutlined, LinkOutlined, PlusOutlined, ReloadOutlined, SafetyOutlined } from '@ant-design/icons'
+import { CopyOutlined, FileTextOutlined, KeyOutlined, LinkOutlined, PlusOutlined, ReloadOutlined, SafetyOutlined, SearchOutlined } from '@ant-design/icons'
 import {
-  Alert, App, Button, DatePicker, Descriptions, Drawer, Form, Input, InputNumber, Popconfirm, Segmented, Select, Space, Spin, Switch, Table, Tabs, Tag, Typography,
+  Alert, App, Button, DatePicker, Descriptions, Drawer, Form, Input, InputNumber, Modal, Popconfirm, Segmented, Select, Space, Spin, Switch, Table, Tabs, Tag, Typography,
 } from 'antd'
 import dayjs from 'dayjs'
 import { ImageUpload } from '@/components/ImageUpload'
@@ -148,6 +148,8 @@ function MainForm({ part, loaded, plans, onSaved, onReset }: {
 
 // ---- payment ----
 
+const httpsOrLocal = /^(https:\/\/|http:\/\/(127\.0\.0\.1|localhost)[:/])/
+
 function PaymentTab({ loaded, onSaved }: { loaded: Loaded; onSaved: (p: PaymentSettings) => void }) {
   const { message, modal } = App.useApp()
   const [form] = Form.useForm<PaymentSettings>()
@@ -174,6 +176,20 @@ function PaymentTab({ loaded, onSaved }: { loaded: Loaded; onSaved: (p: PaymentS
     else go()
   }
   const copy = (v: string) => navigator.clipboard.writeText(v).then(() => message.success('已复制'))
+  const [queryOpen, setQueryOpen] = useState(false)
+  const [queryId, setQueryId] = useState('')
+  const [querying, setQuerying] = useState(false)
+  const [queryResult, setQueryResult] = useState<Awaited<ReturnType<typeof api.payment.testQuery>>>()
+  const testQuery = async () => {
+    setQuerying(true)
+    try {
+      setQueryResult(await api.payment.testQuery(queryId.trim()))
+    } catch (e) {
+      message.error(errMsg(e))
+    } finally {
+      setQuerying(false)
+    }
+  }
   const testLink = async () => {
     try {
       const r = await api.payment.testLink()
@@ -198,9 +214,15 @@ function PaymentTab({ loaded, onSaved }: { loaded: Loaded; onSaved: (p: PaymentS
         <h4 className="form-section">支付中心（下单链接）</h4>
         <Form.Item name={['gateway', 'enabled']} label="启用" valuePropName="checked"><Switch /></Form.Item>
         <Form.Item name={['gateway', 'name']} label="App 显示名称"><Input maxLength={20} placeholder="在线支付" /></Form.Item>
-        <Form.Item name={['gateway', 'pay_link']} label="下单链接" rules={[{ required: gwOn, message: '请填写支付中心的收银台地址' }, { pattern: /^https:\/\//, message: '必须是 https 地址' }]}
-          extra="用户下单后打开：下单链接?out_trade_no=订单号&amount=金额（分）&…&sign=签名">
+        <Alert type="info" showIcon style={{ marginBottom: 16 }}
+          message="对接外部支付中心：支付中心提供「下单链接」和「订单查询接口」，本系统提供「支付结果通知」接口。付款后支付中心立即通知本系统；通知丢失时本系统会主动调用查询接口确认，两条路径都能开通套餐。" />
+        <Form.Item name={['gateway', 'pay_link']} label="下单链接" rules={[{ required: gwOn, message: '请填写支付中心的收银台地址' }, { pattern: httpsOrLocal, message: '必须是 https 地址' }]}
+          extra="支付中心的收银台。用户下单后打开：下单链接?out_trade_no=订单号&amount=金额（分）&…&sign=签名">
           <Input placeholder="https://pay.example.com/checkout" />
+        </Form.Item>
+        <Form.Item name={['gateway', 'query_url']} label="订单查询接口" rules={[{ pattern: httpsOrLocal, message: '必须是 https 地址' }]}
+          extra="支付中心提供，本系统主动调用它确认订单是否已支付（通知丢失或延迟时兜底）。强烈建议填写；留空则只能依靠通知">
+          <Input placeholder="https://pay.example.com/api/order/query" />
         </Form.Item>
         <Form.Item label="商户号与密钥" required={gwOn}>
           <Space direction="vertical" style={{ width: '100%' }}>
@@ -211,13 +233,10 @@ function PaymentTab({ loaded, onSaved }: { loaded: Loaded; onSaved: (p: PaymentS
             <span className="muted">签名 HMAC-SHA256，加密 AES-256-GCM。密钥只交给支付中心，不会出现在 App 和链接里。</span>
           </Space>
         </Form.Item>
-        <Form.Item label="固定接口">
-          <Descriptions size="small" column={1} bordered>
-            <Descriptions.Item label="通知"><Typography.Text className="mono" copyable>{ep.notify}</Typography.Text></Descriptions.Item>
-            <Descriptions.Item label="查询"><Typography.Text className="mono" copyable>{ep.query}</Typography.Text></Descriptions.Item>
-          </Descriptions>
+        <Form.Item label="本系统通知接口" extra="固定地址，交给支付中心：付款成功后支付中心 POST 到这里">
+          <Typography.Text className="mono" copyable>{ep.notify}</Typography.Text>
         </Form.Item>
-        <Form.Item name={['gateway', 'allow_ips']} label="调用 IP 白名单" extra="可选：只允许支付中心的服务器调用通知 / 查询接口（IP 或网段），留空不限制">
+        <Form.Item name={['gateway', 'allow_ips']} label="通知 IP 白名单" extra="可选：只接受支付中心服务器发来的通知（IP 或网段），留空不限制">
           <Select mode="tags" tokenSeparators={[',', ' ']} placeholder="如 203.0.113.10" />
         </Form.Item>
         <Form.Item label=" " colon={false}>
@@ -225,12 +244,28 @@ function PaymentTab({ loaded, onSaved }: { loaded: Loaded; onSaved: (p: PaymentS
             <SaveBar busy={busy} onSave={save} />
             <Button icon={<FileTextOutlined />} onClick={async () => setDoc((await api.payment.doc()).markdown)}>查看对接文档</Button>
             <Button icon={<LinkOutlined />} onClick={testLink}>生成测试链接</Button>
+            <Button icon={<SearchOutlined />} onClick={() => { setQueryResult(undefined); setQueryOpen(true) }}>测试查询</Button>
           </Space>
         </Form.Item>
       </Form>
       {loaded.system.payment_methods.length > 0 && (
         <Alert type="info" showIcon style={{ ...narrow, marginTop: 8 }} message={`api.json 里还配置了：${loaded.system.payment_methods.join('、')}（同样受「开放购买」开关控制）`} />
       )}
+      <Modal open={queryOpen} title="测试订单查询接口" onCancel={() => setQueryOpen(false)} footer={null} destroyOnHidden>
+        <p className="muted">用已保存的设置调用支付中心的订单查询接口。可以填刚才「生成测试链接」的订单号，或真实订单号；留空用一个随机订单号（应返回「没有这个订单」）。</p>
+        <Space.Compact style={{ width: '100%' }}>
+          <Input placeholder="订单号，如 VP2026…" value={queryId} onChange={(e) => setQueryId(e.target.value)} onPressEnter={testQuery} />
+          <Button type="primary" loading={querying} onClick={testQuery}>查询</Button>
+        </Space.Compact>
+        {queryResult && (
+          <Alert style={{ marginTop: 14 }} showIcon
+            type={!queryResult.ok ? 'error' : queryResult.found ? 'success' : 'info'}
+            message={!queryResult.ok ? `查询失败（${queryResult.ms} ms）` : queryResult.found ? `查到订单（${queryResult.ms} ms）` : `接口正常（${queryResult.ms} ms）`}
+            description={queryResult.order
+              ? <pre className="mono" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(queryResult.order, null, 2)}</pre>
+              : queryResult.message} />
+        )}
+      </Modal>
       <Drawer open={!!doc} onClose={() => setDoc(undefined)} size={760} title="支付中心对接文档"
         extra={<Button icon={<CopyOutlined />} onClick={() => doc && copy(doc)}>复制 Markdown</Button>}>
         {doc && <Markdown text={doc} />}

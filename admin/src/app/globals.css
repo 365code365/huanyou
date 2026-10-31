@@ -127,3 +127,23 @@ body {
 /* FoldAlert: compact one-line alert with a fold toggle. */
 .fold-alert .ant-alert-action { align-self: center; margin-inline-start: 8px; }
 .fold-alert:not(:has(.ant-alert-description)) .ant-alert-icon { font-size: 16px; }
+/* Console log page */
+.log-view {
+  height: calc(100vh - 290px);
+  min-height: 360px;
+  overflow: auto;
+  background: #141414;
+  color: #d9d9d9;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.log-line { white-space: pre-wrap; word-break: break-all; cursor: pointer; border-radius: 4px; padding: 0 4px; }
+.log-line:hover { background: #262626; }
+.log-line.lv-WARN { background: rgba(250, 173, 20, 0.07); }
+.log-line.lv-ERROR { background: rgba(255, 77, 79, 0.12); }
+.log-time { color: #8c8c8c; margin-right: 8px; }
+.log-level { margin-right: 8px; font-weight: 600; }
+.log-attrs { color: #95de64; }
+.log-empty { color: #8c8c8c; padding: 24px; text-align: center; }
+.ai-answer { max-height: calc(100vh - 470px); overflow: auto; }

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'core/updater.dart';
+import 'features/update/update_dialog.dart';
 import 'core/config.dart';
 import 'features/shell/main_shell.dart';
 import 'state/app_controller.dart';
@@ -102,6 +104,7 @@ class _VpnAppState extends State<VpnApp> with WidgetsBindingObserver {
       Analytics.track('app_resume');
       widget.controller.onResumed();
     } else if (state == AppLifecycleState.paused) {
+      widget.controller.onPaused();
       Analytics.flush(); // send what we have before the OS may stop us
     }
   }
@@ -156,6 +159,26 @@ class _RootState extends State<_Root> {
     Future.delayed(const Duration(milliseconds: 1500), () {
       if (mounted) setState(() => _introDone = true);
     });
+    // If the account can't be set up (server unreachable, or this old version
+    // no longer understood by it), still look for an update: the update
+    // endpoint needs no login, and it is the only way out for such users.
+    Future.delayed(const Duration(seconds: 8), _updateFromSplash);
+  }
+
+  bool _updateChecked = false;
+
+  Future<void> _updateFromSplash() async {
+    if (!mounted || _updateChecked) return;
+    final app = AppScope.read(context);
+    if (app.loggedIn == true) return; // the main shell checks as usual
+    _updateChecked = true;
+    try {
+      final u = await Updater.check(app.api);
+      if (u != null && u.hasUpdate && mounted && app.loggedIn != true) await showUpdateDialog(context, u);
+    } catch (_) {
+      _updateChecked = false; // offline: try again on the next retry
+      Future.delayed(const Duration(seconds: 30), _updateFromSplash);
+    }
   }
 
   @override
@@ -171,7 +194,10 @@ class _RootState extends State<_Root> {
         if (isSplash) {
           // Played in reverse when leaving: 1 → 0.
           return FadeTransition(
-            opacity: CurvedAnimation(parent: anim, curve: const Interval(0.35, 1, curve: Curves.easeIn)),
+            opacity: CurvedAnimation(
+              parent: anim,
+              curve: const Interval(0.35, 1, curve: Curves.easeIn),
+            ),
             child: ScaleTransition(scale: Tween(begin: 1.12, end: 1.0).animate(anim), child: child),
           );
         }
@@ -213,7 +239,10 @@ class _Adaptive extends StatelessWidget {
         child: Padding(
           padding: EdgeInsets.symmetric(horizontal: side),
           // The child keeps the full height and safe-area insets.
-          child: MediaQuery(data: mq.copyWith(size: Size(maxWidth, mq.size.height)), child: out),
+          child: MediaQuery(
+            data: mq.copyWith(size: Size(maxWidth, mq.size.height)),
+            child: out,
+          ),
         ),
       );
     }

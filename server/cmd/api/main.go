@@ -24,6 +24,7 @@ import (
 	"vpnplatform/server/internal/api"
 	"vpnplatform/server/internal/auth"
 	"vpnplatform/server/internal/config"
+	"vpnplatform/server/internal/logbuf"
 	"vpnplatform/server/internal/monitor"
 	"vpnplatform/server/internal/store"
 )
@@ -31,7 +32,10 @@ import (
 func main() {
 	cfgPath := flag.String("config", "api.json", "path to config file")
 	flag.Parse()
-
+	// Recent log lines are kept in memory for the admin panel's live console;
+	// everything still goes to stderr (journald) as before.
+	logbuf.Default = logbuf.New(5000)
+	slog.SetDefault(slog.New(logbuf.Default.Wrap(slog.NewTextHandler(os.Stderr, nil))))
 	cfg, err := config.LoadAPI(*cfgPath)
 	if err != nil {
 		fatal("load config", err)
@@ -130,7 +134,9 @@ func serveTLS(ctx context.Context, srv *http.Server, cfg *config.API) {
 	}
 	go func() {
 		if err := redirect.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("http :80", "err", err)
+			// Another web server owns :80 (common on a shared box): only the
+			// http -> https redirect is lost; certificates use TLS-ALPN on :443.
+			slog.Warn("port 80 unavailable, http:// is not redirected to https://", "err", err)
 		}
 	}()
 	go func() {

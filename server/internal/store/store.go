@@ -409,6 +409,14 @@ func grantPlanTx(ctx context.Context, tx *txx, userID int64, planID string, days
 			u.ExpiresAt.Add(add).Unix(), now.Unix(), userID)
 		return err
 	}
+	if u.PaidPlanActive(now) {
+		// Switching to another plan while one is active: the time already
+		// paid for is kept (added on top), never thrown away.
+		_, err = tx.ExecContext(ctx,
+			`UPDATE users SET plan_id = ?, expires_at = ?, traffic_used = 0, period_start = ?, updated_at = ? WHERE id = ?`,
+			planID, u.ExpiresAt.Add(add).Unix(), now.Unix(), now.Unix(), userID)
+		return err
+	}
 	_, err = tx.ExecContext(ctx,
 		`UPDATE users SET plan_id = ?, expires_at = ?, traffic_used = 0, period_start = ?, updated_at = ? WHERE id = ?`,
 		planID, now.Add(add).Unix(), now.Unix(), now.Unix(), userID)
@@ -552,6 +560,27 @@ func (s *Store) OrdersByUser(ctx context.Context, userID int64, limit int) ([]*O
 	}
 	defer rows.Close()
 	out := []*Order{}
+	for rows.Next() {
+		o, err := scanOrder(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
+// PendingOrders returns unpaid orders created between from and to (oldest
+// first), for reconciling with payment providers.
+func (s *Store) PendingOrders(ctx context.Context, from, to time.Time, limit int) ([]*Order, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+orderCols+` FROM orders
+		WHERE status = 'pending' AND created_at >= ? AND created_at <= ? ORDER BY created_at LIMIT ?`,
+		from.Unix(), to.Unix(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Order
 	for rows.Next() {
 		o, err := scanOrder(rows)
 		if err != nil {

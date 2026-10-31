@@ -320,9 +320,9 @@ func (m *Monitor) checkExpiry(now time.Time) {
 		}
 		var text string
 		if left <= 0 {
-			text = fmt.Sprintf("⛔ 节点「%s」%s 服务器已于 %s 到期，请立即续费", n.Name, vendor, n.ExpiresAt.Format("2006-01-02 15:04"))
+			text = fmt.Sprintf("⛔ 节点「%s」%s 服务器已于 %s 到期，请立即续费", n.Name, vendor, n.ExpiresAt.Local().Format("2006-01-02 15:04"))
 		} else {
-			text = fmt.Sprintf("⏰ 节点「%s」%s 服务器将于 %s 到期（剩 %.0f 小时），请及时续费", n.Name, vendor, n.ExpiresAt.Format("2006-01-02 15:04"), left.Hours())
+			text = fmt.Sprintf("⏰ 节点「%s」%s 服务器将于 %s 到期（剩 %.0f 小时），请及时续费", n.Name, vendor, n.ExpiresAt.Local().Format("2006-01-02 15:04"), left.Hours())
 		}
 		m.emit(n.ID, "warning", text)
 	}

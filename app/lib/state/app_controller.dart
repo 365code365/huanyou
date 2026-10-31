@@ -167,7 +167,7 @@ class AppController extends ChangeNotifier {
     }
     // Keep traffic / node health current while the app is open.
     _refreshTimer = Timer.periodic(const Duration(minutes: 1), (_) {
-      if (loggedIn == true) refresh(quiet: true);
+      if (loggedIn == true && foreground) refresh(quiet: true);
     });
   }
 
@@ -187,7 +187,10 @@ class AppController extends ChangeNotifier {
 
   /// Device-based sign-in (the default, no-login path). Retries with backoff
   /// on network failure so a cold start behind a captive portal still lands.
-  Future<void> deviceSignIn() async {
+  Future<void> deviceSignIn() => _signingIn ??= _deviceSignIn().whenComplete(() => _signingIn = null);
+  Future<void>? _signingIn;
+
+  Future<void> _deviceSignIn() async {
     try {
       final id = await session.deviceId();
       final r = await api.device(id, Device.platform, inviteCode: await _clipboardInviteCode());
@@ -201,10 +204,12 @@ class AppController extends ChangeNotifier {
       message = null;
       notifyListeners();
       await refresh();
-    } on ApiException catch (e) {
+    } catch (e) {
+      // Any failure (network, unexpected response) retries with backoff:
+      // the splash must never get stuck without a way forward.
       loggedIn = false;
       loadFailed = true;
-      message = e.code == 'network' ? tr('网络连接失败，正在重试…') : e.message;
+      message = e is ApiException && e.code != 'network' ? e.message : tr('网络连接失败，正在重试…');
       notifyListeners();
       _retryTimer?.cancel();
       final secs = min(30, 2 << min(_retryAttempt, 4));
@@ -219,6 +224,8 @@ class AppController extends ChangeNotifier {
   void dispose() {
     _statusSub?.cancel();
     _refreshTimer?.cancel();
+    _stableTimer?.cancel();
+    _disconnectWatchdog?.cancel();
     _retryTimer?.cancel();
     _reconnectTimer?.cancel();
     super.dispose();
@@ -228,13 +235,24 @@ class AppController extends ChangeNotifier {
     final prev = status;
     status = e.$1;
     statusHint = e.$1 == VpnStatus.connecting ? e.$2 : null;
-    if (e.$1 == VpnStatus.disconnected || e.$1 == VpnStatus.error) cancelling = false;
     // After a cancel, errors from the half-started tunnel are not news.
-    if (cancelling && e.$1 == VpnStatus.error) {
+    if (cancelling && (e.$1 == VpnStatus.error || e.$1 == VpnStatus.disconnected)) {
+      cancelling = false;
       status = VpnStatus.disconnected;
       notifyListeners();
       return;
     }
+    // Stopped outside the app (notification "断开", system settings, another
+    // VPN app): respect it, no auto-reconnect.
+    if (e.$1 == VpnStatus.disconnecting && prev != VpnStatus.disconnecting && !_stopRequested) {
+      _wantConnected = false;
+    }
+    if (e.$1 == VpnStatus.disconnected && e.$2 == 'revoked') {
+      _wantConnected = false;
+      _reconnectTimer?.cancel();
+      message = tr('VPN 已被系统或其它 VPN 应用断开');
+    }
+    if (e.$1 == VpnStatus.disconnected || e.$1 == VpnStatus.error) _stopRequested = false;
     if (e.$1 == VpnStatus.error) message = e.$2 ?? tr('连接失败');
     if (e.$1 == VpnStatus.connected && prev != VpnStatus.connected) Analytics.track('vpn_connected');
     if (e.$1 == VpnStatus.error && prev == VpnStatus.connecting) Analytics.track('vpn_connect_failed');
@@ -242,10 +260,14 @@ class AppController extends ChangeNotifier {
       message = null;
       connectedAt ??= DateTime.now();
       _wasConnected = true;
-      _reconnectAttempt = 0;
       _reconnectTimer?.cancel();
+      // Reset the reconnect backoff only once the tunnel has stayed up: a
+      // tunnel that connects and drops right away must not loop every 3 s.
+      _stableTimer?.cancel();
+      _stableTimer = Timer(const Duration(seconds: 60), () => _reconnectAttempt = 0);
     } else if (e.$1 != VpnStatus.connecting) {
       connectedAt = null;
+      _stableTimer?.cancel();
     }
     // The tunnel went down without the user asking: bring it back.
     final dropped = e.$1 == VpnStatus.error || (e.$1 == VpnStatus.disconnected && prev != VpnStatus.disconnecting);
@@ -272,6 +294,12 @@ class AppController extends ChangeNotifier {
   String? statusHint;
   bool _wantConnected = false;
   bool _wasConnected = false; // the tunnel reached "connected" since the user connected
+  bool _stopRequested = false; // the app itself asked the tunnel to stop
+  Timer? _stableTimer;
+  Timer? _disconnectWatchdog;
+
+  /// False while the app is in the background (no periodic refresh then).
+  bool foreground = true;
   int _reconnectAttempt = 0;
   Timer? _reconnectTimer;
 
@@ -353,14 +381,39 @@ class AppController extends ChangeNotifier {
       notifyListeners();
       unawaited(_probeAndAutoPick());
     } on ApiException catch (e) {
-      if (e.unauthorized) return logout();
+      if (e.unauthorized) return _onUnauthorized();
       if (user == null || nodes.isEmpty) {
         loadFailed = true;
         _scheduleRetry();
       }
       if (!quiet) message = e.code == 'network' ? tr('网络连接失败，正在重试…') : e.message;
       notifyListeners();
+    } catch (_) {
+      // Unexpected response shape: keep what we have, try again later.
+      if (user == null || nodes.isEmpty) {
+        loadFailed = true;
+        _scheduleRetry();
+      }
+      notifyListeners();
     }
+  }
+
+  DateTime? _lastReauth;
+
+  /// The session token was refused (expired, server key rotated). Get a new
+  /// one for this device in the background; a running tunnel is left alone
+  /// (it does not depend on the token). At most once per 2 minutes, so a
+  /// server that keeps refusing can't cause a sign-in loop.
+  Future<void> _onUnauthorized() async {
+    final now = DateTime.now();
+    if (_lastReauth != null && now.difference(_lastReauth!) < const Duration(minutes: 2)) {
+      message = tr('登录状态异常，请稍后重试');
+      notifyListeners();
+      return;
+    }
+    _lastReauth = now;
+    api.token = null;
+    await deviceSignIn();
   }
 
   void _scheduleRetry() {
@@ -374,6 +427,7 @@ class AppController extends ChangeNotifier {
 
   /// Called when the app returns to the foreground.
   void onResumed() {
+    foreground = true;
     if (loggedIn == true) {
       refresh(quiet: !loadFailed);
     } else {
@@ -386,8 +440,8 @@ class AppController extends ChangeNotifier {
       user = await api.me();
       notifyListeners();
     } on ApiException catch (e) {
-      if (e.unauthorized) await logout();
-    }
+      if (e.unauthorized) await _onUnauthorized();
+    } catch (_) {}
   }
 
   // ---- preferences ----
@@ -454,6 +508,7 @@ class AppController extends ChangeNotifier {
       return;
     }
     cancelling = true;
+    _stopRequested = true;
     status = VpnStatus.disconnecting;
     notifyListeners();
     try {
@@ -488,6 +543,7 @@ class AppController extends ChangeNotifier {
       _reconnectTimer?.cancel();
     }
     _wantConnected = true;
+    _stopRequested = false;
     final r = await _connectOnce(switching: switching);
     if (r == ConnectResult.needPlan) {
       _wantConnected = false;
@@ -524,7 +580,11 @@ class AppController extends ChangeNotifier {
         await session.saveProfile(profile);
       } on ApiException catch (e) {
         if (e.unauthorized) {
-          await logout();
+          await _onUnauthorized();
+          if (cancelled()) return ConnectResult.cancelled;
+          status = VpnStatus.disconnected;
+          message = tr('登录已刷新，请再点一次连接');
+          notifyListeners();
           return ConnectResult.failed;
         }
         // API unreachable: reuse the last profile for the same node and mode.
@@ -568,6 +628,7 @@ class AppController extends ChangeNotifier {
     _wasConnected = false;
     _reconnectTimer?.cancel();
     _reconnectAttempt = 0;
+    _stopRequested = true;
     status = VpnStatus.disconnecting;
     notifyListeners();
     try {
@@ -576,7 +637,24 @@ class AppController extends ChangeNotifier {
       status = VpnStatus.disconnected;
       notifyListeners();
     }
+    // The native side reports when the tunnel is down; if that report never
+    // comes (iOS without a tunnel manager yet, a dead service), don't leave
+    // the UI stuck on 断开中.
+    _disconnectWatchdog?.cancel();
+    _disconnectWatchdog = Timer(const Duration(seconds: 8), () async {
+      if (status != VpnStatus.disconnecting) return;
+      VpnStatus s = VpnStatus.disconnected;
+      try {
+        s = await Vpn.status();
+      } catch (_) {}
+      if (status != VpnStatus.disconnecting) return;
+      status = s == VpnStatus.connected ? VpnStatus.connected : VpnStatus.disconnected;
+      notifyListeners();
+    });
   }
+
+  /// Called when the app goes to the background.
+  void onPaused() => foreground = false;
 
   Future<void> _waitFor(VpnStatus target, Duration timeout) async {
     final end = DateTime.now().add(timeout);
