@@ -18,6 +18,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"vpnplatform/server/internal/netguard"
 )
 
 //go:embed base.json
@@ -112,7 +114,8 @@ type AIConfig struct {
 
 func (c AIConfig) Ready() bool { return c.BaseURL != "" && c.APIKey != "" && c.Model != "" }
 
-var httpClient = &http.Client{Timeout: 90 * time.Second}
+// Admin-configured endpoint: no cloud metadata, no redirects (netguard).
+var httpClient = netguard.Client(90 * time.Second)
 
 // Translate sends one batch of keys and returns the translations it got back.
 // Keys missing from the reply are simply absent.

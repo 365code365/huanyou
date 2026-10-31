@@ -182,6 +182,9 @@ func Build(p Params) (string, error) {
 		rules = append(rules, map[string]any{"network": "tcp,udp", "balancerTag": "proxy"})
 	default: // direct, cluster: mainland China direct, the rest proxied
 		rules = append(rules,
+			// Major Chinese services by name: their overseas CDN answers would
+			// miss the IP rule below (see cnDomains).
+			map[string]any{"domain": domainMatchers(cnDomains), "outboundTag": "direct"},
 			map[string]any{"ip": []string{"ext:" + CNGeoIPFile + ":cn"}, "outboundTag": "direct"},
 			map[string]any{"network": "tcp,udp", "balancerTag": "proxy"},
 		)
@@ -190,10 +193,13 @@ func Build(p Params) (string, error) {
 	cfg := map[string]any{
 		// Privacy: no per-connection or DNS logging on the device either.
 		"log": map[string]any{"loglevel": "warning", "access": "none", "dnsLog": false},
-		// DNS over HTTPS, routed through the tunnel (dns-module -> proxy rule):
-		// neither the local network nor the node's upstream ISP sees the
-		// queried names. IP-literal endpoints need no bootstrap resolution.
-		"dns": dnsConfig(p.DirectDomains, p.DirectHosts),
+		// DNS over HTTPS. Names of proxied traffic are resolved through the
+		// tunnel (dns-module -> proxy rule), so neither the local network nor
+		// the node's ISP sees them; names whose traffic goes direct anyway
+		// (major Chinese services, everything but AI in AI mode) use domestic
+		// DoH from the device (see dnsConfig). IP-literal endpoints need no
+		// bootstrap resolution.
+		"dns": dnsConfig(p.Mode, p.DirectDomains, p.DirectHosts, p.AIDomains),
 		"inbounds": []any{map[string]any{
 			"tag":      "tun-in",
 			"protocol": "tun",
@@ -229,9 +235,32 @@ func Build(p Params) (string, error) {
 	return string(b), nil
 }
 
-// dnsConfig: DNS over HTTPS through the tunnel, except the API's own host,
-// which the system resolver answers (fast, and it is our own domain).
-func dnsConfig(direct []string, hosts map[string][]string) map[string]any {
+// Resolvers. Tunnel DoH goes through the proxy (dns-module -> proxy rule):
+// neither the local network nor the node's ISP sees the names. Domestic DoH
+// ("+local": not routed, straight from the device) is for names whose
+// traffic goes direct anyway, so it reveals nothing new.
+var (
+	tunnelDoH   = []string{"https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"}
+	domesticDoH = []string{"https+local://223.5.5.5/dns-query", "https+local://1.12.12.12/dns-query"}
+)
+
+func domainMatchers(ds []string) []string {
+	out := make([]string, 0, len(ds))
+	for _, d := range ds {
+		out = append(out, "domain:"+d)
+	}
+	return out
+}
+
+// dnsConfig picks a resolver by where the traffic goes:
+//   - the API's own host: the system resolver (fast, our own domain);
+//   - 智能 / 集群: major Chinese services at home (they go direct, and get
+//     their domestic CDN), everything else through the tunnel;
+//   - AI 优先: only AI services are proxied, so only their names go through
+//     the tunnel; the rest is resolved at home and keeps working even when
+//     no node is reachable;
+//   - 全局: everything through the tunnel.
+func dnsConfig(mode Mode, direct []string, hosts map[string][]string, aiDomains []string) map[string]any {
 	servers := []any{}
 	if len(direct) > 0 {
 		full := make([]string, 0, len(direct))
@@ -240,8 +269,34 @@ func dnsConfig(direct []string, hosts map[string][]string) map[string]any {
 		}
 		servers = append(servers, map[string]any{"address": "localhost", "domains": full, "skipFallback": true})
 	}
-	servers = append(servers, "https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query")
-	cfg := map[string]any{"tag": "dns-module", "queryStrategy": "UseIPv4", "servers": servers}
+	only := func(addrs []string, domains []string) {
+		for _, a := range addrs {
+			servers = append(servers, map[string]any{"address": a, "domains": domains, "skipFallback": true})
+		}
+	}
+	switch mode {
+	case ModeAI:
+		if len(aiDomains) == 0 {
+			aiDomains = config.DefaultAIDomains
+		}
+		only(tunnelDoH, domainMatchers(aiDomains))
+		for _, a := range domesticDoH {
+			servers = append(servers, a)
+		}
+	case ModeGlobal:
+		for _, a := range tunnelDoH {
+			servers = append(servers, a)
+		}
+	default:
+		only(domesticDoH, domainMatchers(cnDomains))
+		for _, a := range tunnelDoH {
+			servers = append(servers, a)
+		}
+	}
+	cfg := map[string]any{"tag": "dns-module", "queryStrategy": "UseIPv4", "servers": servers,
+		// A name with its own resolvers never falls back to the others: an AI
+		// name is never sent to the domestic resolver when the tunnel is down.
+		"disableFallbackIfMatch": true}
 	if len(hosts) > 0 {
 		h := map[string]any{}
 		for d, ips := range hosts {

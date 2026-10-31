@@ -125,6 +125,9 @@ func (s *Server) adminBackupInfo(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminRestore(w http.ResponseWriter, r *http.Request) {
 	rc := http.NewResponseController(w)
 	_ = rc.SetReadDeadline(time.Now().Add(30 * time.Minute))
+	// The write deadline is armed when the request arrives: without this the
+	// reply to a long upload would never reach the panel.
+	_ = rc.SetWriteDeadline(time.Now().Add(31 * time.Minute))
 	r.Body = http.MaxBytesReader(w, r.Body, 2<<30)
 	mr, err := r.MultipartReader()
 	if err != nil {
@@ -193,10 +196,7 @@ func (s *Server) adminRestore(w http.ResponseWriter, r *http.Request) {
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
-	go func() {
-		time.Sleep(800 * time.Millisecond)
-		os.Exit(0) // systemd (Restart=always) brings us back; main applies the restore
-	}()
+	restartSoon() // main applies the staged restore when it starts again
 }
 
 // ---- clone ----

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -240,6 +241,22 @@ func LoadNode(path string) (*NodeAgent, error) {
 		return nil, errors.New("reality.short_ids must not be empty")
 	case c.XHTTPPath != "" && !strings.HasPrefix(c.XHTTPPath, "/"):
 		return nil, errors.New("xhttp_path must start with /")
+	}
+	if !strings.HasPrefix(c.APIURL, "https://") && !strings.HasPrefix(c.APIURL, "http://127.0.0.1") && !strings.HasPrefix(c.APIURL, "http://localhost") {
+		// Not refused (a running node must keep starting), but the token and
+		// every user's UUID travel to this URL in the clear.
+		slog.Warn("api_url is not https: the node token and user ids are sent unencrypted", "api_url", c.APIURL)
+	}
+	if c.SyncIntervalSeconds <= 0 {
+		c.SyncIntervalSeconds = 30
+	}
+	c.SyncIntervalSeconds = min(max(c.SyncIntervalSeconds, 5), 300)
+	// Privacy: Xray's info / debug messages name the destinations users
+	// visit ("dialing to …"); only warnings and errors are ever logged.
+	switch c.LogLevel {
+	case "warning", "error", "none":
+	default:
+		c.LogLevel = "warning"
 	}
 	return c, nil
 }

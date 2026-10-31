@@ -11,6 +11,11 @@ EnvironmentFile=/etc/vpn/api.env
 ExecStart=/usr/local/bin/vpn-api -config /etc/vpn/api.json
 Restart=always
 RestartSec=3
+# With a node on the same server, every node connection passes through the
+# API's SNI router (two descriptors each).
+LimitNOFILE=1048576
+# Room to finish requests and flush buffers on stop / restart.
+TimeoutStopSec=30
 StateDirectory=vpn
 NoNewPrivileges=true
 ProtectSystem=strict

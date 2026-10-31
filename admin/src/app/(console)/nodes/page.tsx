@@ -7,7 +7,7 @@ import { NodeHealth } from '@/components/NodeHealth'
 import { PageCard } from '@/components/PageCard'
 import { useAction, useAsync } from '@/hooks/useAsync'
 import { useCatalog } from '@/hooks/useCatalog'
-import { api, type VpnNode } from '@/lib/api'
+import { api, ApiError, type VpnNode } from '@/lib/api'
 import { bytes, dateTime, errMsg, expiryText, flag } from '@/lib/format'
 import { ProvisionModal } from './ProvisionModal'
 import { RentalFields } from '@/components/ExpiryField'
@@ -155,20 +155,49 @@ export default function NodesPage() {
     setUpLog('')
     setUpgrading(n)
   }
-  const doUpgrade = async () => {
+  const doUpgrade = async (trustHostKey?: string) => {
     const v = await upForm.validateFields()
     setUpBusy(true)
     setUpLog('')
     try {
-      const r = await api.nodes.upgrade(upgrading!.id, v)
+      const r = await api.nodes.upgrade(upgrading!.id, { ...v, trust_host_key: trustHostKey })
       setUpLog(r.log)
       message.success('节点程序已升级并重启')
     } catch (e) {
-      message.error(errMsg(e))
+      const data = e instanceof ApiError ? e.data : {}
+      if (typeof data.log === 'string') setUpLog(data.log)
+      if (e instanceof ApiError && e.code === 'host_key_mismatch' && typeof data.host_key === 'string' && data.host_key) {
+        confirmNewHostKey(String(data.pinned ?? ''), data.host_key)
+      } else {
+        message.error(errMsg(e))
+      }
     } finally {
       setUpBusy(false)
     }
   }
+  // The server shows another SSH host key than the one recorded at install:
+  // a re-installed system, or someone in between. Only the operator can tell.
+  const confirmNewHostKey = (pinned: string, seen: string) =>
+    modal.confirm({
+      title: 'SSH 主机密钥已变化',
+      width: 560,
+      content: (
+        <>
+          <p>服务器出示的主机密钥与安装时记录的不一致。可能是服务器重装过系统，也可能有人在中间拦截。</p>
+          <p style={{ marginBottom: 4 }}>记录的：</p>
+          <Typography.Text code copyable style={{ wordBreak: 'break-all' }}>{pinned || '（无）'}</Typography.Text>
+          <p style={{ margin: '8px 0 4px' }}>现在的：</p>
+          <Typography.Text code copyable style={{ wordBreak: 'break-all' }}>{seen}</Typography.Text>
+          <p style={{ marginTop: 12 }} className="muted">
+            请先在服务商的网页控制台（VNC）登录服务器，运行 <Typography.Text code>ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub</Typography.Text>，
+            确认与「现在的」一致后再信任。
+          </p>
+        </>
+      ),
+      okText: '已核实，信任新密钥并升级',
+      okButtonProps: { danger: true },
+      onOk: () => doUpgrade(seen),
+    })
 
   const rotateToken = (n: VpnNode) =>
     modal.confirm({
@@ -492,7 +521,7 @@ export default function NodesPage() {
         open={!!upgrading}
         title={`升级节点程序 · ${upgrading?.name ?? ''}`}
         onCancel={() => !upBusy && setUpgrading(undefined)}
-        onOk={doUpgrade}
+        onOk={() => doUpgrade()}
         okText="开始升级"
         confirmLoading={upBusy}
         destroyOnHidden

@@ -34,6 +34,24 @@ type siteVariant struct {
 	Label, Size, URL string
 }
 
+// Href is URL for an href attribute. html/template rewrites any scheme but
+// http(s) / mailto to "#ZgotmplZ", which broke the iPhone install button
+// (itms-services://). These URLs come from the server or the admin, never
+// from a visitor; any other scheme is still refused.
+func (v siteVariant) Href() template.URL { return safeHref(v.URL) }
+
+// Href: see siteVariant.Href.
+func (b *siteBuild) Href() template.URL { return safeHref(b.URL) }
+
+func safeHref(u string) template.URL {
+	l := strings.ToLower(u)
+	if strings.HasPrefix(l, "https://") || strings.HasPrefix(l, "http://") || strings.HasPrefix(l, "itms-services://") ||
+		(strings.HasPrefix(u, "/") && !strings.HasPrefix(u, "//")) {
+		return template.URL(u)
+	}
+	return "#"
+}
+
 // latestBuild resolves what the site offers for a platform, in priority:
 // the latest published release, the share-settings link, the legacy APK.
 // A build published for several CPUs shows the first ABI of the platform

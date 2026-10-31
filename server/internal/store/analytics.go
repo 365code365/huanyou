@@ -184,7 +184,7 @@ func (s *Store) UniqueVisitors(ctx context.Context, since string) (int64, error)
 }
 
 func (s *Store) PurgeEvents(ctx context.Context, beforeDay string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM app_events WHERE day < ?`, beforeDay)
+	_, err := s.deleteBatched(ctx, "app_events", "day < ?", beforeDay)
 	return err
 }
 
@@ -296,6 +296,6 @@ func (s *Store) CrashCount(ctx context.Context, since int64) (groups, reports in
 }
 
 func (s *Store) PurgeCrashes(ctx context.Context, before int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM crash_reports WHERE last_at < ?`, before)
+	_, err := s.deleteBatched(ctx, "crash_reports", "last_at < ?", before)
 	return err
 }

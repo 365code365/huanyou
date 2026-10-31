@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -415,6 +416,11 @@ func newProviders(cfg *config.API) ([]payment.Provider, *payment.Mock, error) {
 }
 
 // handleTraffic receives per-user traffic deltas from a node.
+//
+// Agents from 1.2.5 on tag each report with a batch id and send a report
+// again, unchanged, until it is acknowledged; the store records the ids it
+// applied (same transaction as the counters), so a report whose response was
+// lost is never counted twice.
 func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 	node := s.authNode(r)
 	if node == nil {
@@ -422,6 +428,7 @@ func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
+		Batch   string `json:"batch"`
 		Traffic []struct {
 			Email string `json:"email"`
 			Up    int64  `json:"up"`
@@ -435,56 +442,78 @@ func (s *Server) handleTraffic(w http.ResponseWriter, r *http.Request) {
 	if !decodeBody(w, r, &body) {
 		return
 	}
+	if body.Batch != "" && !batchIDPattern.MatchString(body.Batch) {
+		writeErr(w, http.StatusBadRequest, "bad_batch", "bad batch id")
+		return
+	}
+	if body.Batch != "" {
+		// The agent retries a report it got no answer for; if the first try is
+		// still running, let it finish rather than racing it.
+		key := node.ID + "/" + body.Batch
+		if _, busy := s.trafficInflight.LoadOrStore(key, struct{}{}); busy {
+			writeErr(w, http.StatusConflict, "batch_in_progress", "batch in progress")
+			return
+		}
+		defer s.trafficInflight.Delete(key)
+	}
+	// Saturating sums: values are capped per entry, so no sum can overflow.
+	sat := func(a, b int64) int64 { return min(a+b, store.MaxTrafficDelta) }
 	usage := map[int64]store.Traffic{}
 	var nodeBytes int64
 	for _, t := range body.Traffic {
-		if t.Up > 0 {
-			nodeBytes += t.Up
+		if t.Up < 0 || t.Down < 0 || t.Up > store.MaxTrafficDelta || t.Down > store.MaxTrafficDelta {
+			continue
 		}
-		if t.Down > 0 {
-			nodeBytes += t.Down
-		}
+		nodeBytes = sat(nodeBytes, sat(t.Up, t.Down))
 		id, ok := store.ParseXrayEmail(strings.TrimSpace(t.Email))
 		if !ok {
 			continue
 		}
 		cur := usage[id]
-		usage[id] = store.Traffic{Up: cur.Up + t.Up, Down: cur.Down + t.Down}
+		usage[id] = store.Traffic{Up: sat(cur.Up, t.Up), Down: sat(cur.Down, t.Down)}
 	}
 	active := len(usage)
-	for email, ips := range body.IPs {
-		id, ok := store.ParseXrayEmail(strings.TrimSpace(email))
-		if !ok {
-			continue
-		}
-		n := 0
-		for ip, hits := range ips {
-			if n++; n > 64 { // bound per report
-				break
-			}
-			s.recordIP(id, ip, "node", node.ID, max(hits, 0))
-		}
-	}
 	// 流量倍率: bill traffic on this node at its rate (raw bytes stay in node stats).
 	if r := node.Rate; r > 0 && r != 1 {
 		for id, t := range usage {
-			usage[id] = store.Traffic{Up: int64(float64(t.Up) * r), Down: int64(float64(t.Down) * r)}
+			usage[id] = store.Traffic{Up: min(int64(float64(t.Up)*r), store.MaxTrafficDelta), Down: min(int64(float64(t.Down)*r), store.MaxTrafficDelta)}
 		}
 	}
 	// Members share their owner's quota: book their traffic on the owner.
-	if usage, err := s.store.FoldToOwners(r.Context(), usage); err != nil {
-		s.internal(w, err)
-		return
-	} else if err := s.store.AddTraffic(r.Context(), usage, time.Now(),
-		time.Duration(s.cat().TrafficPeriodDays)*24*time.Hour); err != nil {
+	usage, err := s.store.FoldToOwners(r.Context(), usage)
+	if err != nil {
 		s.internal(w, err)
 		return
 	}
-	if s.monitor != nil {
-		s.monitor.AddTraffic(node.ID, nodeBytes, active)
+	applied, err := s.store.AddTraffic(r.Context(), usage, time.Now(),
+		time.Duration(s.cat().TrafficPeriodDays)*24*time.Hour, store.TrafficBatch{Node: node.ID, ID: body.Batch})
+	if err != nil {
+		s.internal(w, err)
+		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	if applied {
+		// Only once per report, like the counters.
+		for email, ips := range body.IPs {
+			id, ok := store.ParseXrayEmail(strings.TrimSpace(email))
+			if !ok {
+				continue
+			}
+			n := 0
+			for ip, hits := range ips {
+				if n++; n > 64 { // bound per report
+					break
+				}
+				s.recordIP(id, ip, "node", node.ID, max(hits, 0))
+			}
+		}
+		if s.monitor != nil {
+			s.monitor.AddTraffic(node.ID, nodeBytes, active)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "duplicate": !applied})
 }
+
+var batchIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
 
 func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request, u *store.User) {
 	since := time.Now().AddDate(0, 0, -29).Format("2006-01-02")

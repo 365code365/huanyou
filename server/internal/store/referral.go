@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -39,7 +40,7 @@ func (s *Store) EnsureRefCodes(ctx context.Context) error {
 	}
 	rows.Close()
 	for _, id := range ids {
-		for {
+		for attempt := 0; ; attempt++ {
 			code, err := newRefCode()
 			if err != nil {
 				return err
@@ -48,20 +49,24 @@ func (s *Store) EnsureRefCodes(ctx context.Context) error {
 			if err == nil {
 				break
 			}
-			// retry on the rare code collision
+			// Retry only the rare code collision; anything else (busy, read-only
+			// disk, database down) must not spin forever at startup.
+			if !isUnique(err) || attempt >= 20 {
+				return fmt.Errorf("assign invite code to user %d: %w", id, err)
+			}
 		}
 	}
 	return nil
 }
 
 func (s *Store) UserByRefCode(ctx context.Context, code string) (*User, error) {
-	return scanUser(s.db.QueryRowContext(ctx, `SELECT `+userCols+` FROM users WHERE ref_code = ?`, code))
+	return scanUser(s.db.QueryRowContext(ctx, `SELECT `+userCols+` FROM users WHERE ref_code = ? AND ref_code <> ''`, code))
 }
 
 // CountInvited returns how many users were invited by inviterID.
 func (s *Store) CountInvited(ctx context.Context, inviterID int64) (int, error) {
 	var n int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE invited_by = ?`, inviterID).Scan(&n)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE invited_by = ? AND invited_by <> 0`, inviterID).Scan(&n)
 	return n, err
 }
 
@@ -106,8 +111,13 @@ func (s *Store) ApplyReferral(ctx context.Context, newUserID, inviterID int64,
 		out.InviteeDays = inviteeDays
 	}
 	if inviterDays > 0 {
+		// Lock the inviter first, so concurrent sign-ups with one code can't
+		// all pass the invite cap (SQLite already holds the write lock).
+		if _, err := lockUser(ctx, tx, inviterID); err != nil {
+			return nil, err
+		}
 		var invited int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE invited_by = ?`, inviterID).Scan(&invited); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE invited_by = ? AND invited_by <> 0`, inviterID).Scan(&invited); err != nil {
 			return nil, err
 		}
 		if maxInvites == 0 || invited <= maxInvites {

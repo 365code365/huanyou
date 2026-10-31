@@ -2,6 +2,8 @@ package api
 
 import (
 	"net/http"
+	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -219,8 +221,8 @@ func (s *Server) adminPutAIConfig(w http.ResponseWriter, r *http.Request) {
 	if in.APIKey == "" || strings.Contains(in.APIKey, "…") || strings.Contains(in.APIKey, "•") {
 		in.APIKey = cur.APIKey // unchanged (the panel only sees the masked key)
 	}
-	if in.BaseURL != "" && !strings.HasPrefix(in.BaseURL, "https://") && !strings.HasPrefix(in.BaseURL, "http://") {
-		writeErr(w, http.StatusBadRequest, "bad_url", "接口地址需以 https:// 开头")
+	if in.BaseURL != "" && !aiURLAllowed(in.BaseURL) {
+		writeErr(w, http.StatusBadRequest, "bad_url", "接口地址需以 https:// 开头（http:// 只允许本机或内网地址）")
 		return
 	}
 	if err := s.store.PutSetting(r.Context(), aiSettingKey, in); err != nil {
@@ -228,4 +230,25 @@ func (s *Server) adminPutAIConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ready": in.Ready(), "base_url": in.BaseURL, "model": in.Model, "api_key": maskKey(in.APIKey)})
+}
+
+// aiURLAllowed: https anywhere; plain http only to loopback / private hosts
+// (a self-hosted model), since the API key travels with every request.
+func aiURLAllowed(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil {
+		return false
+	}
+	switch u.Scheme {
+	case "https":
+		return true
+	case "http":
+		h := u.Hostname()
+		if h == "localhost" {
+			return true
+		}
+		a, err := netip.ParseAddr(h)
+		return err == nil && (a.IsLoopback() || a.IsPrivate())
+	}
+	return false
 }

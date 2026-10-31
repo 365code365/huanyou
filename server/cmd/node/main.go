@@ -19,6 +19,7 @@ import (
 
 	"vpnplatform/server/internal/config"
 	"vpnplatform/server/internal/keys"
+	"vpnplatform/server/internal/memlimit"
 	"vpnplatform/server/internal/node"
 )
 
@@ -33,6 +34,7 @@ func main() {
 
 	reexecWithoutSplice()
 
+	memlimit.Set(0.5)
 	cfg, err := config.LoadNode(*cfgPath)
 	if err != nil {
 		fatal("load config", err)

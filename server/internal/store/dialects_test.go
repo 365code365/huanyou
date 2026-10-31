@@ -85,6 +85,10 @@ func exercise(t *testing.T, st *Store) {
 			t.Fatal(err)
 		}
 	}
+	must2 := func(_ bool, err error) {
+		t.Helper()
+		must(err)
+	}
 
 	a, err := st.CreateUser(ctx, "Alice_X@Example.com", "hash")
 	must(err)
@@ -125,8 +129,8 @@ func exercise(t *testing.T, st *Store) {
 	must(st.GrantPlanByID(ctx, a.ID, "month", 10))
 
 	// Traffic with period rollover arithmetic (integer division).
-	must(st.AddTraffic(ctx, map[int64]Traffic{a.ID: {100, 200}, d1.ID: {5, 5}}, now, 30*24*time.Hour))
-	must(st.AddTraffic(ctx, map[int64]Traffic{a.ID: {1, 2}}, now, 30*24*time.Hour))
+	must2(st.AddTraffic(ctx, map[int64]Traffic{a.ID: {100, 200}, d1.ID: {5, 5}}, now, 30*24*time.Hour, TrafficBatch{}))
+	must2(st.AddTraffic(ctx, map[int64]Traffic{a.ID: {1, 2}}, now, 30*24*time.Hour, TrafficBatch{}))
 	a, _ = st.UserByID(ctx, a.ID)
 	if a.TrafficUsed != 303 {
 		t.Fatalf("traffic_used = %d", a.TrafficUsed)
@@ -134,11 +138,39 @@ func exercise(t *testing.T, st *Store) {
 	// Force a rollover: period ended long ago.
 	_, err = st.db.ExecContext(ctx, `UPDATE users SET period_start = ? WHERE id = ?`, now.Add(-95*24*time.Hour).Unix(), d1.ID)
 	must(err)
-	must(st.AddTraffic(ctx, map[int64]Traffic{d1.ID: {7, 0}}, now, 30*24*time.Hour))
+	must2(st.AddTraffic(ctx, map[int64]Traffic{d1.ID: {7, 0}}, now, 30*24*time.Hour, TrafficBatch{}))
 	d1, _ = st.UserByID(ctx, d1.ID)
 	if d1.TrafficUsed != 7 || d1.PeriodStart.After(now) || now.Sub(d1.PeriodStart) >= 30*24*time.Hour {
 		t.Fatalf("rollover wrong: used=%d start=%v", d1.TrafficUsed, d1.PeriodStart)
 	}
+	// A batch a node sends again (lost response) is counted once.
+	b := TrafficBatch{Node: "n1", ID: "batch-0001"}
+	if ok, err := st.AddTraffic(ctx, map[int64]Traffic{a.ID: {10, 0}}, now, 30*24*time.Hour, b); err != nil || !ok {
+		t.Fatalf("first batch: %v %v", ok, err)
+	}
+	if ok, err := st.AddTraffic(ctx, map[int64]Traffic{a.ID: {10, 0}}, now, 30*24*time.Hour, b); err != nil || ok {
+		t.Fatalf("repeated batch applied again: %v %v", ok, err)
+	}
+	if ok, _ := st.AddTraffic(ctx, map[int64]Traffic{a.ID: {10, 0}}, now, 30*24*time.Hour, TrafficBatch{Node: "n2", ID: "batch-0001"}); !ok {
+		t.Fatal("same id from another node must apply")
+	}
+	// A report with only source addresses goes through the history too (the
+	// API records its IP hits only when it applied).
+	ipsOnly := TrafficBatch{Node: "n1", ID: "batch-ipsonly"}
+	if ok, err := st.AddTraffic(ctx, nil, now, 30*24*time.Hour, ipsOnly); err != nil || !ok {
+		t.Fatalf("first IP-only batch: %v %v", ok, err)
+	}
+	if ok, err := st.AddTraffic(ctx, nil, now, 30*24*time.Hour, ipsOnly); err != nil || ok {
+		t.Fatalf("repeated IP-only batch applied again: %v %v", ok, err)
+	}
+	// Absurd values are ignored, not summed into an overflow.
+	must2(st.AddTraffic(ctx, map[int64]Traffic{a.ID: {MaxTrafficDelta + 1, 0}}, now, 30*24*time.Hour, TrafficBatch{}))
+	a, _ = st.UserByID(ctx, a.ID)
+	if a.TrafficUsed != 323 {
+		t.Fatalf("traffic_used after batches = %d, want 323", a.TrafficUsed)
+	}
+	_, err = st.db.ExecContext(ctx, `UPDATE traffic_daily SET up = up - 20 WHERE user_id = ?`, a.ID)
+	must(err)
 	usage, err := st.Usage(ctx, a.ID, "2000-01-01")
 	must(err)
 	if len(usage) != 1 || usage[0].Up != 101 || usage[0].Down != 202 {
@@ -294,6 +326,26 @@ func exercise(t *testing.T, st *Store) {
 		t.Fatalf("crashes: %+v", cr)
 	}
 	must(st.SetCrashResolved(ctx, cid, true))
+
+	// Retention purges (batched DELETE, written per dialect): nothing newer
+	// than the cut goes, everything older does.
+	if n, err := st.PurgeIPs(ctx, now.Unix()-3600); err != nil || n != 0 {
+		t.Fatalf("purge of nothing old: %d %v", n, err)
+	}
+	if n, err := st.PurgeIPs(ctx, now.Unix()+3600); err != nil || n == 0 {
+		t.Fatalf("purge ips: %d %v", n, err)
+	}
+	if left, err := st.UserIPs(ctx, IPFilter{Limit: 10}); err != nil || len(left.Items) != 0 {
+		t.Fatalf("ip records left: %+v %v", left, err)
+	}
+	must(st.PurgeEvents(ctx, now.AddDate(0, 0, 1).Format("2006-01-02")))
+	if ds, err := st.DailyStats(ctx, now, 7); err != nil || ds[len(ds)-1].Opens != 0 {
+		t.Fatalf("events left after purge: %+v %v", ds, err)
+	}
+	must(st.PurgeCrashes(ctx, now.Unix()+3600))
+	if cr, err := st.Crashes(ctx, true, 10); err != nil || len(cr) != 0 {
+		t.Fatalf("crashes left after purge: %+v %v", cr, err)
+	}
 
 	// Delete a user with children everywhere.
 	must(st.DeleteUser(ctx, d1.ID))

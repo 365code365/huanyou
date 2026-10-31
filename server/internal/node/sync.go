@@ -3,12 +3,15 @@ package node
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -35,12 +38,41 @@ type Syncer struct {
 	current   map[string]string // email -> uuid
 	etag      string            // last user list version; the API answers 304 if unchanged
 	blocked   string            // last applied blocked-source list (joined), to skip no-op updates
+	// The API refused this node's token (deleted, token rotated) since this
+	// time; zero while it is accepted.
+	refusedSince time.Time
+	// Traffic not yet acknowledged by the API, oldest first. A batch that
+	// was sent is sent again unchanged (same id) until acknowledged, so the
+	// API can tell a retry from new traffic.
+	queue []trafficBatch
 }
+
+type trafficItem struct {
+	Email string `json:"email"`
+	Up    int64  `json:"up"`
+	Down  int64  `json:"down"`
+}
+
+type trafficBatch struct {
+	ID      string                      `json:"batch"`
+	Traffic []trafficItem               `json:"traffic"`
+	IPs     map[string]map[string]int64 `json:"ips,omitempty"`
+	sent    bool                        // tried at least once: may already be counted, never merge
+}
+
+// maxBatchUsers bounds one report: after a long outage the backlog is cut
+// into reports the API can apply well within the request timeout.
+const maxBatchUsers = 2000
+
+// refuseAfter: how long the API may refuse this node before it stops serving
+// users (the API being down is not a refusal: users keep working then).
+const refuseAfter = 10 * time.Minute
 
 func (s *Syncer) Run(ctx context.Context) {
 	s.client.Timeout = 15 * time.Second
 	s.current = map[string]string{}
 	s.loadCache(ctx)
+	s.loadPending()
 	t := time.NewTicker(s.Interval)
 	defer t.Stop()
 	redial := time.Now()
@@ -65,6 +97,7 @@ func (s *Syncer) Run(ctx context.Context) {
 			flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			_ = s.reportTraffic(flushCtx)
 			cancel()
+			s.savePending() // whatever is still unsent survives the restart
 			return
 		case <-t.C:
 		}
@@ -102,26 +135,142 @@ func (s *Syncer) do(ctx context.Context, method, path string, body any, out any)
 }
 
 func (s *Syncer) reportTraffic(ctx context.Context) error {
-	usage := s.Stats.Drain()
-	ips := s.Stats.DrainIPs()
-	if len(usage) == 0 && len(ips) == 0 {
-		return nil
+	if usage, ips := s.Stats.Drain(), s.Stats.DrainIPs(); len(usage) > 0 || len(ips) > 0 {
+		s.enqueue(usage, ips)
 	}
-	type item struct {
-		Email string `json:"email"`
-		Up    int64  `json:"up"`
-		Down  int64  `json:"down"`
+	for len(s.queue) > 0 {
+		b := &s.queue[0]
+		if !b.sent {
+			// On disk as sent before it leaves: the API may count it, so after
+			// a crash it must go again under the same id, never be merged into
+			// a new report.
+			b.sent = true
+			s.savePending()
+		}
+		if err := s.do(ctx, http.MethodPost, "/internal/v1/traffic", b, nil); err != nil {
+			return err
+		}
+		s.queue = s.queue[1:]
 	}
-	items := make([]item, 0, len(usage))
-	for email, u := range usage {
-		items = append(items, item{email, u.Up, u.Down})
-	}
-	// ips: {email: {source ip: new connections}} — source addresses only.
-	if err := s.do(ctx, http.MethodPost, "/internal/v1/traffic", map[string]any{"traffic": items, "ips": ips}, nil); err != nil {
-		s.Stats.Restore(usage) // retry next round
-		return err
-	}
+	s.savePending()
 	return nil
+}
+
+// enqueue adds new traffic to the queue. Batches never sent are merged with
+// it (one report instead of one per failed round); a batch that was sent is
+// kept as it is, since the API may already have counted it.
+func (s *Syncer) enqueue(usage map[string]Usage, ips map[string]map[string]int64) {
+	merged := map[string]Usage{}
+	mergedIPs := map[string]map[string]int64{}
+	keep := s.queue[:0]
+	for _, b := range s.queue {
+		if b.sent {
+			keep = append(keep, b)
+			continue
+		}
+		for _, it := range b.Traffic {
+			u := merged[it.Email]
+			merged[it.Email] = Usage{Up: u.Up + it.Up, Down: u.Down + it.Down}
+		}
+		addIPs(mergedIPs, b.IPs)
+	}
+	for email, u := range usage {
+		m := merged[email]
+		merged[email] = Usage{Up: m.Up + u.Up, Down: m.Down + u.Down}
+	}
+	addIPs(mergedIPs, ips)
+	s.queue = keep
+	var items []trafficItem
+	for email, u := range merged {
+		items = append(items, trafficItem{email, u.Up, u.Down})
+	}
+	first := true
+	for len(items) > 0 || first {
+		n := min(len(items), maxBatchUsers)
+		b := trafficBatch{ID: newBatchID(), Traffic: items[:n]}
+		if first {
+			b.IPs, first = mergedIPs, false // source addresses ride with the first report
+		}
+		items = items[n:]
+		if len(b.Traffic) > 0 || len(b.IPs) > 0 {
+			s.queue = append(s.queue, b)
+		}
+	}
+}
+
+func addIPs(dst, src map[string]map[string]int64) {
+	for email, m := range src {
+		if dst[email] == nil {
+			dst[email] = map[string]int64{}
+		}
+		for ip, n := range m {
+			dst[email][ip] += n
+		}
+	}
+}
+
+func newBatchID() string {
+	var b [12]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
+// pendingFile keeps unacknowledged traffic across restarts (next to the user cache).
+func (s *Syncer) pendingFile() string {
+	if s.CacheFile == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(s.CacheFile), "pending-traffic.json")
+}
+
+type pendingBatch struct {
+	trafficBatch
+	Sent bool `json:"sent"`
+}
+
+func (s *Syncer) savePending() {
+	p := s.pendingFile()
+	if p == "" {
+		return
+	}
+	if len(s.queue) == 0 {
+		_ = os.Remove(p)
+		return
+	}
+	out := make([]pendingBatch, len(s.queue))
+	for i, b := range s.queue {
+		out[i] = pendingBatch{b, b.sent}
+	}
+	raw, err := json.Marshal(out)
+	if err != nil {
+		return
+	}
+	tmp := p + ".tmp"
+	if os.WriteFile(tmp, raw, 0o600) == nil {
+		_ = os.Rename(tmp, p)
+	}
+}
+
+func (s *Syncer) loadPending() {
+	p := s.pendingFile()
+	if p == "" {
+		return
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		return
+	}
+	var in []pendingBatch
+	if json.Unmarshal(raw, &in) != nil {
+		return
+	}
+	for _, b := range in {
+		b.trafficBatch.sent = b.Sent
+		s.queue = append(s.queue, b.trafficBatch)
+	}
+	if len(s.queue) > 0 {
+		slog.Info("unsent traffic restored", "reports", len(s.queue))
+	}
 }
 
 func (s *Syncer) syncUsers(ctx context.Context) error {
@@ -145,8 +294,38 @@ func (s *Syncer) syncUsers(ctx context.Context) error {
 	defer resp.Body.Close()
 	switch resp.StatusCode {
 	case http.StatusNotModified:
+		s.refusedSince = time.Time{}
+		s.touchCache()
 		return nil // nothing changed since the last sync
 	case http.StatusOK:
+		s.refusedSince = time.Time{}
+	case http.StatusUnauthorized, http.StatusForbidden:
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		var e struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(b, &e)
+		if resp.StatusCode != http.StatusUnauthorized || e.Error != "unauthorized" {
+			// Not the API refusing this node's token: its abuse guard banning
+			// this address ("ip_blocked"), a WAF or proxy in front of it.
+			// That passes; keep serving the current list.
+			return fmt.Errorf("GET /internal/v1/users: status %d: %s", resp.StatusCode, b)
+		}
+		// The API is up but no longer accepts this node (deleted, token
+		// rotated): after a grace period, stop admitting users instead of
+		// serving the last list forever.
+		if s.refusedSince.IsZero() {
+			s.refusedSince = time.Now()
+		}
+		if time.Since(s.refusedSince) > refuseAfter && len(s.current) > 0 {
+			slog.Error("API refuses this node: no users are served until it is accepted again")
+			_, _ = s.apply(ctx, nil, 0, nil)
+			s.etag = ""
+			if s.CacheFile != "" {
+				_ = os.Remove(s.CacheFile)
+			}
+		}
+		return fmt.Errorf("GET /internal/v1/users: status %d", resp.StatusCode)
 	default:
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return fmt.Errorf("GET /internal/v1/users: status %d: %s", resp.StatusCode, b)
@@ -158,16 +337,36 @@ func (s *Syncer) syncUsers(ctx context.Context) error {
 	if err := json.Unmarshal(raw, &body); err != nil {
 		return err
 	}
-	if err := s.apply(ctx, body.Users, body.BandwidthMbps, body.BlockedIPs); err != nil {
+	failed, err := s.apply(ctx, body.Users, body.BandwidthMbps, body.BlockedIPs)
+	if err != nil {
 		return err
 	}
-	s.etag = resp.Header.Get("ETag")
+	// After a partly failed apply the version is not remembered, so the next
+	// sync gets the full list again and retries the users that could not be
+	// added. (A failed removal is not retried: Xray fails it only for a user
+	// it doesn't have.)
+	if failed == 0 {
+		s.etag = resp.Header.Get("ETag")
+	} else {
+		s.etag = ""
+	}
 	s.saveCache(raw)
 	return nil
 }
 
-// apply makes Xray serve exactly users (plus speed limits and blocked sources).
-func (s *Syncer) apply(ctx context.Context, users []remoteUser, bandwidthMbps int, blockedIPs []string) error {
+// touchCache marks the cached list as current (a 304 confirms it), so its
+// age check at start measures the last confirmation, not the last change.
+func (s *Syncer) touchCache() {
+	if s.CacheFile == "" {
+		return
+	}
+	now := time.Now()
+	_ = os.Chtimes(s.CacheFile, now, now)
+}
+
+// apply makes Xray serve exactly users (plus speed limits and blocked
+// sources). failed counts users that could not be added or removed.
+func (s *Syncer) apply(ctx context.Context, users []remoteUser, bandwidthMbps int, blockedIPs []string) (failed int, err error) {
 	var body struct {
 		Users         []remoteUser
 		BandwidthMbps int
@@ -195,6 +394,12 @@ func (s *Syncer) apply(ctx context.Context, users []remoteUser, bandwidthMbps in
 		if w, ok := want[email]; !ok || w.UUID != uuid {
 			if err := s.Xray.RemoveUser(ctx, email); err != nil {
 				slog.Warn("remove user", "err", err)
+				failed++
+			}
+			if !ok {
+				// No longer allowed: also stop the connections already open
+				// (RemoveUser only refuses new ones).
+				s.Stats.Revoke(email, true)
 			}
 			delete(s.current, email)
 			removed++
@@ -207,15 +412,17 @@ func (s *Syncer) apply(ctx context.Context, users []remoteUser, bandwidthMbps in
 		}
 		if err := s.Xray.AddUser(ctx, email, u.UUID); err != nil {
 			slog.Warn("add user", "err", err)
+			failed++
 			continue
 		}
+		s.Stats.Revoke(email, false)
 		s.current[email] = u.UUID
 		added++
 	}
 	if added+removed > 0 {
 		slog.Info("users synced", "added", added, "removed", removed, "total", len(s.current))
 	}
-	return nil
+	return failed, nil
 }
 
 // loadCache restores the last user list at start (before the API answers).
@@ -238,7 +445,7 @@ func (s *Syncer) loadCache(ctx context.Context) {
 	if json.Unmarshal(raw, &body) != nil {
 		return
 	}
-	if err := s.apply(ctx, body.Users, body.BandwidthMbps, body.BlockedIPs); err == nil {
+	if _, err := s.apply(ctx, body.Users, body.BandwidthMbps, body.BlockedIPs); err == nil {
 		slog.Info("users restored from cache", "users", len(body.Users))
 	}
 }

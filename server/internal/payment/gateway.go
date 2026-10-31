@@ -8,12 +8,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"vpnplatform/server/internal/netguard"
 )
 
 // Gateway is the "下单链接" integration with an external payment center:
@@ -62,7 +63,7 @@ func NewGateway(payLink, queryURL, merchantID, signKeyHex, encKeyHex string) (*G
 		return nil, errors.New("gateway: merchant_id required")
 	}
 	return &Gateway{PayLink: payLink, QueryURL: queryURL, codec: &Cashier{MerchantID: merchantID, SignKey: sk, EncKey: ek,
-		HTTP: &http.Client{Timeout: httpTimout}}}, nil
+		HTTP: netguard.Client(httpTimout)}}, nil
 }
 
 // NewKeys generates a merchant id and fresh keys (hex).

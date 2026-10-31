@@ -209,7 +209,9 @@ func writeAttr(sb *strings.Builder, group string, a slog.Attr) {
 		return
 	}
 	v := a.Value.String()
-	if strings.ContainsAny(v, " \t\"=") {
+	// Quoted when it could be misread: spaces, quotes, "=", and control
+	// characters (a newline in a client-chosen value would forge a line).
+	if strings.ContainsAny(v, " \t\"=") || strings.ContainsFunc(v, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
 		v = fmt.Sprintf("%q", v)
 	}
 	sb.WriteString(" " + key + "=" + v)

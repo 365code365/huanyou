@@ -2,9 +2,15 @@ package api
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -100,7 +106,10 @@ func (s *Server) adminLogsAsk(w http.ResponseWriter, r *http.Request) {
 	size := 0
 	for i := len(items) - 1; i >= 0; i-- {
 		e := items[i]
-		l := fmt.Sprintf("%s %s %s %s", e.Time.Format("01-02 15:04:05"), e.Level, e.Msg, e.Attrs)
+		// Client addresses and emails are personal data and stay here (the
+		// privacy policy promises not to share them): the AI gets stable
+		// pseudonyms, which is enough to see "the same IP failed 50 times".
+		l := redactForAI(fmt.Sprintf("%s %s %s %s", e.Time.Format("01-02 15:04:05"), e.Level, e.Msg, e.Attrs))
 		if size+len(l) > maxBytes {
 			break
 		}
@@ -135,7 +144,7 @@ func (s *Server) withAccessLog(next http.Handler) http.Handler {
 		sw := &statusWriter{ResponseWriter: w, status: 200}
 		next.ServeHTTP(sw, r)
 		d := time.Since(start)
-		p := r.URL.Path
+		p := logPath(r.URL.Path)
 		streaming := strings.HasSuffix(p, "/logs") || strings.HasSuffix(p, "/clone") || strings.HasSuffix(p, "/backup") ||
 			strings.Contains(p, "/database/") || strings.HasSuffix(p, "/provision") || strings.HasSuffix(p, "/ask")
 		switch {
@@ -177,3 +186,63 @@ func (w *statusWriter) Flush() {
 
 // Unwrap lets http.ResponseController reach Flush / deadlines (streaming endpoints).
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+var (
+	ipCandidate = regexp.MustCompile(`[0-9A-Fa-f:.\[\]]{7,}`)
+	emailRe     = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`)
+	redactSalt  = func() []byte { b := make([]byte, 16); _, _ = rand.Read(b); return b }()
+)
+
+// redactForAI replaces IP addresses with per-process pseudonyms ("ip-1a2b3c4d",
+// the same address always gives the same one) and hides email addresses.
+func redactForAI(s string) string {
+	s = emailRe.ReplaceAllString(s, "<email>")
+	pseud := func(a netip.Addr) string {
+		m := hmac.New(sha256.New, redactSalt)
+		m.Write([]byte(a.Unmap().String()))
+		return "ip-" + hex.EncodeToString(m.Sum(nil)[:4])
+	}
+	one := func(m string) (string, bool) {
+		if a, err := netip.ParseAddr(strings.Trim(m, "[]")); err == nil {
+			return pseud(a), true
+		}
+		if ap, err := netip.ParseAddrPort(m); err == nil {
+			return pseud(ap.Addr()) + ":" + strconv.Itoa(int(ap.Port())), true
+		}
+		return "", false
+	}
+	return ipCandidate.ReplaceAllStringFunc(s, func(m string) string {
+		if r, ok := one(m); ok {
+			return r
+		}
+		// The match may have taken the punctuation after an address: Go
+		// prints "from 203.0.113.5:51234: EOF" and sentences end with ".".
+		// (An IPv6 address can itself end in "::", so the full match came first.)
+		for cut := 1; cut <= 2 && cut < len(m); cut++ {
+			tail := m[len(m)-cut:]
+			if strings.Trim(tail, ":.") != "" {
+				break
+			}
+			if r, ok := one(m[:len(m)-cut]); ok {
+				return r + tail
+			}
+		}
+		return m
+	})
+}
+
+// logPath is a request path safe to log (and to show an AI): the path is
+// chosen by the client, so no control characters (forged log lines) and a
+// bounded length.
+func logPath(p string) string {
+	p = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return '_'
+		}
+		return r
+	}, p)
+	if len(p) > 160 {
+		p = p[:160] + "…"
+	}
+	return p
+}

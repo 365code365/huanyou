@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/mail"
+	"net/netip"
 	"sort"
 	"strings"
 	"sync"
@@ -30,25 +31,26 @@ import (
 )
 
 type Server struct {
-	cfg       *config.API         // static settings from api.json
-	live      *config.LiveCatalog // admin-editable catalog (plans, nodes, apps, settings)
-	store     *store.Store
-	issuer    *auth.Issuer
-	limiter   *ipLimiter
-	providers []payment.Provider
-	mock      *payment.Mock
-	monitor   *monitor.Monitor
-	nodeUsers nodeUserCache
-	risk      riskState    // blocked IPs / users (risk.go)
-	ips       ipRecorder   // buffered IP records (risk.go)
-	segCache  segmentCache // user segmentation (segments.go)
-	gw        gatewayCache // payment link gateway (gateway.go)
-	guard     guardState   // request flood / abuse protection (guard.go)
-	events    eventBuffer  // app analytics (analytics.go)
-	iap       iapVerifier  // App Store receipt verification (iap.go), nil = not configured
-	nonces    nonceCache   // request nonces seen (secure.go)
-	envLogged sync.Map     // user id -> last integrity log (secure.go)
-	signups   signupGuard  // new device accounts per network (signup_guard.go)
+	cfg             *config.API         // static settings from api.json
+	live            *config.LiveCatalog // admin-editable catalog (plans, nodes, apps, settings)
+	store           *store.Store
+	issuer          *auth.Issuer
+	limiter         *ipLimiter
+	providers       []payment.Provider
+	mock            *payment.Mock
+	monitor         *monitor.Monitor
+	nodeUsers       nodeUserCache
+	risk            riskState    // blocked IPs / users (risk.go)
+	ips             ipRecorder   // buffered IP records (risk.go)
+	segCache        segmentCache // user segmentation (segments.go)
+	gw              gatewayCache // payment link gateway (gateway.go)
+	guard           guardState   // request flood / abuse protection (guard.go)
+	events          eventBuffer  // app analytics (analytics.go)
+	iap             iapVerifier  // App Store receipt verification (iap.go), nil = not configured
+	nonces          nonceCache   // request nonces seen (secure.go)
+	envLogged       sync.Map     // user id -> last integrity log (secure.go)
+	signups         signupGuard  // new device accounts per network (signup_guard.go)
+	trafficInflight sync.Map     // node/batch of traffic reports being applied (billing.go)
 }
 
 func New(cfg *config.API, live *config.LiveCatalog, st *store.Store, issuer *auth.Issuer, mon *monitor.Monitor) (*Server, error) {
@@ -59,7 +61,13 @@ func New(cfg *config.API, live *config.LiveCatalog, st *store.Store, issuer *aut
 	s := &Server{cfg: cfg, live: live, store: st, issuer: issuer, limiter: newIPLimiter(rate.Every(6*time.Second), 10),
 		providers: providers, mock: mock, monitor: mon}
 	if a := cfg.Payments.AppleIAP; a != nil && a.SharedSecret != "" {
-		s.iap = newAppleVerifier(a.SharedSecret, a.BundleID)
+		if a.BundleID == "" {
+			// Without it, a receipt from any app (with a product id named like
+			// a plan) would be accepted.
+			slog.Error("apple_iap.bundle_id is not set: in-app purchase stays off")
+		} else {
+			s.iap = newAppleVerifier(a.SharedSecret, a.BundleID)
+		}
 	}
 	return s, nil
 }
@@ -122,7 +130,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /internal/v1/traffic", s.handleTraffic)
 
 	s.registerAdmin(mux)
-	return withServerTime(s.withAccessLog(withRecover(s.withGuard(s.withRiskIP(mux)))))
+	return withSecurityHeaders(withServerTime(s.withAccessLog(withRecover(s.withGuard(s.withRiskIP(mux))))))
 }
 
 // ---- app endpoints ----
@@ -626,7 +634,7 @@ func (s *Server) authed(h func(http.ResponseWriter, *http.Request, *store.User))
 
 func (s *Server) rateLimited(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.limiter.allow(s.clientIP(r)) {
+		if !s.limiter.allowIP("", s.clientIP(r)) {
 			writeErr(w, http.StatusTooManyRequests, "rate_limited", "请求过于频繁，请稍后再试")
 			return
 		}
@@ -733,16 +741,39 @@ func newIPLimiter(every rate.Limit, burst int) *ipLimiter {
 	return l
 }
 
-func (l *ipLimiter) allow(ip string) bool {
+const limiterMaxKeys = 200_000
+
+func (l *ipLimiter) allow(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	e, ok := l.entries[ip]
+	e, ok := l.entries[key]
 	if !ok {
+		if len(l.entries) >= limiterMaxKeys {
+			// Flooded with distinct keys: forget an arbitrary one (map order
+			// is random) instead of growing without bound. Refusing new keys
+			// would lock every new client out, admins included; forgetting
+			// one only resets that key's budget.
+			for k := range l.entries {
+				delete(l.entries, k)
+				break
+			}
+		}
 		e = &limiterEntry{l: rate.NewLimiter(l.every, l.burst)}
-		l.entries[ip] = e
+		l.entries[key] = e
 	}
 	e.seen = time.Now()
 	return e.l.Allow()
+}
+
+// allowIP limits a client address. IPv6 is limited per /64: one host can use
+// every address of its /64, so a per-address limit would be no limit.
+func (l *ipLimiter) allowIP(prefix, ip string) bool {
+	if a, err := netip.ParseAddr(ip); err == nil && a.Unmap().Is6() {
+		if p, err := a.Unmap().Prefix(64); err == nil {
+			ip = p.String()
+		}
+	}
+	return l.allow(prefix + ip)
 }
 
 func (l *ipLimiter) gc(ctx context.Context) {

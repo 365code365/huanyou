@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -78,11 +80,17 @@ type provisionBody struct {
 	ExpiresAt *time.Time `json:"expires_at"`
 	Vendor    string     `json:"vendor"`
 	VendorURL string     `json:"vendor_url"`
+	// HostKey: the SSH host key fingerprint the precheck showed; the install
+	// then refuses a server presenting another one.
+	HostKey string `json:"host_key"`
+	// TrustHostKey (upgrade only): the operator checked the server's new key
+	// (system re-installed) and trusts it instead of the pinned one.
+	TrustHostKey string `json:"trust_host_key"`
 }
 
 func (b provisionBody) target() provision.Target {
 	return provision.Target{Host: strings.TrimSpace(b.Host), Port: b.Port, User: b.User,
-		Password: b.Password, PrivateKey: b.PrivateKey}
+		Password: b.Password, PrivateKey: b.PrivateKey, HostKey: strings.TrimSpace(b.HostKey)}
 }
 
 func (b provisionBody) nodePort() int {
@@ -110,6 +118,7 @@ func (s *Server) adminPrecheckNode(w http.ResponseWriter, r *http.Request) {
 	bins, _ := s.loadNodeBinaries()
 	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 	defer cancel()
+	body.HostKey = "" // the precheck is what shows the key; nothing to match yet
 	rep, err := provision.Check(ctx, body.target(), body.nodePort(), func(a string) bool {
 		_, ok := bins[a]
 		return ok
@@ -265,6 +274,7 @@ func (s *Server) adminProvisionNode(w http.ResponseWriter, r *http.Request) {
 		Token: tok, RealityPrivateKey: priv, RealityTarget: realityTarget,
 		VisionPort: visionPort, XHTTPPath: "/" + xpath[:12], Weight: 1,
 		ExpiresAt: body.ExpiresAt, Vendor: strings.TrimSpace(body.Vendor), VendorURL: strings.TrimSpace(body.VendorURL),
+		SSHHostKey: res.HostKey,
 		Reality: config.RealityPublic{
 			PublicKey: pub, ShortID: sid, ServerName: serverName, Fingerprint: "chrome",
 		},
@@ -346,15 +356,40 @@ func (s *Server) adminUpgradeNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body.Host = n.Address
+	body.HostKey = n.SSHHostKey // pinned at install: an upgrade never talks to another server
+	if k := strings.TrimSpace(body.TrustHostKey); k != "" {
+		body.HostKey = k // explicitly re-trusted by the operator (shown by a failed attempt)
+	}
 	bins, err := s.loadNodeBinaries()
 	if err != nil {
 		writeErr(w, http.StatusFailedDependency, "no_binary", err.Error())
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	// Not cancelled with the request: a closed tab or a proxy timeout must
+	// not cut the session between the restart and the check / rollback.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Minute)
 	defer cancel()
 	var log strings.Builder
-	arch, err := provision.Upgrade(ctx, body.target(), bins, &log)
+	arch, hostKey, err := provision.Upgrade(ctx, body.target(), bins, &log)
+	if errors.Is(err, provision.ErrHostKey) {
+		writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "host_key_mismatch", "message": err.Error(),
+			"host_key": hostKey, "pinned": body.HostKey, "log": log.String()})
+		return
+	}
+	if hostKey != "" && hostKey != n.SSHHostKey {
+		// Logged in with the expected key (or none was known yet: installed
+		// before keys were recorded, or re-trusted just now): pin it. Saved
+		// even if the operator closed the tab meanwhile.
+		id := n.ID
+		if _, err := s.live.Update(func(c *config.Catalog) error {
+			if x := c.NodeByID(id); x != nil {
+				x.SSHHostKey = hostKey
+			}
+			return nil
+		}, s.saveCatalog(r.WithContext(ctx))); err != nil {
+			slog.Warn("pin ssh host key", "node", id, "err", err)
+		}
+	}
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": "upgrade_failed", "message": err.Error(), "log": log.String()})
 		return

@@ -124,17 +124,32 @@ func relay(c net.Conn, hello []byte, backend string) {
 	if _, err := b.Write(append([]byte(proxyHeader(c.RemoteAddr(), c.LocalAddr())), hello...)); err != nil {
 		return
 	}
-	done := make(chan struct{}, 2)
-	pipe := func(dst, src net.Conn) {
-		_, _ = io.Copy(dst, src)
+	const (
+		up   = 1 // client -> node
+		down = 2 // node -> client
+	)
+	done := make(chan int, 2)
+	pipe := func(dst, src net.Conn, dir int) {
+		_, _ = io.Copy(dst, src) // TCP to TCP: io.Copy splices in the kernel
 		if tc, ok := dst.(*net.TCPConn); ok {
 			_ = tc.CloseWrite()
 		}
-		done <- struct{}{}
+		done <- dir
 	}
-	go pipe(b, c)
-	go pipe(c, b)
-	<-done
+	go pipe(b, c, up)
+	go pipe(c, b, down)
+	// When one direction ends, the other must end too: a client that sends
+	// a hello and then idles would otherwise hold two goroutines and two fds
+	// forever (nothing reads with a deadline).
+	if <-done == down {
+		// The node finished with this connection: nothing the client still
+		// sends can be delivered.
+		_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
+	} else {
+		// The client half-closed; the node ends the connection within
+		// seconds itself (its uplinkOnly / downlinkOnly policy).
+		_ = b.SetReadDeadline(time.Now().Add(2 * time.Minute))
+	}
 	<-done
 }
 

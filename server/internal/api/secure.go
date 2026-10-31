@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"hash/maphash"
 	"io"
 	"log/slog"
 	"net/http"
@@ -194,35 +195,48 @@ func (s *Server) checkSignature(r *http.Request, uid int64, signKey []byte) (str
 	return nonce, nil
 }
 
-// nonceCache remembers request nonces for twice the signature window (a
-// request is only accepted within the window, so older ones need no entry).
+// nonceCache remembers request nonces long enough to refuse any replay a
+// signature would still accept: a request is valid for sigWindow around its
+// own timestamp, which is itself at most sigWindow from the server clock, so
+// two generations of 2×sigWindow each are kept. Rotating generations replaces
+// sweeping the whole map under the lock. Keys are 64-bit hashes (small; a
+// collision only makes the app retry with a new nonce).
 type nonceCache struct {
-	mu    sync.Mutex
-	m     map[string]int64 // key -> expiry (unix)
-	swept int64
+	mu        sync.Mutex
+	seed      maphash.Seed
+	cur, prev map[uint64]struct{}
+	rotated   int64
+	full      bool // cur reached nonceCacheMax (logged once per generation)
 }
 
+// nonceCacheMax bounds memory under a flood of signed requests: 2M per
+// generation (~40 MB) holds a sustained ~3,300 signed requests a second.
+// Beyond that, nonces are no longer recorded until the next rotation.
 const nonceCacheMax = 2_000_000
 
 func (c *nonceCache) seen(key string, now int64) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.m == nil {
-		c.m = map[string]int64{}
+	gen := int64(2 * sigWindow / time.Second)
+	if c.cur == nil {
+		c.seed = maphash.MakeSeed()
+		c.cur, c.prev, c.rotated = map[uint64]struct{}{}, map[uint64]struct{}{}, now
 	}
-	if now-c.swept >= 60 {
-		c.swept = now
-		for k, exp := range c.m {
-			if exp <= now {
-				delete(c.m, k)
-			}
-		}
+	if now-c.rotated >= gen {
+		c.prev, c.cur, c.rotated, c.full = c.cur, map[uint64]struct{}{}, now, false
 	}
-	if exp, ok := c.m[key]; ok && exp > now {
+	h := maphash.String(c.seed, key)
+	if _, ok := c.cur[h]; ok {
 		return true
 	}
-	if len(c.m) < nonceCacheMax { // bounded: never grows without limit
-		c.m[key] = now + int64(2*sigWindow/time.Second)
+	if _, ok := c.prev[h]; ok {
+		return true
+	}
+	if len(c.cur) < nonceCacheMax {
+		c.cur[h] = struct{}{}
+	} else if !c.full {
+		c.full = true
+		slog.Warn("nonce cache full: replays are not detected until the next rotation", "entries", len(c.cur))
 	}
 	return false
 }

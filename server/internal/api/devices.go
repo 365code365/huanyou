@@ -135,7 +135,7 @@ func (s *Server) handleDeviceCode(w http.ResponseWriter, r *http.Request, u *sto
 
 // handleDeviceJoin: POST /api/v1/devices/join {code} — follow the code owner's subscription.
 func (s *Server) handleDeviceJoin(w http.ResponseWriter, r *http.Request, u *store.User) {
-	if !s.limiter.allow("join:" + s.clientIP(r)) {
+	if !s.limiter.allowIP("join:", s.clientIP(r)) {
 		writeErr(w, http.StatusTooManyRequests, "rate_limited", "操作过于频繁，请稍后再试")
 		return
 	}

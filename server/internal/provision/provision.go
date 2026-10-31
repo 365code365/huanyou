@@ -6,7 +6,7 @@
 // shell and mangle compound command lines (anything with && / $() may silently
 // produce no output). So we never send compound commands: payload files and a
 // self-contained install script are uploaded with single `cat > file`
-// redirects, and the script is run by path (`bash /tmp/x.sh`). All the shell
+// redirects, and the script is run by path (`bash <stage>/x.sh`). All the shell
 // logic lives inside the uploaded file, where it runs normally.
 package provision
 
@@ -14,13 +14,17 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -33,6 +37,13 @@ type Target struct {
 	User       string // default root
 	Password   string
 	PrivateKey string // PEM (optional)
+	// HostKey is the server's expected SSH host key: "<type> SHA256:…"
+	// (e.g. "ssh-ed25519 SHA256:…"; the fingerprint as ssh-keygen -lf prints
+	// it). When set, a server showing another key is refused: someone in
+	// between would get the password and the uploaded secrets. Empty: first
+	// contact, any key is accepted and returned so it can be pinned from
+	// then on.
+	HostKey string
 }
 
 // Report is the result of a read-only environment check.
@@ -53,6 +64,7 @@ type Report struct {
 	Fatal       []string `json:"fatal"`        // blocking problems
 	Warn        []string `json:"warn"`         // non-blocking warnings
 	Log         string   `json:"log"`          // raw check output
+	HostKey     string   `json:"host_key"`     // SSH host key fingerprint the server showed
 }
 
 // OK reports whether installation can proceed.
@@ -69,9 +81,13 @@ type Install struct {
 
 // Result reports a completed install.
 type Result struct {
-	Arch string `json:"arch"`
-	Log  string `json:"log"`
+	Arch    string `json:"arch"`
+	Log     string `json:"log"`
+	HostKey string `json:"host_key"` // SSH host key fingerprint, pinned for later upgrades
 }
+
+// ErrHostKey: the server showed another SSH host key than the pinned one.
+var ErrHostKey = errors.New("SSH 主机密钥与记录的不一致：可能有人在中间拦截，或服务器重装过系统。请在服务商控制台核实后再操作")
 
 func (t Target) addr() string {
 	port := t.Port
@@ -81,7 +97,11 @@ func (t Target) addr() string {
 	return net.JoinHostPort(t.Host, strconv.Itoa(port))
 }
 
-func (t Target) dial(ctx context.Context) (*ssh.Client, error) {
+// dial connects and authenticates; it returns the client and the host key the
+// server showed ("<type> SHA256:…"), also with ErrHostKey (to show it), but
+// not after other failures. The connection is closed when ctx ends, so no
+// SSH call outlives the operation.
+func (t Target) dial(ctx context.Context) (*ssh.Client, string, error) {
 	user := t.User
 	if user == "" {
 		user = "root"
@@ -90,7 +110,7 @@ func (t Target) dial(ctx context.Context) (*ssh.Client, error) {
 	if strings.TrimSpace(t.PrivateKey) != "" {
 		signer, err := ssh.ParsePrivateKey([]byte(t.PrivateKey))
 		if err != nil {
-			return nil, fmt.Errorf("私钥解析失败：%w", err)
+			return nil, "", fmt.Errorf("私钥解析失败：%w", err)
 		}
 		auth = append(auth, ssh.PublicKeys(signer))
 	}
@@ -98,25 +118,98 @@ func (t Target) dial(ctx context.Context) (*ssh.Client, error) {
 		auth = append(auth, ssh.Password(t.Password))
 	}
 	if len(auth) == 0 {
-		return nil, fmt.Errorf("必须提供密码或私钥")
+		return nil, "", fmt.Errorf("必须提供密码或私钥")
 	}
+	// A pin is "<key type> SHA256:<fingerprint>". The type matters: a server
+	// has several host keys and shows the one of the first type the client
+	// asks for, so later dials ask for exactly the pinned type.
+	wantType, want := "", strings.TrimSpace(t.HostKey)
+	if typ, fp, ok := strings.Cut(want, " "); ok {
+		wantType, want = typ, strings.TrimSpace(fp)
+	}
+	var seen string
 	cfg := &ssh.ClientConfig{
 		User: user, Auth: auth,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // first-contact install
-		Timeout:         12 * time.Second,
+		// Runs before any credential is sent.
+		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+			fp := ssh.FingerprintSHA256(key)
+			seen = key.Type() + " " + fp
+			if want != "" && fp != want {
+				return ErrHostKey
+			}
+			return nil
+		},
+		HostKeyAlgorithms: hostKeyAlgos(want, wantType),
+		Timeout:           12 * time.Second,
 	}
 	d := net.Dialer{Timeout: cfg.Timeout}
 	conn, err := d.DialContext(ctx, "tcp", t.addr())
 	if err != nil {
-		return nil, fmt.Errorf("无法连接 %s：%w", t.addr(), err)
+		return nil, "", fmt.Errorf("无法连接 %s：%w", t.addr(), err)
 	}
+	// ClientConfig.Timeout covers only the TCP connect: a server that accepts
+	// and then never answers would hang the handshake forever.
+	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 	c, chans, reqs, err := ssh.NewClientConn(conn, t.addr(), cfg)
 	if err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("SSH 登录失败（请检查账号密码 / 端口）：%w", err)
+		if errors.Is(err, ErrHostKey) {
+			return nil, seen, ErrHostKey // the key shown, for an explicit re-trust
+		}
+		if wantType != "" && strings.Contains(err.Error(), "no common algorithm for host key") {
+			return nil, "", fmt.Errorf("服务器不再提供记录的 %s 主机密钥：可能重装过系统或改过 SSH 配置，请核实后重新信任主机密钥", wantType)
+		}
+		// No key returned: a server that did not let us log in is not
+		// necessarily the one we meant (wrong port), so nothing gets pinned.
+		return nil, "", fmt.Errorf("SSH 登录失败（请检查账号密码 / 端口）：%w", err)
 	}
-	return ssh.NewClient(c, chans, reqs), nil
+	_ = conn.SetDeadline(time.Time{})
+	context.AfterFunc(ctx, func() { conn.Close() })
+	return ssh.NewClient(c, chans, reqs), seen, nil
 }
+
+// hostKeyAlgos is the host key algorithm list for a dial. With a pin of a
+// known type: only that type, so the server shows the pinned key and not
+// another one it also has. Without a pin: Ed25519 first (Go would pick ECDSA
+// first), the key operators usually compare (ssh_host_ed25519_key.pub).
+// Plain keys only: a host certificate changes at every renewal.
+func hostKeyAlgos(pinned, keyType string) []string {
+	switch {
+	case pinned == "":
+		return []string{ssh.KeyAlgoED25519, ssh.KeyAlgoECDSA256, ssh.KeyAlgoECDSA384, ssh.KeyAlgoECDSA521,
+			ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA}
+	case keyType == ssh.KeyAlgoRSA:
+		return []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA}
+	case keyType == ssh.KeyAlgoED25519, keyType == ssh.KeyAlgoECDSA256, keyType == ssh.KeyAlgoECDSA384, keyType == ssh.KeyAlgoECDSA521:
+		return []string{keyType}
+	}
+	return nil // a pin without (or with an unknown) type: Go's defaults
+}
+
+// stage creates a private directory for the uploads (node token, REALITY
+// key, secrets, database): files in /tmp are readable by every local user,
+// and were left there when an install failed. done removes it.
+func stage(ctx context.Context, c *ssh.Client) (dir string, done func(), err error) {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", nil, err
+	}
+	dir = "/var/tmp/vpn-stage-" + hex.EncodeToString(b[:])
+	if out, err := runScript(ctx, c, "mkdir -m 700 "+dir); err != nil {
+		return "", nil, fmt.Errorf("无法创建临时目录：%s%w", out, err)
+	}
+	// Safety net: done can't run once this connection is gone (timeout,
+	// closed tab), so a timer removes the directory later in any case.
+	_, _ = runScript(ctx, c, "systemd-run --quiet --on-active=6h /bin/rm -rf "+dir)
+	return dir, func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, _ = runScript(cctx, c, "rm -rf "+dir)
+	}, nil
+}
+
+// staged puts the stage directory into a script written with @STAGE@.
+func staged(script, dir string) string { return strings.ReplaceAll(script, "@STAGE@", dir) }
 
 // upload writes data to a remote path via a single `cat > path` (no shell
 // operators, so command-line mangling on locked-down hosts can't corrupt it).
@@ -167,7 +260,7 @@ func runScript(ctx context.Context, c *ssh.Client, cmd string) (string, error) {
 		return "", err
 	}
 	defer sess.Close()
-	var buf bytes.Buffer
+	var buf lockedBuffer // the session may still write while a cancel reads it
 	sess.Stdout = &buf
 	sess.Stderr = &buf
 	done := make(chan error, 1)
@@ -184,7 +277,7 @@ func runScript(ctx context.Context, c *ssh.Client, cmd string) (string, error) {
 // Check connects and runs a read-only environment probe for the given intended
 // port. archAvailable(arch) says whether a node binary exists for that arch.
 func Check(ctx context.Context, t Target, port int, archAvailable func(string) bool) (*Report, error) {
-	client, err := t.dial(ctx)
+	client, hostKey, err := t.dial(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -192,12 +285,17 @@ func Check(ctx context.Context, t Target, port int, archAvailable func(string) b
 	if port == 0 {
 		port = 443
 	}
-	if err := upload(ctx, client, "/tmp/vpn-check.sh", []byte(checkScript)); err != nil {
+	dir, done, err := stage(ctx, client)
+	if err != nil {
 		return nil, err
 	}
-	out, _ := runScript(ctx, client, fmt.Sprintf("bash /tmp/vpn-check.sh %d", port))
-	runScript(ctx, client, "rm -f /tmp/vpn-check.sh")
+	defer done()
+	if err := upload(ctx, client, dir+"/check.sh", []byte(checkScript)); err != nil {
+		return nil, err
+	}
+	out, _ := runScript(ctx, client, fmt.Sprintf("bash %s/check.sh %d", dir, port))
 	r := parseReport(out)
+	r.HostKey = hostKey
 	r.Port = port
 	r.Log = out
 	r.ArchOK = r.Arch != "" && archAvailable(r.Arch)
@@ -245,13 +343,19 @@ func Run(ctx context.Context, t Target, in Install) (*Result, error) {
 	if in.Log != nil {
 		log = io.MultiWriter(&buf, in.Log)
 	}
-	result := func() *Result { return &Result{Log: buf.String()} }
+	var hostKey string
+	result := func() *Result { return &Result{Log: buf.String(), HostKey: hostKey} }
 
-	client, err := t.dial(ctx)
+	client, hostKey, err := t.dial(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer client.Close()
+	dir, done, err := stage(ctx, client)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
 	fmt.Fprintf(log, "已连接 %s\n", t.addr())
 
 	arch := probe(ctx, client, "uname -m")
@@ -272,10 +376,10 @@ func Run(ctx context.Context, t Target, in Install) (*Result, error) {
 		path string
 		data []byte
 	}{
-		{"/tmp/vpn-node.bin", bin},
-		{"/tmp/vpn-node.json", in.NodeJSON},
-		{"/tmp/vpn-node.service", in.ServiceUnit},
-		{"/tmp/vpn-install.sh", []byte(installScript(port))},
+		{dir + "/vpn-node.bin", bin},
+		{dir + "/vpn-node.json", in.NodeJSON},
+		{dir + "/vpn-node.service", in.ServiceUnit},
+		{dir + "/install.sh", []byte(staged(installScript(port), dir))},
 	}
 	for _, f := range files {
 		if err := upload(ctx, client, f.path, f.data); err != nil {
@@ -284,8 +388,16 @@ func Run(ctx context.Context, t Target, in Install) (*Result, error) {
 	}
 	fmt.Fprintf(log, "上传完成（%s），开始安装…\n", humanSize(len(bin)))
 
-	out, runErr := runScript(ctx, client, "bash /tmp/vpn-install.sh")
+	out, runErr := runScript(ctx, client, "bash "+dir+"/install.sh")
 	io.WriteString(log, out)
+	// The script ran and failed (exit status): that is a failure even if an
+	// older vpn-node from an earlier install is still active.
+	var exit *ssh.ExitError
+	if errors.As(runErr, &exit) && exit.ExitStatus() != 0 {
+		jl, _ := runScript(ctx, client, "journalctl -u vpn-node -n 30 --no-pager")
+		io.WriteString(log, jl)
+		return result(), fmt.Errorf("安装脚本执行失败（退出码 %d）", exit.ExitStatus())
+	}
 
 	// Confirm success by polling the service state rather than trusting the
 	// installer's stdout: some locked-down SSH shells swallow the output of
@@ -315,7 +427,7 @@ func Run(ctx context.Context, t Target, in Install) (*Result, error) {
 		return result(), fmt.Errorf("vpn-node 未能保持运行，请查看日志排查")
 	}
 	fmt.Fprint(log, "vpn-node 已启动\n")
-	return &Result{Arch: arch, Log: buf.String()}, nil
+	return &Result{Arch: arch, Log: buf.String(), HostKey: hostKey}, nil
 }
 
 func parseReport(out string) *Report {
@@ -430,9 +542,9 @@ echo "::step user+dirs"
 id vpn >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin vpn
 mkdir -p /etc/vpn
 echo "::step place files"
-install -m 0755 -o root -g root /tmp/vpn-node.bin /usr/local/bin/vpn-node
-install -m 0640 -o root -g vpn /tmp/vpn-node.json /etc/vpn/node.json
-install -m 0644 -o root -g root /tmp/vpn-node.service /etc/systemd/system/vpn-node.service
+install -m 0755 -o root -g root @STAGE@/vpn-node.bin /usr/local/bin/vpn-node
+install -m 0640 -o root -g vpn @STAGE@/vpn-node.json /etc/vpn/node.json
+install -m 0644 -o root -g root @STAGE@/vpn-node.service /etc/systemd/system/vpn-node.service
 `+tuneScript+`
 echo "::step time sync"
 timedatectl set-ntp true 2>/dev/null || systemctl enable --now systemd-timesyncd 2>/dev/null || true
@@ -449,34 +561,20 @@ if ! systemctl is-active --quiet vpn-node; then
   journalctl -u vpn-node -n 30 --no-pager 2>/dev/null || true
   exit 1
 fi
-rm -f /tmp/vpn-node.bin /tmp/vpn-node.json /tmp/vpn-node.service /tmp/vpn-install.sh
+rm -rf @STAGE@
 echo "::installed"
 `, port)
 }
 
-// Upgrade replaces the vpn-node binary on an installed node and restarts it,
-// keeping its config. Used to roll out fixes (e.g. the no-access-log change).
-func Upgrade(ctx context.Context, t Target, binaries map[string][]byte, log io.Writer) (string, error) {
-	client, err := t.dial(ctx)
-	if err != nil {
-		return "", err
-	}
-	defer client.Close()
-	arch := probe(ctx, client, "uname -m")
-	bin := binaries[arch]
-	if bin == nil {
-		return arch, fmt.Errorf("没有适用于 %q 架构的 vpn-node 程序", arch)
-	}
-	fmt.Fprintf(log, "架构 %s，上传新程序（%s）…\n", arch, humanSize(len(bin)))
-	if err := upload(ctx, client, "/tmp/vpn-node.bin", bin); err != nil {
-		return arch, err
-	}
-	script := `#!/bin/bash
+// upgradeScript swaps the binary, restarts, checks and rolls back. Exit
+// status: 0 upgraded, 3 rolled back, 4 not running and nothing to roll back
+// to, anything else failed before the binary was replaced.
+const upgradeScript = `#!/bin/bash
+# Runs to the end even if the SSH connection drops: once the binary is
+# replaced, the check and the rollback must happen.
+trap '' HUP PIPE
 set -e
 test -f /etc/vpn/node.json || { echo "::fail no /etc/vpn/node.json"; exit 1; }
-cp -f /usr/local/bin/vpn-node /usr/local/bin/vpn-node.prev 2>/dev/null || true
-install -m 0755 -o root -g root /tmp/vpn-node.bin /usr/local/bin/vpn-node
-rm -f /tmp/vpn-node.bin /tmp/vpn-upgrade.sh
 # Older installs: give the node a state directory for its user-list cache.
 if ! grep -q StateDirectory /etc/systemd/system/vpn-node.service 2>/dev/null; then
   mkdir -p /etc/systemd/system/vpn-node.service.d
@@ -484,24 +582,111 @@ if ! grep -q StateDirectory /etc/systemd/system/vpn-node.service 2>/dev/null; th
   systemctl daemon-reload
 fi
 ` + tuneScript + `
+set +e
+nrestarts() { systemctl show -p NRestarts vpn-node 2>/dev/null | cut -d= -f2; }
+mainpid() { systemctl show -p MainPID vpn-node 2>/dev/null | cut -d= -f2; }
+# The running binary becomes the fallback only if it runs well: active, and
+# not restarted by systemd since it was started (or up for 10 minutes
+# anyway). A crash-looping one must not replace the last good fallback.
+n=$(nrestarts)
+up=$(ps -o etimes= -p "$(mainpid)" 2>/dev/null | tr -d ' ')
+if [ ! -f /usr/local/bin/vpn-node.prev ] || { systemctl is-active --quiet vpn-node && { [ "${n:-0}" = 0 ] || [ "${up:-0}" -ge 600 ]; }; }; then
+  cp -f /usr/local/bin/vpn-node /usr/local/bin/vpn-node.prev
+fi
+if ! install -m 0755 -o root -g root @STAGE@/vpn-node.bin /usr/local/bin/vpn-node; then
+  echo "::fail install"
+  exit 1
+fi
 systemctl restart vpn-node
-echo "::upgraded"
+# Active right after a restart only means started. A binary that crashes on
+# start or at its first sync is restarted by systemd every few seconds and
+# can look active at any single moment: it has to stay up, as the same
+# process, for the whole wait.
+ok=1
+sleep 3
+pid=$(mainpid)
+for i in $(seq 1 12); do
+  sleep 1
+  if ! systemctl is-active --quiet vpn-node || [ "${pid:-0}" = 0 ] || [ "$(mainpid)" != "$pid" ]; then
+    ok=0
+    break
+  fi
+done
+n=$(nrestarts)
+[ "${n:-0}" = 0 ] || ok=0
+if [ "$ok" = 1 ]; then
+  echo "::upgraded"
+  exit 0
+fi
+journalctl -u vpn-node -n 20 --no-pager 2>/dev/null
+if [ -f /usr/local/bin/vpn-node.prev ]; then
+  cp -f /usr/local/bin/vpn-node.prev /usr/local/bin/vpn-node
+  systemctl restart vpn-node
+  echo "::rolledback"
+  exit 3
+fi
+exit 4
 `
-	if err := upload(ctx, client, "/tmp/vpn-upgrade.sh", []byte(script)); err != nil {
-		return arch, err
+
+// Upgrade replaces the vpn-node binary on an installed node and restarts it,
+// keeping its config. Used to roll out fixes (e.g. the no-access-log change).
+// The second result is the host key the server showed: set when the login
+// succeeded (to pin it) or when the key did not match (to show it).
+func Upgrade(ctx context.Context, t Target, binaries map[string][]byte, log io.Writer) (string, string, error) {
+	client, hostKey, err := t.dial(ctx)
+	if err != nil {
+		return "", hostKey, err
 	}
-	out, _ := runScript(ctx, client, "bash /tmp/vpn-upgrade.sh")
+	defer client.Close()
+	dir, done, err := stage(ctx, client)
+	if err != nil {
+		return "", hostKey, err
+	}
+	defer done()
+	arch := probe(ctx, client, "uname -m")
+	bin := binaries[arch]
+	if bin == nil {
+		return arch, hostKey, fmt.Errorf("没有适用于 %q 架构的 vpn-node 程序", arch)
+	}
+	fmt.Fprintf(log, "架构 %s，上传新程序（%s）…\n", arch, humanSize(len(bin)))
+	if err := upload(ctx, client, dir+"/vpn-node.bin", bin); err != nil {
+		return arch, hostKey, err
+	}
+	if err := upload(ctx, client, dir+"/upgrade.sh", []byte(staged(upgradeScript, dir))); err != nil {
+		return arch, hostKey, err
+	}
+	out, runErr := runScript(ctx, client, "bash "+dir+"/upgrade.sh")
 	io.WriteString(log, out)
+	// The exit status decides (some panel shells swallow the output).
+	var exit *ssh.ExitError
+	switch {
+	case errors.As(runErr, &exit):
+		switch exit.ExitStatus() {
+		case 3:
+			return arch, hostKey, fmt.Errorf("新程序启动失败，已自动恢复旧版本，节点继续运行")
+		case 4:
+			return arch, hostKey, fmt.Errorf("新程序启动失败，且没有可恢复的旧程序")
+		default:
+			return arch, hostKey, fmt.Errorf("升级脚本执行失败（退出码 %d），节点仍在运行旧程序", exit.ExitStatus())
+		}
+	case runErr != nil:
+		// No exit status: the connection broke. The script keeps going on
+		// the node (check and rollback included); its outcome is unknown here.
+		return arch, hostKey, fmt.Errorf("升级过程中与服务器的连接中断（%v），请稍后查看节点状态", runErr)
+	}
+	if strings.Contains(out, "::rolledback") {
+		return arch, hostKey, fmt.Errorf("新程序启动失败，已自动恢复旧版本，节点继续运行")
+	}
 	for i := 0; i < 10; i++ {
 		if probe(ctx, client, "systemctl is-active vpn-node") == "active" {
 			fmt.Fprint(log, "vpn-node 已重启并运行\n")
-			return arch, nil
+			return arch, hostKey, nil
 		}
 		time.Sleep(time.Second)
 	}
 	jl, _ := runScript(ctx, client, "journalctl -u vpn-node -n 20 --no-pager")
 	io.WriteString(log, jl)
-	return arch, fmt.Errorf("升级后 vpn-node 未能运行（已保留旧程序 /usr/local/bin/vpn-node.prev）")
+	return arch, hostKey, fmt.Errorf("升级后 vpn-node 未能运行（已保留旧程序 /usr/local/bin/vpn-node.prev）")
 }
 
 // CloneInstall is a complete control-plane deployment for a new server.
@@ -522,6 +707,7 @@ type CloneInstall struct {
 type CloneResult struct {
 	TLSReady bool   `json:"tls_ready"`
 	TargetIP string `json:"target_ip"`
+	HostKey  string `json:"host_key"`
 }
 
 const apiUnit = `[Unit]
@@ -536,6 +722,7 @@ EnvironmentFile=/etc/vpn/api.env
 ExecStart=/usr/local/bin/vpn-api -config /etc/vpn/api.json
 Restart=always
 RestartSec=3
+TimeoutStopSec=30
 StateDirectory=vpn
 LimitNOFILE=1048576
 AmbientCapabilities=CAP_NET_BIND_SERVICE
@@ -558,20 +745,24 @@ func Clone(ctx context.Context, t Target, in CloneInstall) (*CloneResult, error)
 	if in.Log != nil {
 		log = in.Log
 	}
-	client, err := t.dial(ctx)
+	client, hostKey, err := t.dial(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer client.Close()
-	fmt.Fprintf(log, "已连接 %s\n", t.addr())
-
-	// --- checks ---
-	if err := upload(ctx, client, "/tmp/vpn-check.sh", []byte(checkScript)); err != nil {
+	fmt.Fprintf(log, "已连接 %s，SSH 主机密钥 %s（可在服务商控制台核对）\n", t.addr(), hostKey)
+	dir, done, err := stage(ctx, client)
+	if err != nil {
 		return nil, err
 	}
-	out, _ := runScript(ctx, client, "bash /tmp/vpn-check.sh 443")
+	defer done()
+	// --- checks ---
+	if err := upload(ctx, client, dir+"/check.sh", []byte(checkScript)); err != nil {
+		return nil, err
+	}
+	out, _ := runScript(ctx, client, "bash "+dir+"/check.sh 443")
 	r := parseReport(out)
-	out80, _ := runScript(ctx, client, "bash /tmp/vpn-check.sh 80")
+	out80, _ := runScript(ctx, client, "bash "+dir+"/check.sh 80")
 	r80 := parseReport(out80)
 	// A VPN node of ours on :443 can stay: it moves to a local port and the
 	// API routes :443 by SNI (its own domain to itself, the rest to the node).
@@ -581,15 +772,13 @@ func Clone(ctx context.Context, t Target, in CloneInstall) (*CloneResult, error)
 		raw, _ := runScript(ctx, client, "cat /etc/vpn/node.json")
 		var nc map[string]any
 		if err := json.Unmarshal([]byte(raw), &nc); err != nil {
-			runScript(ctx, client, "rm -f /tmp/vpn-check.sh")
 			return nil, fmt.Errorf("443 端口被本系统节点 vpn-node 占用，但读取 /etc/vpn/node.json 失败：%v", err)
 		}
 		nodePort = 4443
-		if o, _ := runScript(ctx, client, "bash /tmp/vpn-check.sh 4443"); !parseReport(o).PortFree {
+		if o, _ := runScript(ctx, client, "bash "+dir+"/check.sh 4443"); !parseReport(o).PortFree {
 			nodePort = parseReport(o).SuggestPort
 		}
 		if nodePort == 0 {
-			runScript(ctx, client, "rm -f /tmp/vpn-check.sh")
 			return nil, fmt.Errorf("没有找到可供节点使用的本地端口")
 		}
 		nc["listen"] = "127.0.0.1"
@@ -598,7 +787,6 @@ func Clone(ctx context.Context, t Target, in CloneInstall) (*CloneResult, error)
 		nodeCfg, _ = json.MarshalIndent(nc, "", "  ")
 		var ac map[string]any
 		if err := json.Unmarshal(in.APIConfig, &ac); err != nil {
-			runScript(ctx, client, "rm -f /tmp/vpn-check.sh")
 			return nil, fmt.Errorf("api config: %w", err)
 		}
 		tlsCfg, _ := ac["tls"].(map[string]any)
@@ -610,7 +798,6 @@ func Clone(ctx context.Context, t Target, in CloneInstall) (*CloneResult, error)
 		in.APIConfig, _ = json.MarshalIndent(ac, "", "  ")
 		r.PortFree = true
 	}
-	runScript(ctx, client, "rm -f /tmp/vpn-check.sh")
 	fmt.Fprintf(log, "系统：%s · %s · 内存 %d MB · 磁盘空闲 %d GB\n", r.OS, r.Arch, r.RAMMB, r.DiskFreeGB)
 	if nodeCfg != nil {
 		fmt.Fprintf(log, "这台服务器上运行着节点（vpn-node 占用 443）：节点改为监听 127.0.0.1:%d，由 vpn-api 按域名分流 443，节点继续可用（切换时中断约几秒）\n", nodePort)
@@ -657,23 +844,23 @@ func Clone(ctx context.Context, t Target, in CloneInstall) (*CloneResult, error)
 		path string
 		data []byte
 	}{
-		{"/tmp/vpn-api.bin", in.APIBinary},
-		{"/tmp/vpn-api.json", in.APIConfig},
-		{"/tmp/vpn-api.env", in.APIEnv},
-		{"/tmp/vpn-api.db", in.Database},
-		{"/tmp/vpn-api.service", []byte(apiUnit)},
+		{dir + "/vpn-api.bin", in.APIBinary},
+		{dir + "/vpn-api.json", in.APIConfig},
+		{dir + "/vpn-api.env", in.APIEnv},
+		{dir + "/vpn-api.db", in.Database},
+		{dir + "/vpn-api.service", []byte(apiUnit)},
 	}
 	if nodeCfg != nil {
 		files = append(files, struct {
 			path string
 			data []byte
-		}{"/tmp/vpn-node.json", nodeCfg})
+		}{dir + "/vpn-node.json", nodeCfg})
 	}
 	if b := in.NodeBinaries["x86_64"]; b != nil {
 		files = append(files, struct {
 			path string
 			data []byte
-		}{"/tmp/vpn-node.bin", b})
+		}{dir + "/vpn-node.bin", b})
 	}
 	total := 0
 	for _, f := range files {
@@ -691,16 +878,16 @@ echo "::step user+dirs"
 id vpn >/dev/null 2>&1 || useradd -r -s /usr/sbin/nologin vpn
 mkdir -p /etc/vpn /var/lib/vpn/dl/releases /var/lib/vpn/acme
 echo "::step place files"
-install -m 0755 -o root -g root /tmp/vpn-api.bin /usr/local/bin/vpn-api
-if [ -f /tmp/vpn-node.bin ]; then install -m 0755 -o root -g root /tmp/vpn-node.bin /usr/local/bin/vpn-node; fi
-install -m 0640 -o root -g vpn /tmp/vpn-api.json /etc/vpn/api.json
-install -m 0640 -o root -g vpn /tmp/vpn-api.env /etc/vpn/api.env
+install -m 0755 -o root -g root @STAGE@/vpn-api.bin /usr/local/bin/vpn-api
+if [ -f @STAGE@/vpn-node.bin ]; then install -m 0755 -o root -g root @STAGE@/vpn-node.bin /usr/local/bin/vpn-node; fi
+install -m 0640 -o root -g vpn @STAGE@/vpn-api.json /etc/vpn/api.json
+install -m 0640 -o root -g vpn @STAGE@/vpn-api.env /etc/vpn/api.env
 if [ -f /var/lib/vpn/vpn.db ]; then mv /var/lib/vpn/vpn.db /var/lib/vpn/vpn.db.bak-pre-clone-$(date +%s); fi
 rm -f /var/lib/vpn/vpn.db-wal /var/lib/vpn/vpn.db-shm
-install -m 0600 -o vpn -g vpn /tmp/vpn-api.db /var/lib/vpn/vpn.db
+install -m 0600 -o vpn -g vpn @STAGE@/vpn-api.db /var/lib/vpn/vpn.db
 chown -R vpn:vpn /var/lib/vpn
-install -m 0644 -o root -g root /tmp/vpn-api.service /etc/systemd/system/vpn-api.service
-rm -f /tmp/vpn-api.bin /tmp/vpn-node.bin /tmp/vpn-api.json /tmp/vpn-api.env /tmp/vpn-api.db /tmp/vpn-api.service
+install -m 0644 -o root -g root @STAGE@/vpn-api.service /etc/systemd/system/vpn-api.service
+rm -f @STAGE@/vpn-api.bin @STAGE@/vpn-node.bin @STAGE@/vpn-api.json @STAGE@/vpn-api.env @STAGE@/vpn-api.db
 echo "::step firewall"
 if command -v ufw >/dev/null 2>&1; then ufw allow 80/tcp >/dev/null 2>&1 || true; ufw allow 443/tcp >/dev/null 2>&1 || true; fi
 if command -v firewall-cmd >/dev/null 2>&1; then firewall-cmd --permanent --add-service=http --add-service=https >/dev/null 2>&1 && firewall-cmd --reload >/dev/null 2>&1 || true; fi
@@ -708,23 +895,21 @@ if command -v firewall-cmd >/dev/null 2>&1; then firewall-cmd --permanent --add-
 echo "::step start"
 systemctl daemon-reload
 systemctl enable vpn-api >/dev/null 2>&1 || true
-if [ -f /tmp/vpn-node.json ]; then
+if [ -f @STAGE@/vpn-node.json ]; then
   echo "::step move node behind the API"
   cp -a /etc/vpn/node.json /etc/vpn/node.json.bak-pre-clone
-  cat /tmp/vpn-node.json > /etc/vpn/node.json   # keeps owner and mode
-  rm -f /tmp/vpn-node.json
+  cat @STAGE@/vpn-node.json > /etc/vpn/node.json   # keeps owner and mode
   systemctl restart vpn-node
   for i in $(seq 1 20); do ss -ltnH 'sport = :443' | grep -q . || break; sleep 0.5; done
 fi
 systemctl restart vpn-api
 echo "::cloned"
 `
-	if err := upload(ctx, client, "/tmp/vpn-clone.sh", []byte(script)); err != nil {
+	if err := upload(ctx, client, dir+"/clone.sh", []byte(staged(script, dir))); err != nil {
 		return nil, err
 	}
-	out, _ = runScript(ctx, client, "bash /tmp/vpn-clone.sh")
+	out, _ = runScript(ctx, client, "bash "+dir+"/clone.sh")
 	io.WriteString(log, out)
-	runScript(ctx, client, "rm -f /tmp/vpn-clone.sh")
 
 	ok := false
 	for i := 0; i < 10 && !ok; i++ {
@@ -769,7 +954,7 @@ echo "::cloned"
 			return nil, fmt.Errorf("新服务器上的 vpn-api 没有响应，请查看上面的日志")
 		}
 		fmt.Fprintf(log, "新服务器已就绪（%s）。请把 %s 的 A 记录改为 %s，生效后首次访问会自动申请 HTTPS 证书。\n", code, in.Domain, targetIP)
-		return &CloneResult{TLSReady: false, TargetIP: targetIP}, nil
+		return &CloneResult{TLSReady: false, TargetIP: targetIP, HostKey: hostKey}, nil
 	}
 	fmt.Fprint(log, "vpn-api 已启动，正在申请 HTTPS 证书…\n")
 
@@ -781,7 +966,7 @@ echo "::cloned"
 			resp.Body.Close()
 			if resp.StatusCode == 200 {
 				fmt.Fprintf(log, "HTTPS 正常：https://%s ✓\n", in.Domain)
-				return &CloneResult{TLSReady: true, TargetIP: targetIP}, nil
+				return &CloneResult{TLSReady: true, TargetIP: targetIP, HostKey: hostKey}, nil
 			}
 		}
 		select {
@@ -791,5 +976,22 @@ echo "::cloned"
 		}
 	}
 	fmt.Fprint(log, "证书暂未就绪（可能 DNS 仍在生效），服务已运行，稍后访问即会自动申请。\n")
-	return &CloneResult{TLSReady: false, TargetIP: targetIP}, nil
+	return &CloneResult{TLSReady: false, TargetIP: targetIP, HostKey: hostKey}, nil
+}
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }

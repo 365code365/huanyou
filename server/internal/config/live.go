@@ -43,6 +43,9 @@ func (l *LiveCatalog) Update(fn func(c *Catalog) error, save func(c *Catalog) er
 	if err := next.Normalize(); err != nil {
 		return nil, &ValidationError{err.Error()}
 	}
+	if err := next.CheckChangedURLs(l.p.Load()); err != nil {
+		return nil, &ValidationError{err.Error()}
+	}
 	if err := save(next); err != nil {
 		return nil, err
 	}

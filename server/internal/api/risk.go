@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"vpnplatform/server/internal/store"
@@ -21,11 +22,13 @@ import (
 // prefix lookup. IP hits are aggregated in memory and written in batches.
 
 type riskState struct {
-	mu       sync.RWMutex
-	loadedAt time.Time
-	prefixes []riskPrefix
-	users    map[int64]string // user id -> reason
-	nodeList []string         // active ip rules for node agents
+	mu         sync.RWMutex
+	refreshing atomic.Bool // one request reloads the rules; the others use the current ones
+	first      sync.Mutex  // the first load after a start: every request waits for it
+	loadedAt   time.Time
+	prefixes   []riskPrefix
+	users      map[int64]string // user id -> reason
+	nodeList   []string         // active ip rules for node agents
 }
 
 type riskPrefix struct {
@@ -68,13 +71,46 @@ func (s *Server) loadRisk(ctx context.Context) error {
 
 // riskFresh reloads rules when they are older than riskRefresh (so expiries apply).
 func (s *Server) riskFresh(ctx context.Context) {
-	s.risk.mu.RLock()
-	stale := time.Since(s.risk.loadedAt) > riskRefresh
-	s.risk.mu.RUnlock()
-	if stale {
-		if err := s.loadRisk(ctx); err != nil {
-			slog.Warn("load risk rules", "err", err)
+	loaded := func() time.Time {
+		s.risk.mu.RLock()
+		defer s.risk.mu.RUnlock()
+		return s.risk.loadedAt
+	}
+	at := loaded()
+	if time.Since(at) <= riskRefresh {
+		return
+	}
+	if at.IsZero() {
+		// Nothing loaded yet (just started): wait for the rules instead of
+		// serving without any, which would let blocked accounts and
+		// addresses through and send nodes an empty block list.
+		s.risk.first.Lock()
+		defer s.risk.first.Unlock()
+		if !loaded().IsZero() {
+			return
 		}
+		s.reloadRisk(ctx)
+		return
+	}
+	// Only one caller reloads; every other request goes on with the rules it
+	// has instead of all querying the database at once.
+	if !s.risk.refreshing.CompareAndSwap(false, true) {
+		return
+	}
+	defer s.risk.refreshing.Store(false)
+	s.reloadRisk(ctx)
+}
+
+func (s *Server) reloadRisk(ctx context.Context) {
+	lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := s.loadRisk(lctx); err != nil {
+		slog.Warn("load risk rules", "err", err)
+		// Keep the current rules and try again in a few seconds, not on
+		// every request while the database is struggling.
+		s.risk.mu.Lock()
+		s.risk.loadedAt = time.Now().Add(5*time.Second - riskRefresh)
+		s.risk.mu.Unlock()
 	}
 }
 
@@ -201,7 +237,11 @@ func (s *Server) recordIP(userID int64, ip, source, nodeID string, hits int64) {
 	full := len(s.ips.hits) >= ipBufferMax
 	s.ips.mu.Unlock()
 	if full {
-		go s.flushIPs(context.Background())
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			s.flushIPs(ctx)
+		}()
 	}
 }
 
@@ -224,7 +264,7 @@ func (s *Server) flushIPs(ctx context.Context) {
 // Run does the server's background work until ctx ends: IP record flushing,
 // risk rule refresh and daily clean-up. Pending IP hits are flushed on exit.
 func (s *Server) Run(ctx context.Context) {
-	_ = s.loadRisk(ctx)
+	s.riskFresh(ctx) // the first load (requests arriving meanwhile wait for it)
 	flush := time.NewTicker(ipFlushEvery)
 	defer flush.Stop()
 	clean := time.NewTicker(6 * time.Hour)
@@ -232,23 +272,38 @@ func (s *Server) Run(ctx context.Context) {
 	reconcile := time.NewTicker(time.Minute)
 	defer reconcile.Stop()
 	tick := 0
-	s.cleanup(ctx)
+	// Every background call has a deadline: one stuck query must not stop
+	// the flushes (the event buffer drops data once full).
+	within := func(d time.Duration, f func(context.Context)) {
+		c, cancel := context.WithTimeout(ctx, d)
+		defer cancel()
+		f(c)
+	}
+	go within(30*time.Minute, s.cleanup)
+	var reconciling atomic.Bool
 	for {
 		select {
 		case <-ctx.Done():
-			done, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			done, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			s.flushIPs(done)
 			s.flushEvents(done)
 			cancel()
 			return
 		case <-flush.C:
-			s.flushIPs(ctx)
-			s.flushEvents(ctx)
+			within(time.Minute, s.flushIPs)
+			within(time.Minute, s.flushEvents)
 		case <-clean.C:
-			s.cleanup(ctx)
+			go within(30*time.Minute, s.cleanup)
 		case <-reconcile.C:
 			tick++
-			s.reconcileOrders(ctx, tick)
+			// Querying payment providers can take minutes (many pending
+			// orders, slow provider): it runs beside the flushes, never twice.
+			if reconciling.CompareAndSwap(false, true) {
+				go func(tick int) {
+					defer reconciling.Store(false)
+					within(10*time.Minute, func(c context.Context) { s.reconcileOrders(c, tick) })
+				}(tick)
+			}
 		}
 	}
 }

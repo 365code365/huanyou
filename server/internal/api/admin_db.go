@@ -190,9 +190,11 @@ func (s *Server) adminDBSwitch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "db_failed", err.Error())
 		return
 	}
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(2*time.Hour + time.Minute))
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
 	s.flushIPs(ctx)
+	s.flushEvents(ctx)
 	res, err := store.Sync(ctx, s.store, dst, store.SyncOptions{Full: true})
 	dst.Close()
 	if err != nil {
@@ -218,8 +220,5 @@ func (s *Server) adminDBSwitch(w http.ResponseWriter, r *http.Request) {
 		"message": "数据已同步，服务正在重启并切换到新数据库（约 5 秒）。原数据库保留不动，可随时切回。",
 	})
 	_ = http.NewResponseController(w).Flush()
-	go func() {
-		time.Sleep(800 * time.Millisecond)
-		os.Exit(0) // systemd restarts the API, which opens the new database
-	}()
+	restartSoon() // the API opens the new database when it starts again
 }

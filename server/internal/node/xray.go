@@ -161,8 +161,10 @@ func StartXray(c *config.NodeAgent, st *Stats) (*Xray, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load xray config: %w", err)
 	}
-	// Install our stats manager in place of Xray's (see stats.go).
+	// Install our stats manager in place of Xray's (see stats.go), and the
+	// guard that keeps users off this server's private addresses (egress.go).
 	registerStats(st)
+	guardEgress()
 	pb.App = append(pb.App, cserial.ToTypedMessage(&emptypb.Empty{}))
 	inst, err := core.New(pb)
 	if err != nil {

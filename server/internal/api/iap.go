@@ -9,6 +9,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,12 +30,46 @@ type iapVerifier interface {
 
 type iapResult struct {
 	BundleID string
-	Items    []iapItem // paid transactions in the receipt
+	Sandbox  bool      // verified by Apple's sandbox (TestFlight, App Review): no money was paid
+	Items    []iapItem // transactions in the receipt
 }
 
 type iapItem struct {
 	ProductID     string
 	TransactionID string // Apple's globally-unique transaction id
+	PurchasedAt   int64  // unix ms
+	Cancelled     bool   // refunded / revoked by Apple: grants nothing
+}
+
+// refuseIAPResult answers with an error (and returns true) for receipts that
+// must not grant anything here:
+//   - from another app (verifyReceipt validates any app's receipt, and
+//     product ids are guessable): the bundle id is required;
+//   - from the sandbox (free test purchases) unless a build is under App
+//     Review: that is the only time this server offers in-app purchase.
+//
+// The messages stay literal writeErr calls: scripts/i18n-extract.py collects
+// them from there for the language packs.
+func (s *Server) refuseIAPResult(w http.ResponseWriter, res *iapResult) bool {
+	a := s.cfg.Payments.AppleIAP
+	if a == nil || a.BundleID == "" || res.BundleID != a.BundleID {
+		slog.Warn("iap receipt for another app", "got", res.BundleID)
+		writeErr(w, http.StatusBadRequest, "bad_receipt", "购买凭证无效")
+		return true
+	}
+	if res.Sandbox && s.cat().Payment.IOSReviewBuild <= 0 {
+		slog.Warn("iap sandbox receipt outside App Review")
+		writeErr(w, http.StatusBadRequest, "sandbox_receipt", "测试环境的购买凭证仅在 App 审核期间有效")
+		return true
+	}
+	return false
+}
+
+func iapTradeNo(res *iapResult, txn string) string {
+	if res.Sandbox {
+		return "sandbox:" + txn // marks test purchases in the order list
+	}
+	return txn
 }
 
 func (s *Server) handleIAPVerify(w http.ResponseWriter, r *http.Request, u *store.User) {
@@ -71,42 +107,57 @@ func (s *Server) handleIAPVerify(w http.ResponseWriter, r *http.Request, u *stor
 		writeErr(w, http.StatusBadGateway, "verify_failed", "购买凭证校验失败，请稍后重试")
 		return
 	}
-	if a := s.cfg.Payments.AppleIAP; a != nil && a.BundleID != "" && res.BundleID != a.BundleID {
-		slog.Warn("iap bundle mismatch", "got", res.BundleID, "want", a.BundleID)
-		writeErr(w, http.StatusBadRequest, "bad_receipt", "购买凭证无效")
+	if s.refuseIAPResult(w, res) {
 		return
 	}
+	// A receipt holds every purchase of this Apple ID. Redeem the newest one
+	// not yet redeemed (normally the purchase just made; an older one only if
+	// its own verify never reached us). Refunded ones grant nothing.
 	want := plan.IAPProductID()
-	var txn string
+	var cands []iapItem
 	for _, it := range res.Items {
-		if it.ProductID == want {
-			txn = it.TransactionID // last match wins (latest transaction)
+		if it.ProductID == want && !it.Cancelled {
+			cands = append(cands, it)
 		}
 	}
-	if txn == "" {
+	if len(cands) == 0 {
 		writeErr(w, http.StatusBadRequest, "no_matching_purchase", "未找到该套餐的购买记录")
 		return
 	}
-	// The Apple transaction id is the idempotency key.
-	orderID := "AIAP" + sanitizeTxn(txn)
-	o, _, err := s.store.EnsureOrder(ctx, orderID, u.ID, plan.ID, plan.PriceCents, iapMethod)
-	if err != nil {
-		s.internal(w, err)
-		return
+	sort.SliceStable(cands, func(i, j int) bool { return cands[i].PurchasedAt > cands[j].PurchasedAt })
+	granted, ours, other := false, false, false
+	for _, it := range cands {
+		// The Apple transaction id is the idempotency key.
+		orderID := "AIAP" + sanitizeTxn(it.TransactionID)
+		o, _, err := s.store.EnsureOrder(ctx, orderID, u.ID, plan.ID, plan.PriceCents, iapMethod)
+		if err != nil {
+			s.internal(w, err)
+			return
+		}
+		switch {
+		case o.UserID != u.ID:
+			other = true // redeemed by another account
+			continue
+		case o.Status == "paid":
+			ours = true
+			continue
+		}
+		ok, err := s.store.MarkPaid(ctx, orderID, iapTradeNo(res, it.TransactionID), plan.DurationDays, time.Now())
+		if err != nil {
+			s.internal(w, err)
+			return
+		}
+		if ok {
+			granted = true
+			slog.Info("iap purchase granted", "user", u.ID, "plan", plan.ID, "txn", it.TransactionID, "sandbox", res.Sandbox)
+			s.trackServer(u.ID, "purchase_paid")
+			break
+		}
+		ours = true
 	}
-	if o.UserID != u.ID {
-		// This transaction was already redeemed by another account.
+	if !granted && !ours && other {
 		writeErr(w, http.StatusConflict, "already_redeemed", "该购买已被其它账号使用")
 		return
-	}
-	granted, err := s.store.MarkPaid(ctx, orderID, txn, plan.DurationDays, time.Now())
-	if err != nil {
-		s.internal(w, err)
-		return
-	}
-	if granted {
-		slog.Info("iap purchase granted", "user", u.ID, "plan", plan.ID, "txn", txn)
-		s.trackServer(u.ID, "purchase_paid")
 	}
 	fresh, _ := s.store.UserByID(ctx, u.ID)
 	if fresh == nil {
@@ -148,8 +199,7 @@ func (s *Server) handleIAPRestore(w http.ResponseWriter, r *http.Request, u *sto
 		writeErr(w, http.StatusBadGateway, "verify_failed", "购买凭证校验失败，请稍后重试")
 		return
 	}
-	if a := s.cfg.Payments.AppleIAP; a != nil && a.BundleID != "" && res.BundleID != a.BundleID {
-		writeErr(w, http.StatusBadRequest, "bad_receipt", "购买凭证无效")
+	if s.refuseIAPResult(w, res) {
 		return
 	}
 	cat := s.cat()
@@ -162,9 +212,11 @@ func (s *Server) handleIAPRestore(w http.ResponseWriter, r *http.Request, u *sto
 	}
 	granted, found := 0, 0
 	var owner int64 // another account that owns the newest redeemed purchase
-	for _, it := range res.Items {
+	items := append([]iapItem(nil), res.Items...)
+	sort.SliceStable(items, func(i, j int) bool { return items[i].PurchasedAt < items[j].PurchasedAt }) // oldest first
+	for _, it := range items {
 		plan := byProduct[it.ProductID]
-		if plan == nil {
+		if plan == nil || it.Cancelled {
 			continue
 		}
 		found++
@@ -175,7 +227,7 @@ func (s *Server) handleIAPRestore(w http.ResponseWriter, r *http.Request, u *sto
 			return
 		}
 		if created || (o.UserID == u.ID && o.Status != "paid") {
-			ok, err := s.store.MarkPaid(ctx, orderID, it.TransactionID, plan.DurationDays, time.Now())
+			ok, err := s.store.MarkPaid(ctx, orderID, iapTradeNo(res, it.TransactionID), plan.DurationDays, time.Now())
 			if err != nil {
 				s.internal(w, err)
 				return
@@ -184,7 +236,7 @@ func (s *Server) handleIAPRestore(w http.ResponseWriter, r *http.Request, u *sto
 				granted++
 			}
 		} else if o.UserID != u.ID {
-			owner = o.UserID // items are in purchase order: the newest wins
+			owner = o.UserID // sorted oldest first: the newest wins
 		}
 	}
 	if found == 0 {
@@ -262,8 +314,10 @@ type appleReceipt struct {
 }
 
 type appleInAppRow struct {
-	ProductID     string `json:"product_id"`
-	TransactionID string `json:"transaction_id"`
+	ProductID          string `json:"product_id"`
+	TransactionID      string `json:"transaction_id"`
+	PurchaseDateMs     string `json:"purchase_date_ms"`
+	CancellationDateMs string `json:"cancellation_date_ms"` // set when Apple refunded / revoked it
 }
 
 func (v *appleVerifier) Verify(ctx context.Context, receipt string) (*iapResult, error) {
@@ -272,19 +326,30 @@ func (v *appleVerifier) Verify(ctx context.Context, receipt string) (*iapResult,
 		return nil, err
 	}
 	// 21007: a sandbox receipt sent to production (TestFlight / App Review).
+	sandbox := false
 	if rec.Status == 21007 {
 		if rec, err = v.post(ctx, v.sandURL, receipt); err != nil {
 			return nil, err
 		}
+		sandbox = true
 	}
 	if rec.Status != 0 {
 		return nil, fmt.Errorf("apple verifyReceipt status %d", rec.Status)
 	}
-	out := &iapResult{BundleID: rec.Receipt.BundleID}
+	out := &iapResult{BundleID: rec.Receipt.BundleID, Sandbox: sandbox}
+	seen := map[string]int{} // a transaction can be in both lists
 	for _, row := range append(append([]appleInAppRow(nil), rec.Receipt.InApp...), rec.LatestReceiptInfo...) {
-		if row.ProductID != "" && row.TransactionID != "" {
-			out.Items = append(out.Items, iapItem{ProductID: row.ProductID, TransactionID: row.TransactionID})
+		if row.ProductID == "" || row.TransactionID == "" {
+			continue
 		}
+		at, _ := strconv.ParseInt(row.PurchaseDateMs, 10, 64)
+		it := iapItem{ProductID: row.ProductID, TransactionID: row.TransactionID, PurchasedAt: at, Cancelled: row.CancellationDateMs != ""}
+		if i, dup := seen[it.TransactionID]; dup {
+			out.Items[i].Cancelled = out.Items[i].Cancelled || it.Cancelled
+			continue
+		}
+		seen[it.TransactionID] = len(out.Items)
+		out.Items = append(out.Items, it)
 	}
 	return out, nil
 }

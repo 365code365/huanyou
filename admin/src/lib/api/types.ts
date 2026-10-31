@@ -240,6 +240,7 @@ export interface ProvisionRequest {
   expires_at?: string
   vendor?: string
   vendor_url?: string
+  host_key?: string // SSH host key fingerprint from the precheck: the install refuses another server
 }
 
 export interface ProvisionReport {
@@ -258,6 +259,7 @@ export interface ProvisionReport {
   arch_ok: boolean
   fatal: string[] | null
   warn: string[] | null
+  host_key: string // SSH host key fingerprint the server showed ("SHA256:…")
 }
 
 export type ProvisionEvent =

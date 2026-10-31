@@ -27,6 +27,8 @@ export class ApiError extends Error {
     public status: number,
     public code: string,
     message: string,
+    /** The whole error body, for endpoints that send more than error + message. */
+    public data: Record<string, unknown> = {},
   ) {
     super(message)
   }
@@ -55,7 +57,7 @@ export async function request<T>(method: string, path: string, body?: unknown, q
   }
   const data = await res.json().catch(() => ({}))
   if (res.status === 401 && path !== '/login') token.clear()
-  if (!res.ok) throw new ApiError(res.status, data.error ?? 'http_' + res.status, data.message ?? `请求失败 (${res.status})`)
+  if (!res.ok) throw new ApiError(res.status, data.error ?? 'http_' + res.status, data.message ?? `请求失败 (${res.status})`, data)
   return data as T
 }
 

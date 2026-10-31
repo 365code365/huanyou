@@ -7,14 +7,16 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 )
@@ -163,6 +165,20 @@ func mysqlDSN(dsn string) string {
 	}
 	if !strings.Contains(dsn, "timeout=") {
 		dsn += sep + "timeout=10s"
+	}
+	// Whatever the admin pasted: no LOAD DATA LOCAL (a hostile MySQL server
+	// could otherwise read files of this machine), no cleartext auth, and
+	// read / write timeouts so a half-open connection can't hang a request.
+	if c, err := mysql.ParseDSN(dsn); err == nil {
+		c.AllowAllFiles = false
+		c.AllowCleartextPasswords = false
+		if c.ReadTimeout == 0 {
+			c.ReadTimeout = 60 * time.Second
+		}
+		if c.WriteTimeout == 0 {
+			c.WriteTimeout = 60 * time.Second
+		}
+		dsn = c.FormatDSN()
 	}
 	return dsn
 }
@@ -427,47 +443,100 @@ func grantPlanTx(ctx context.Context, tx *txx, userID int64, planID string, days
 
 type Traffic struct{ Up, Down int64 }
 
+// MaxTrafficDelta caps one user's traffic in one report (1 PiB): anything
+// larger is a broken or malicious agent, and summing such values could
+// overflow int64 (or turn into a REAL in SQLite and break every user read).
+const MaxTrafficDelta int64 = 1 << 50
+
+// TrafficBatch identifies one traffic report of a node. A report the node
+// sends again (its earlier attempt was committed but the response was lost)
+// is then not counted twice. A zero value disables the check (old agents).
+type TrafficBatch struct{ Node, ID string }
+
+const batchHistory = 64 // batch ids remembered per node
+
 // AddTraffic records usage reported by a node. A user's period counter is
 // reset first if their period has ended. Unknown user IDs are ignored.
-func (s *Store) AddTraffic(ctx context.Context, usage map[int64]Traffic, now time.Time, period time.Duration) error {
-	if len(usage) == 0 {
-		return nil
+// applied is false when batch was already recorded (nothing changed).
+func (s *Store) AddTraffic(ctx context.Context, usage map[int64]Traffic, now time.Time, period time.Duration, batch TrafficBatch) (applied bool, err error) {
+	if len(usage) == 0 && batch.ID == "" {
+		return true, nil
 	}
+	// A batch with no usage (only source addresses) still goes through the
+	// history: the caller records its IP hits only when it was applied.
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback()
+	if batch.ID != "" {
+		// The history lives in the same transaction as the counters: either
+		// both are written or neither, so a retry is recognised even after
+		// an API restart.
+		key := "traffic_batches:" + batch.Node
+		q := `SELECT value FROM settings WHERE skey = ?`
+		if s.d.name != DriverSQLite {
+			q += ` FOR UPDATE`
+		}
+		var raw string
+		if err := tx.QueryRowContext(ctx, q, key).Scan(&raw); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return false, err
+		}
+		var ids []string
+		_ = json.Unmarshal([]byte(raw), &ids)
+		if slices.Contains(ids, batch.ID) {
+			return false, nil
+		}
+		ids = append(ids, batch.ID)
+		if len(ids) > batchHistory {
+			ids = ids[len(ids)-batchHistory:]
+		}
+		b, _ := json.Marshal(ids)
+		up := s.d.upsert("settings", []string{"skey", "value", "updated_at"}, []string{"skey"},
+			"value = NEW(value)", "updated_at = NEW(updated_at)")
+		if _, err := tx.ExecContext(ctx, up, key, string(b), now.Unix()); err != nil {
+			return false, err
+		}
+	}
 	day := now.Format("2006-01-02")
 	ps, ts := int64(period/time.Second), now.Unix()
 	updUser := `
 		UPDATE users SET
 			traffic_used = CASE WHEN period_start + ? <= ? THEN ? ELSE traffic_used + ? END,
 			period_start = CASE WHEN period_start + ? <= ?
-			                    THEN period_start + ` + s.d.idiv("? - period_start", "?") + ` * ? ELSE period_start END
+			                    THEN period_start + ` + s.d.idiv("? - period_start", "?") + ` * ? ELSE period_start END,
+			updated_at = ?
 		WHERE id = ?`
 	updDay := s.d.upsert("traffic_daily", []string{"user_id", "day", "up", "down", "updated_at"}, []string{"user_id", "day"},
 		"up = traffic_daily.up + NEW(up)", "down = traffic_daily.down + NEW(down)", "updated_at = NEW(updated_at)")
-	for id, t := range usage {
-		if t.Up < 0 || t.Down < 0 {
+	// Rows are locked in id order, so two nodes reporting at once (or a
+	// report and a payment) can't deadlock on MySQL / PostgreSQL.
+	ids := make([]int64, 0, len(usage))
+	for id := range usage {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		t := usage[id]
+		if t.Up < 0 || t.Down < 0 || t.Up > MaxTrafficDelta || t.Down > MaxTrafficDelta {
 			continue
 		}
 		total := t.Up + t.Down
 		res, err := tx.ExecContext(ctx, updUser,
 			ps, ts, total, total,
 			ps, ts, ts, ps, ps,
-			id)
+			ts, id)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, updDay, id, day, t.Up, t.Down, ts); err != nil {
-			return err
+			return false, err
 		}
 	}
-	return tx.Commit()
+	return true, tx.Commit()
 }
 
 type DailyUsage struct {
@@ -696,6 +765,14 @@ func ApplyPendingRestore(dbPath string) (bool, error) {
 		bak := dbPath + ".bak-pre-restore-" + time.Now().Format("20060102150405")
 		if err := os.Rename(dbPath, bak); err != nil {
 			return false, err
+		}
+		// Commits not yet checkpointed live only in the WAL: it goes with the
+		// backup (SQLite replays <bak>-wal when the backup is opened), so the
+		// kept copy is complete. The -shm index is rebuilt on open.
+		if _, err := os.Stat(dbPath + "-wal"); err == nil {
+			if err := os.Rename(dbPath+"-wal", bak+"-wal"); err != nil {
+				return false, err
+			}
 		}
 	}
 	for _, sfx := range []string{"-wal", "-shm"} {

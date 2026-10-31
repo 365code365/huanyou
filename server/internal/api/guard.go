@@ -122,6 +122,13 @@ func (s *Server) withGuard(next http.Handler) http.Handler {
 		}
 		admin := strings.HasPrefix(path, "/admin")
 		internal := strings.HasPrefix(path, "/internal/")
+		// A node agent with a valid token is never scored or banned: every
+		// user of the node shares its address (a few scanner requests through
+		// the tunnel would otherwise cut the node off from its user list).
+		if internal && s.authNode(r) != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
 		now := time.Now().Unix()
 
 		g := &s.guard
@@ -143,7 +150,9 @@ func (s *Server) withGuard(next http.Handler) http.Handler {
 			g.ips[ip] = e
 		}
 		e.lastAt = now
-		if e.bannedU > now && !admin {
+		// Banned addresses keep the admin panel (so an admin who mistyped can
+		// still look around once unbanned) but can't try passwords.
+		if e.bannedU > now && (!admin || path == "/admin/api/login") {
 			g.mu.Unlock()
 			writeErr(w, http.StatusForbidden, "ip_blocked", "访问过于频繁或存在异常，已被暂时限制，请稍后再试")
 			return

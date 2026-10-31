@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"vpnplatform/server/internal/netguard"
 )
 
 // Cashier implements the "收银台 v1" protocol (docs/payment-api.md): a hosted
@@ -100,7 +102,7 @@ func NewCashier(apiURL, merchantID, signKey, encKey string, channels []Method) (
 	return &Cashier{
 		APIURL: strings.TrimRight(apiURL, "/"), MerchantID: merchantID,
 		SignKey: sk, EncKey: ek, Channels: channels,
-		HTTP: &http.Client{Timeout: httpTimout},
+		HTTP: netguard.Client(httpTimout),
 	}, nil
 }
 

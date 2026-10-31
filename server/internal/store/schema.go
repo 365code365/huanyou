@@ -689,7 +689,29 @@ func repairSQLite(ctx context.Context, conn *sql.Conn) error {
 				}
 				continue // present, or the table itself is gone (dropped later)
 			}
-			if _, err := conn.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, col, def)); err != nil {
+			alter := fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, col, def)
+			if table == "users" && col == "uid" {
+				// The column alone is not enough: every user needs its own uid
+				// (sync and backups key users on it), as migration 9 does. One
+				// transaction (SQLite DDL is transactional): if the backfill
+				// fails, the column is not there either, and the next start
+				// repairs both again.
+				raw, err := conn.BeginTx(ctx, nil)
+				if err != nil {
+					return err
+				}
+				if _, err := raw.ExecContext(ctx, alter); err != nil {
+					raw.Rollback()
+					return fmt.Errorf("schema repair %s.%s: %w", table, col, err)
+				}
+				if err := backfillUserUIDs(ctx, &txx{Tx: raw, d: dialect{DriverSQLite}}); err != nil {
+					raw.Rollback()
+					return fmt.Errorf("schema repair users.uid: %w", err)
+				}
+				if err := raw.Commit(); err != nil {
+					return err
+				}
+			} else if _, err := conn.ExecContext(ctx, alter); err != nil {
 				return fmt.Errorf("schema repair %s.%s: %w", table, col, err)
 			}
 			cols[table][col] = true

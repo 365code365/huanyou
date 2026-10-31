@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
@@ -35,6 +36,9 @@ import (
 func (s *Server) registerAdmin(mux *http.ServeMux) {
 	if s.cfg.Admin.Password == "" {
 		return
+	}
+	if len(s.cfg.Admin.Password) < 12 {
+		slog.Warn("the admin password is short: use 12+ random characters (VPN_ADMIN_PASSWORD)", "length", len(s.cfg.Admin.Password))
 	}
 	mountAdminUI(mux)
 	mux.HandleFunc("POST /admin/api/login", s.adminLogin)
@@ -118,7 +122,7 @@ func (s *Server) registerAdmin(mux *http.ServeMux) {
 // ---- auth ----
 
 func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
-	if !s.limiter.allow("admin:" + s.clientIP(r)) {
+	if !s.limiter.allowIP("admin:", s.clientIP(r)) {
 		writeErr(w, http.StatusTooManyRequests, "rate_limited", "尝试次数过多，请稍后再试")
 		return
 	}
@@ -148,6 +152,9 @@ func (s *Server) adminAuthed(h http.HandlerFunc) http.HandlerFunc {
 			writeErr(w, http.StatusUnauthorized, "unauthorized", "登录已过期，请重新登录")
 			return
 		}
+		// Admin answers carry secrets (node tokens, REALITY keys, payment
+		// keys): never into a browser or proxy cache.
+		w.Header().Set("Cache-Control", "no-store")
 		h(w, r)
 	}
 }

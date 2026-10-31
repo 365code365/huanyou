@@ -25,6 +25,7 @@ import (
 	"vpnplatform/server/internal/auth"
 	"vpnplatform/server/internal/config"
 	"vpnplatform/server/internal/logbuf"
+	"vpnplatform/server/internal/memlimit"
 	"vpnplatform/server/internal/monitor"
 	"vpnplatform/server/internal/store"
 )
@@ -36,6 +37,8 @@ func main() {
 	// everything still goes to stderr (journald) as before.
 	logbuf.Default = logbuf.New(5000)
 	slog.SetDefault(slog.New(logbuf.Default.Wrap(slog.NewTextHandler(os.Stderr, nil))))
+	// The API often shares a small VPS with a node: leave it the larger part.
+	memlimit.Set(0.4)
 	cfg, err := config.LoadAPI(*cfgPath)
 	if err != nil {
 		fatal("load config", err)
@@ -95,30 +98,44 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go mon.Run(ctx)
+	// Background work (buffer flushes, reconciliation) gets its own context:
+	// it stops only after the last request has finished, so what those
+	// requests buffered is flushed too.
+	runCtx, stopRun := context.WithCancel(context.Background())
 	runDone := make(chan struct{})
-	go func() { apiServer.Run(ctx); close(runDone) }()
-	defer func() { <-runDone }() // flush buffered IP records on shutdown
+	go func() { apiServer.Run(runCtx); close(runDone) }()
+	drained := make(chan struct{})
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		slog.Info("shutting down: finishing in-flight requests")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			slog.Warn("shutdown: requests still running were cut off", "err", err)
+		}
+		close(drained)
 	}()
 
 	if cfg.TLS.Domain != "" {
-		serveTLS(ctx, srv, cfg)
-		return
+		serveTLS(ctx, srv, cfg, drained)
+	} else {
+		slog.Info("api listening", "addr", cfg.Listen, "nodes", len(cat.Nodes), "admin", cfg.Admin.Password != "")
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			fatal("serve", err)
+		}
 	}
-	slog.Info("api listening", "addr", cfg.Listen, "nodes", len(cat.Nodes), "admin", cfg.Admin.Password != "")
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		fatal("serve", err)
-	}
+	// Serve returns as soon as shutdown starts; wait for the requests, then
+	// flush, then (deferred) close the database.
+	<-drained
+	stopRun()
+	<-runDone
+	slog.Info("stopped")
 }
 
 // serveTLS terminates HTTPS on :443 with an automatic Let's Encrypt
 // certificate for cfg.TLS.Domain; :80 answers ACME challenges and redirects
 // everything else to HTTPS. Used by cloned deployments without nginx.
-func serveTLS(ctx context.Context, srv *http.Server, cfg *config.API) {
+func serveTLS(ctx context.Context, srv *http.Server, cfg *config.API, drained <-chan struct{}) {
 	m := &autocert.Manager{
 		Prompt:     autocert.AcceptTOS,
 		HostPolicy: autocert.HostWhitelist(cfg.TLS.Domain),
@@ -149,12 +166,16 @@ func serveTLS(ctx context.Context, srv *http.Server, cfg *config.API) {
 		if err != nil {
 			fatal("listen :443", err)
 		}
+		// The raw listener closes only once the HTTPS server has drained:
+		// closing it first made Serve fail with "use of closed network
+		// connection" and exit without flushing.
 		go func() {
-			<-ctx.Done()
+			<-drained
 			_ = ln.Close()
 		}()
 		slog.Info("api listening (tls, shared with node)", "domain", cfg.TLS.Domain, "node", p)
-		if err := srv.ServeTLS(sniRouter(ln, cfg.TLS.Domain, p), "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := srv.ServeTLS(sniRouter(ln, cfg.TLS.Domain, p), "", ""); err != nil &&
+			!errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 			fatal("serve tls", err)
 		}
 		return

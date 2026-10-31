@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"vpnplatform/server/internal/config"
+	"vpnplatform/server/internal/netguard"
 )
 
 const historyLen = 60 // probe results kept per node (≈1h at the default interval)
@@ -61,7 +62,7 @@ type Event struct {
 
 type Monitor struct {
 	cat *config.LiveCatalog
-	hc  http.Client
+	hc  *http.Client
 
 	mu     sync.RWMutex
 	st     map[string]*Status
@@ -71,7 +72,7 @@ type Monitor struct {
 }
 
 func New(cat *config.LiveCatalog) *Monitor {
-	return &Monitor{cat: cat, st: map[string]*Status{}, hc: http.Client{Timeout: 10 * time.Second}}
+	return &Monitor{cat: cat, st: map[string]*Status{}, hc: netguard.Client(10 * time.Second)}
 }
 
 // Status returns a copy of a node's status. Unknown / not-yet-probed nodes report online,

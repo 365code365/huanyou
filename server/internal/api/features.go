@@ -67,7 +67,7 @@ func shareText(slogan, code, url string) string {
 // handleReferralBind lets a recently created account enter an inviter's code
 // (device accounts never see a registration form, so this is their way in).
 func (s *Server) handleReferralBind(w http.ResponseWriter, r *http.Request, u *store.User) {
-	if !s.limiter.allow("bind:" + s.clientIP(r)) {
+	if !s.limiter.allowIP("bind:", s.clientIP(r)) {
 		writeErr(w, http.StatusTooManyRequests, "rate_limited", "操作过于频繁，请稍后再试")
 		return
 	}

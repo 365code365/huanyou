@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -64,6 +65,9 @@ func (s *Store) RecordIPs(ctx context.Context, hits []IPHit) error {
 		q, args := multiRow(single, len(cols), rows)
 		if _, err := tx.ExecContext(ctx, q, args...); err != nil {
 			if isForeignKey(err) { // user deleted meanwhile: retry row by row, skipping it
+				// End this transaction first: it still holds the write lock
+				// (SQLite) / row locks the row-by-row retry would wait on.
+				_ = tx.Rollback()
 				return s.recordIPsSlow(ctx, single, merged)
 			}
 			return err
@@ -275,11 +279,38 @@ func (s *Store) IPCounts(ctx context.Context, since int64) (map[int64]int, error
 
 // PurgeIPs deletes IP records last seen before the cutoff.
 func (s *Store) PurgeIPs(ctx context.Context, before int64) (int64, error) {
-	r, err := s.db.ExecContext(ctx, `DELETE FROM user_ips WHERE last_seen < ?`, before)
-	if err != nil {
-		return 0, err
+	return s.deleteBatched(ctx, "user_ips", "last_seen < ?", before)
+}
+
+// deleteBatched deletes the rows matching where a few thousand at a time,
+// so a large purge never holds the write lock (SQLite) or many row locks for
+// long while traffic reports and sign-ins wait.
+func (s *Store) deleteBatched(ctx context.Context, table, where string, args ...any) (int64, error) {
+	const batch = 5000
+	var q string
+	switch {
+	case s.d.mysql():
+		q = fmt.Sprintf(`DELETE FROM %s WHERE %s LIMIT %d`, table, where, batch)
+	case s.d.pg():
+		q = fmt.Sprintf(`DELETE FROM %s WHERE ctid IN (SELECT ctid FROM %s WHERE %s LIMIT %d)`, table, table, where, batch)
+	default:
+		q = fmt.Sprintf(`DELETE FROM %s WHERE rowid IN (SELECT rowid FROM %s WHERE %s LIMIT %d)`, table, table, where, batch)
 	}
-	return r.RowsAffected()
+	var total int64
+	for {
+		r, err := s.db.ExecContext(ctx, q, args...)
+		if err != nil {
+			return total, err
+		}
+		n, _ := r.RowsAffected()
+		total += n
+		if n < batch {
+			return total, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+	}
 }
 
 func (s *Store) int64s(ctx context.Context, q string, args ...any) ([]int64, error) {

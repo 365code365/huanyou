@@ -33,6 +33,11 @@ type userMeter struct {
 	up, down atomic.Int64 // bytes since last Drain
 	window   atomic.Int64 // bytes since the last fair-share tick
 	limiter  atomic.Pointer[rate.Limiter]
+	// revoked: the user is no longer allowed on this node (expired, over
+	// quota, banned). Xray's RemoveUser only refuses new connections; with
+	// this set, connections already open stop passing traffic (see
+	// counter.Add) until Xray drops them as idle.
+	revoked atomic.Bool
 
 	mu      sync.Mutex
 	planBps float64 // plan speed limit, bytes/s (0 = unlimited)
@@ -97,6 +102,12 @@ func (s *Stats) meter(email string) *userMeter {
 	return m
 }
 
+// Revoke stops (true) or resumes (false) the traffic of a user's open
+// connections; used when a user is removed from / re-added to the node.
+func (s *Stats) Revoke(email string, revoked bool) {
+	s.meter(email).revoked.Store(revoked)
+}
+
 // SetSpeed sets the user's plan limit in kbit/s (0 = unlimited). Applies to new and existing connections.
 func (s *Stats) SetSpeed(email string, kbps int) {
 	m := s.meter(email)
@@ -124,15 +135,6 @@ func (s *Stats) Drain() map[string]Usage {
 		}
 	}
 	return out
-}
-
-// Restore adds back usage that could not be reported.
-func (s *Stats) Restore(pending map[string]Usage) {
-	for email, u := range pending {
-		m := s.meter(email)
-		m.up.Add(u.Up)
-		m.down.Add(u.Down)
-	}
 }
 
 // --- stats.Manager implementation ---
@@ -344,7 +346,21 @@ type counter struct {
 func (c *counter) Value() int64      { return c.v.Load() }
 func (c *counter) Set(n int64) int64 { return c.v.Swap(n) }
 
+// revokedHold is how long a revoked user's connection is held still: past
+// Xray's idle timeout (connIdle 180 s), which then closes it.
+var revokedHold = 200 * time.Second
+
 func (c *counter) Add(n int64) int64 {
+	if m := c.meter; m != nil && m.revoked.Load() {
+		// Blocking here stalls this connection (as the speed limit does);
+		// it resumes at once if the user is allowed again meanwhile.
+		for waited := time.Duration(0); waited < revokedHold && m.revoked.Load(); waited += 500 * time.Millisecond {
+			time.Sleep(500 * time.Millisecond)
+		}
+		if m.revoked.Load() {
+			return c.v.Load()
+		}
+	}
 	if m := c.meter; m != nil && n > 0 {
 		if c.uplink {
 			m.up.Add(n)

@@ -105,7 +105,7 @@ export const api = {
     rotateToken: (id: string) => http.post<{ token: string }>(`/nodes/${id}/rotate-token`),
     geoip: (ip: string) => http.get<GeoIP>('/geoip', { ip }),
     precheck: (body: ProvisionRequest) => http.post<ProvisionReport>('/nodes/precheck', body),
-    upgrade: (id: string, body: { user?: string; port?: number; password?: string; private_key?: string }) =>
+    upgrade: (id: string, body: { user?: string; port?: number; password?: string; private_key?: string; trust_host_key?: string }) =>
       http.post<{ ok: boolean; arch: string; log: string }>(`/nodes/${id}/upgrade`, body),
     provision: (body: ProvisionRequest, onEvent: (e: ProvisionEvent) => void) =>
       stream('/nodes/provision', body, onEvent),

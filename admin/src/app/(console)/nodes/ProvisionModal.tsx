@@ -1,7 +1,7 @@
 'use client'
 import { RentalFields } from '@/components/ExpiryField'
 import { CheckCircleFilled, CloseCircleFilled, EnvironmentOutlined, LoadingOutlined, WarningFilled } from '@ant-design/icons'
-import { Alert, App, Button, Form, Input, InputNumber, Modal, Segmented, Space, Tag } from 'antd'
+import { Alert, App, Button, Form, Input, InputNumber, Modal, Segmented, Space, Tag, Typography } from 'antd'
 import { useEffect, useRef, useState } from 'react'
 import { api, type GeoIP, type ProvisionReport, type VpnNode } from '@/lib/api'
 import { bytes, errMsg, flag } from '@/lib/format'
@@ -63,7 +63,7 @@ export function ProvisionModal({ open, onClose, onDone }: { open: boolean; onClo
     }
   }
 
-  const reqBody = (v: Record<string, unknown>) => ({
+  const reqBody = (v: Record<string, unknown>, withHostKey: boolean) => ({
     host: (v.host as string).trim(),
     port: v.port as number,
     user: v.user as string,
@@ -76,6 +76,9 @@ export function ProvisionModal({ open, onClose, onDone }: { open: boolean; onClo
     vendor: (v.vendor as string)?.trim(),
     vendor_url: (v.vendor_url as string)?.trim(),
     server_name: (v.server_name as string)?.trim(),
+    // The install only talks to the server the check saw (same SSH host key);
+    // the check itself is what shows the key.
+    host_key: withHostKey ? report?.host_key || undefined : undefined,
   })
 
   // Step 1: read-only environment check.
@@ -84,7 +87,7 @@ export function ProvisionModal({ open, onClose, onDone }: { open: boolean; onClo
     setPhase('checking')
     setReport(undefined)
     try {
-      const rep = await api.nodes.precheck(reqBody(v))
+      const rep = await api.nodes.precheck(reqBody(v, false))
       setReport(rep)
     } catch (e) {
       message.error(errMsg(e))
@@ -108,7 +111,7 @@ export function ProvisionModal({ open, onClose, onDone }: { open: boolean; onClo
     setLog('')
     setError(undefined)
     try {
-      await api.nodes.provision(reqBody(v), (e) => {
+      await api.nodes.provision(reqBody(v, true), (e) => {
         if (e.type === 'log') setLog((l) => l + e.text)
         else if (e.type === 'error') {
           setError(e.message)
@@ -169,7 +172,15 @@ export function ProvisionModal({ open, onClose, onDone }: { open: boolean; onClo
           <pre ref={logRef} className="provision-log">{log || '等待服务器响应…'}</pre>
         </>
       ) : (
-        <Form form={form} layout="vertical" requiredMark={false}>
+        <Form
+          form={form}
+          layout="vertical"
+          requiredMark={false}
+          // Another address is another server: its check (and SSH host key) is still to come.
+          onValuesChange={(changed) => {
+            if ('host' in changed || 'port' in changed) setReport(undefined)
+          }}
+        >
           <p className="muted" style={{ marginTop: -4 }}>
             填一台新服务器（Debian / Ubuntu）的 IP 和 SSH 登录信息，先「检测环境」确认可用，再「开始安装」。密钥、Token、端口都会自动处理。
           </p>
@@ -259,6 +270,12 @@ function ReportPanel({ report: r, onApplyPort }: { report: ProvisionReport; onAp
       {row('端口', r.port_free, r.port_free ? `${r.port} 空闲` : `${r.port} 被 ${r.port_user || '占用'}`)}
       {row('资源', r.disk_free_gb >= 1, `内存 ${r.ram_mb} MB · 磁盘空闲 ${r.disk_free_gb} GB`)}
       {row('时间同步', r.time_synced, r.time_synced ? '已同步' : '未同步（安装时尝试开启）')}
+      {r.host_key && (
+        <div style={{ padding: '3px 0', color: '#6E6F73', fontSize: 12 }}>
+          SSH 主机密钥 <Typography.Text code copyable style={{ fontSize: 12 }}>{r.host_key}</Typography.Text>
+          <span>（可在服务商控制台核对；安装和以后的升级只连接这台服务器）</span>
+        </div>
+      )}
       {r.fatal?.map((f) => (
         <Alert key={f} type="error" showIcon style={{ marginTop: 8 }} message={f}
           action={!r.port_free && r.suggest_port && f.includes('端口') ? <Button size="small" onClick={onApplyPort}>改用 {r.suggest_port}</Button> : undefined} />

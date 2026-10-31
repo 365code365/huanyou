@@ -100,7 +100,7 @@ func (s *Store) LinkCodeOwner(ctx context.Context, code string) (int64, error) {
 
 // Members returns the devices following primaryID, oldest first.
 func (s *Store) Members(ctx context.Context, primaryID int64) ([]*User, error) {
-	return scanUsers(s.db.QueryContext(ctx, `SELECT `+userCols+` FROM users WHERE primary_id = ? ORDER BY id`, primaryID))
+	return scanUsers(s.db.QueryContext(ctx, `SELECT `+userCols+` FROM users WHERE primary_id = ? AND primary_id <> 0 ORDER BY id`, primaryID))
 }
 
 // LinkDevice makes memberID follow primaryID, allowing at most maxMembers
@@ -121,31 +121,35 @@ func (s *Store) LinkDevice(ctx context.Context, memberID, primaryID int64, maxMe
 	if s.d.name != DriverSQLite {
 		lock = " FOR UPDATE"
 	}
-	var primaryOf int64
-	if err := tx.QueryRowContext(ctx, `SELECT primary_id FROM users WHERE id = ?`+lock, primaryID).Scan(&primaryOf); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
+	// Both rows are locked, in id order (no deadlock with a link the other
+	// way round): otherwise "B joins A" and "A joins P" at the same time
+	// could build a chain B → A → P.
+	links := map[int64]int64{}
+	for _, id := range []int64{min(primaryID, memberID), max(primaryID, memberID)} {
+		var p int64
+		if err := tx.QueryRowContext(ctx, `SELECT primary_id FROM users WHERE id = ?`+lock, id).Scan(&p); err != nil {
+			if errors.Is(err, sql.ErrNoRows) && id == primaryID {
+				return ErrNotFound
+			}
+			return err
 		}
-		return err
+		links[id] = p
 	}
-	if primaryOf != 0 {
+	if links[primaryID] != 0 {
 		return ErrPrimaryIsMem
 	}
-	var cur int64
-	if err := tx.QueryRowContext(ctx, `SELECT primary_id FROM users WHERE id = ?`, memberID).Scan(&cur); err != nil {
-		return err
-	}
+	cur := links[memberID]
 	if cur == primaryID {
 		return tx.Commit()
 	}
 	var followers, count int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE primary_id = ?`, memberID).Scan(&followers); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE primary_id = ? AND primary_id <> 0`, memberID).Scan(&followers); err != nil {
 		return err
 	}
 	if followers > 0 {
 		return ErrHasMembers
 	}
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE primary_id = ?`, primaryID).Scan(&count); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE primary_id = ? AND primary_id <> 0`, primaryID).Scan(&count); err != nil {
 		return err
 	}
 	if count >= maxMembers {

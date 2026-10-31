@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -233,6 +234,9 @@ type Node struct {
 	Weight int `json:"weight"`
 	// Sort orders the node list in the app (ascending).
 	Sort int `json:"sort"`
+	// SSHHostKey: the server's SSH host key fingerprint seen at install,
+	// required to match at upgrades (provision.Target.HostKey).
+	SSHHostKey string `json:"ssh_host_key,omitempty"`
 }
 
 // Serving reports whether the node is offered to users at all. A node whose
@@ -429,6 +433,8 @@ func (c *Catalog) Normalize() error {
 	if c.Monitor.FailThreshold <= 0 {
 		c.Monitor.FailThreshold = 3
 	}
+	// Loose check here (stored catalogs must keep loading); changed addresses
+	// get the strict one in CheckChangedURLs.
 	if c.Monitor.AlertWebhook != "" && !strings.HasPrefix(c.Monitor.AlertWebhook, "http") {
 		return errors.New("预警 Webhook 必须是 http(s) 地址")
 	}
@@ -786,6 +792,8 @@ func (c *Catalog) normalizeExtras() error {
 		p.IOSReviewBuild = 0
 	}
 	g.QueryURL = strings.TrimSpace(g.QueryURL)
+	// Loose check here (stored catalogs must keep loading); changed addresses
+	// get the strict one in CheckChangedURLs.
 	local := func(u string) bool {
 		return strings.HasPrefix(u, "http://127.0.0.1") || strings.HasPrefix(u, "http://localhost")
 	}
@@ -886,4 +894,49 @@ func (c *Catalog) ExpiringNodes(now time.Time, within time.Duration) []Node {
 	}
 	sortSlice(out, func(a, b Node) bool { return a.ExpiresAt.Before(*b.ExpiresAt) })
 	return out
+}
+
+// CheckChangedURLs applies the strict address rules to the outbound URLs the
+// admin set or changed relative to prev. Addresses stored before these rules
+// passed the older prefix checks and keep working: rejecting them at load
+// would stop the API from starting after an upgrade.
+func (c *Catalog) CheckChangedURLs(prev *Catalog) error {
+	var webhook, payLink, queryURL string
+	if prev != nil {
+		webhook, payLink, queryURL = prev.Monitor.AlertWebhook, prev.Payment.Gateway.PayLink, prev.Payment.Gateway.QueryURL
+	}
+	changed := func(now, before string) bool { return now != "" && now != before }
+	if changed(c.Monitor.AlertWebhook, webhook) && !webURL(c.Monitor.AlertWebhook, false) {
+		return errors.New("预警 Webhook 必须是 http(s) 地址")
+	}
+	g := c.Payment.Gateway
+	if changed(g.PayLink, payLink) && !webURL(g.PayLink, true) {
+		return errors.New("下单链接必须是 https 地址（http 只允许本机）")
+	}
+	if changed(g.QueryURL, queryURL) && !webURL(g.QueryURL, true) {
+		return errors.New("订单查询接口必须是 https 地址（http 只允许本机）")
+	}
+	return nil
+}
+
+// webURL reports whether raw is an absolute http(s) URL. With httpsOnly,
+// plain http is accepted only to this machine, judged by the parsed host:
+// "http://localhost@other-host/" and "http://localhost.evil.example/" are
+// not local.
+func webURL(raw string, httpsOnly bool) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	switch u.Scheme {
+	case "https":
+		return true
+	case "http":
+		if !httpsOnly {
+			return true
+		}
+		h := u.Hostname()
+		return h == "127.0.0.1" || h == "localhost" || h == "::1"
+	}
+	return false
 }

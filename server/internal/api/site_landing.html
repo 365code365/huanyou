@@ -298,8 +298,8 @@ footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
    {{with .Android}}<div class="meta">{{if .Date}}{{$t.T "更新于 {0}" .Date}}{{end}}{{if .Size}} · {{.Size}}{{end}}</div>
     {{if .Notes}}<ul>{{range .Notes}}<li>{{.}}</li>{{end}}</ul>{{end}}
     <div class="tip">{{$t.T "下载后点击安装包安装；如被拦截，请在系统设置里允许「安装未知应用」。"}}{{if $.Code}}{{$t.T "安装前请保持邀请码已复制，首次打开会自动识别。"}}{{end}}</div>
-    <div class="sp"></div><a class="btn pri" href="{{.URL}}" onclick="cp()">{{$t.T "下载 Android 安装包"}}</a>
-    {{range .Others}}<a class="alt" href="{{.URL}}" onclick="cp()">{{$t.T "下载 {0}" ($t.T .Label)}}{{if .Size}} · {{.Size}}{{end}}</a>{{end}}
+    <div class="sp"></div><a class="btn pri" href="{{.Href}}" onclick="cp()">{{$t.T "下载 Android 安装包"}}</a>
+    {{range .Others}}<a class="alt" href="{{.Href}}" onclick="cp()">{{$t.T "下载 {0}" ($t.T .Label)}}{{if .Size}} · {{.Size}}{{end}}</a>{{end}}
    {{else}}<div class="sp"></div><a class="btn sec disabled">{{$t.T "暂未提供"}}</a>{{end}}
   </div>
   <div class="pkg reveal">
@@ -307,7 +307,7 @@ footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
    {{with .IOS}}<div class="meta">{{if .Date}}{{$t.T "更新于 {0}" .Date}}{{end}}{{if .Size}} · {{.Size}}{{end}}</div>
     {{if .Notes}}<ul>{{range .Notes}}<li>{{.}}</li>{{end}}</ul>{{end}}
     <div class="tip">{{$t.T "请用 Safari 打开本页安装；仅已登记设备的测试人员可以安装。安装后如提示「未受信任的开发者」，到 设置 → 通用 → VPN 与设备管理 中信任。"}}</div>
-    <div class="sp"></div><a class="btn sec" href="{{.URL}}" onclick="cp()">{{$t.T "安装 iPhone 版"}}</a>
+    <div class="sp"></div><a class="btn sec" href="{{.Href}}" onclick="cp()">{{$t.T "安装 iPhone 版"}}</a>
    {{else}}<div class="sp"></div><a class="btn sec disabled">{{$t.T "iPhone 版暂未提供"}}</a>{{end}}
   </div>
   {{with .Windows}}<div class="pkg reveal">
@@ -315,16 +315,16 @@ footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
    <div class="meta">{{if .Date}}{{$t.T "更新于 {0}" .Date}}{{end}}{{if .Size}} · {{.Size}}{{end}}</div>
    {{if .Notes}}<ul>{{range .Notes}}<li>{{.}}</li>{{end}}</ul>{{end}}
    <div class="tip">{{$t.T "支持 Windows 10 / 11（64 位）。下载后解压，打开文件夹里的 Huanyou.exe；请勿只单独拷出 exe。连接后通过系统代理生效，浏览器和大多数软件无需设置。"}}</div>
-   <div class="sp"></div><a class="btn sec" href="{{.URL}}" onclick="cp()">{{if .Label}}{{$t.T "下载 Windows {0}" ($t.T .Label)}}{{else}}{{$t.T "下载 Windows 版"}}{{end}}</a>
-   {{range .Others}}<a class="alt" href="{{.URL}}" onclick="cp()">{{$t.T "下载 {0}" ($t.T .Label)}}{{if .Size}} · {{.Size}}{{end}}</a>{{end}}
+   <div class="sp"></div><a class="btn sec" href="{{.Href}}" onclick="cp()">{{if .Label}}{{$t.T "下载 Windows {0}" ($t.T .Label)}}{{else}}{{$t.T "下载 Windows 版"}}{{end}}</a>
+   {{range .Others}}<a class="alt" href="{{.Href}}" onclick="cp()">{{$t.T "下载 {0}" ($t.T .Label)}}{{if .Size}} · {{.Size}}{{end}}</a>{{end}}
   </div>{{end}}
   {{with .Mac}}<div class="pkg reveal">
    <h3>Mac{{if .Version}}<span dir="ltr">v{{.Version}} ({{.Build}})</span>{{end}}</h3>
    <div class="meta">{{if .Date}}{{$t.T "更新于 {0}" .Date}}{{end}}{{if .Size}} · {{.Size}}{{end}}</div>
    {{if .Notes}}<ul>{{range .Notes}}<li>{{.}}</li>{{end}}</ul>{{end}}
    <div class="tip">{{$t.T "支持 macOS 12 及以上（Apple 芯片和 Intel）。下载后双击打开，把「环游」拖进「应用程序」文件夹。首次打开如提示无法验证开发者，请右键点 App 选「打开」。需要使用管理员账户，连接后通过系统代理生效。"}}</div>
-   <div class="sp"></div><a class="btn sec" href="{{.URL}}" onclick="cp()">{{if .Label}}{{$t.T "下载 Mac {0}" ($t.T .Label)}}{{else}}{{$t.T "下载 Mac 版"}}{{end}}</a>
-   {{range .Others}}<a class="alt" href="{{.URL}}" onclick="cp()">{{$t.T "下载 {0}" ($t.T .Label)}}{{if .Size}} · {{.Size}}{{end}}</a>{{end}}
+   <div class="sp"></div><a class="btn sec" href="{{.Href}}" onclick="cp()">{{if .Label}}{{$t.T "下载 Mac {0}" ($t.T .Label)}}{{else}}{{$t.T "下载 Mac 版"}}{{end}}</a>
+   {{range .Others}}<a class="alt" href="{{.Href}}" onclick="cp()">{{$t.T "下载 {0}" ($t.T .Label)}}{{if .Size}} · {{.Size}}{{end}}</a>{{end}}
   </div>{{end}}
  </div>
  <div class="notice"><b>{{$t.T "内部测试应用，不开放公众使用。"}}</b>{{$t.T "本页面及安装包仅供受邀的内部测试人员使用，请勿转发或公开传播。"}}</div>
