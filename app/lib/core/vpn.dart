@@ -20,9 +20,15 @@ class Vpn {
     if (_desktop) return DesktopVpn.statusStream();
     return _events.receiveBroadcastStream().map((e) {
       final m = Map<String, dynamic>.from(e as Map);
+      final since = (m['since'] as num?)?.toInt() ?? 0;
+      connectedSince = since > 0 ? DateTime.fromMillisecondsSinceEpoch(since) : null;
       return (_parse(m['status'] as String?), m['message'] as String?);
     });
   }
+
+  /// When the running tunnel first connected, as reported by the native side
+  /// (survives the app being closed and reopened while the VPN stays up).
+  static DateTime? connectedSince;
 
   static Future<VpnStatus> status() async {
     if (_desktop) return DesktopVpn.status();

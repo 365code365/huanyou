@@ -38,7 +38,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
   bool _opened = false;
 
   /// Desktop: download, verify and install in the app ("" = possible).
-  late final String _desktopBlocker = DesktopUpdater.supported ? DesktopUpdater.blocker() : 'n/a';
+  late final String _desktopBlocker = DesktopUpdater.supported ? DesktopUpdater.blocker(widget.update) : 'n/a';
   bool get _inApp => _desktopBlocker.isEmpty;
   double? _progress; // downloading (0..1)
   bool _installing = false;

@@ -38,7 +38,10 @@ class DesktopUpdater {
 
   /// Why the app can't update itself in place ("" = it can). Users then
   /// download from the browser instead.
-  static String blocker() {
+  static String blocker([AppUpdate? u]) {
+    // Without a checksum (a release that only links an external URL) the
+    // package can't be verified, so it is not installed in place.
+    if (u != null && u.sha256.isEmpty) return tr('该版本需要在浏览器中下载安装');
     final dir = installDir;
     if (Platform.isMacOS) {
       final p = dir.path;
@@ -68,8 +71,9 @@ class DesktopUpdater {
     final dir = _work;
     if (dir.existsSync()) dir.deleteSync(recursive: true);
     dir.createSync(recursive: true);
-    final name = Uri.parse(u.url).pathSegments.last;
-    final file = File('${dir.path}${Platform.pathSeparator}$name');
+    // A fixed name with the right extension: the URL may have none (a signed
+    // or query URL), and Expand-Archive refuses files not ending in .zip.
+    final file = File('${dir.path}${Platform.pathSeparator}${Platform.isMacOS ? 'update.dmg' : 'update.zip'}');
     final sink = file.openSync(mode: FileMode.write);
     final client = http.Client();
     var got = 0;
@@ -107,7 +111,7 @@ class DesktopUpdater {
       sink.closeSync();
       client.close();
     }
-    if (u.sha256.isNotEmpty && await _sha256(file) != u.sha256.toLowerCase()) {
+    if (u.sha256.isEmpty || await _sha256(file) != u.sha256.toLowerCase()) {
       file.deleteSync();
       throw UpdateException(tr('安装包校验失败，请重试'));
     }

@@ -148,7 +148,12 @@ final class VpnPlugin: NSObject, FlutterStreamHandler {
       }
       return
     }
-    sink?(["status": Self.statusName(status)])
+    var event: [String: Any] = ["status": Self.statusName(status)]
+    // When the tunnel came up (ms), so a re-launched app shows the real time.
+    if status == .connected, let d = manager?.connection.connectedDate {
+      event["since"] = Int64(d.timeIntervalSince1970 * 1000)
+    }
+    sink?(event)
   }
 
   private static func statusName(_ s: NEVPNStatus) -> String {

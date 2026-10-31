@@ -87,7 +87,9 @@ class MainActivity : FlutterActivity() {
         EventChannel(messenger, "vpn_platform/vpn_status").setStreamHandler(object : EventChannel.StreamHandler {
             override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
                 statusListener?.let { VpnState.removeListener(it) }
-                val l: (String, String?) -> Unit = { s, m -> events.success(mapOf("status" to s, "message" to m)) }
+                val l: (String, String?) -> Unit = { s, m ->
+                    events.success(mapOf("status" to s, "message" to m, "since" to VpnState.since))
+                }
                 statusListener = l
                 VpnState.addListener(l)
                 l(VpnState.status, VpnState.message)
@@ -119,7 +121,14 @@ class MainActivity : FlutterActivity() {
             startActivityForResult(consent, REQ_VPN) // system "allow VPN connection" dialog
         } else {
             askNotificationPermission()
-            startVpnService(name)
+            try {
+                startVpnService(name)
+            } catch (e: Exception) {
+                // Android 12+: starting a foreground service from the
+                // background is refused (ForegroundServiceStartNotAllowedException).
+                result.error("start_failed", "请打开应用后再连接", null)
+                return
+            }
             result.success(null)
         }
     }

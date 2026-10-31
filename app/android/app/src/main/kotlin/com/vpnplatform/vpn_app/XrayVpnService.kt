@@ -78,14 +78,42 @@ class XrayVpnService : VpnService() {
         startForegroundCompat(name)
         worker.execute {
             restarts = 0
+            pendingRetry?.cancel(false)
+            pendingRetry = null
             // An explicit connect while running (e.g. new node) replaces the tunnel.
             if (intent?.action == ACTION_CONNECT && Vpncore.isRunning()) cleanup()
-            startVpn(name)
+            // A user connect reports a failure right away; a start by the system
+            // (always-on VPN, START_STICKY restart) keeps retrying like a restart.
+            startVpn(name, retry = intent?.action != ACTION_CONNECT)
         }
         return START_STICKY
     }
 
-    private fun startVpn(name: String) {
+    // Rebuilding after a network change / a system restart can fail while the
+    // network is still settling. The service then retries on its own (it is
+    // already in the foreground), because the app could not restart it from
+    // the background on Android 12+.
+    private var pendingRetry: ScheduledFuture<*>? = null
+    private var retryAttempt = 0
+
+    private fun scheduleRetry(name: String, reason: String?) {
+        if (retryAttempt >= 6) {
+            retryAttempt = 0
+            VpnState.set("error", reason ?: "连接失败")
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf(lastStartId)
+            return
+        }
+        val secs = minOf(30L, 2L shl retryAttempt) // 2, 4, 8, 16, 30, 30
+        retryAttempt++
+        VpnState.set("connecting", "连接中断，正在自动重试…")
+        pendingRetry = worker.schedule({
+            pendingRetry = null
+            startVpn(name, retry = true)
+        }, secs, TimeUnit.SECONDS)
+    }
+
+    private fun startVpn(name: String, retry: Boolean = false) {
         if (Vpncore.isRunning()) {
             VpnState.set("connected")
             return
@@ -120,11 +148,18 @@ class XrayVpnService : VpnService() {
             })
             currentNet?.let { setUnderlyingNetworks(arrayOf(it)) }
             watchNetwork()
+            retryAttempt = 0
             VpnState.set("connected")
         } catch (e: Exception) {
             Log.e(TAG, "start failed", e)
-            unwatchNetwork()
             cleanup()
+            // No profile / no permission can't get better by retrying.
+            val permanent = e is IllegalStateException
+            if (retry && !permanent) {
+                scheduleRetry(name, e.message)
+                return
+            }
+            unwatchNetwork()
             VpnState.set("error", e.message)
             stopSelf(lastStartId)
         }
@@ -132,6 +167,9 @@ class XrayVpnService : VpnService() {
 
     /** reason != null tells the app the stop was not the user's choice (don't auto-reconnect). */
     private fun stopVpn(reason: String? = null, startId: Int = lastStartId) {
+        pendingRetry?.cancel(false)
+        pendingRetry = null
+        retryAttempt = 0
         VpnState.set("disconnecting")
         unwatchNetwork()
         cleanup()
@@ -248,7 +286,7 @@ class XrayVpnService : VpnService() {
             restarts++
             VpnState.set("connecting", "网络已切换，正在重连…")
             cleanup()
-            startVpn(sessionName)
+            startVpn(sessionName, retry = true)
         }, 1200, TimeUnit.MILLISECONDS)
     }
 
@@ -283,7 +321,14 @@ class XrayVpnService : VpnService() {
             this, 1, Intent(this, XrayVpnService::class.java).setAction(ACTION_DISCONNECT),
             PendingIntent.FLAG_IMMUTABLE,
         )
-        val n: Notification = Notification.Builder(this, CHANNEL_ID)
+        // Notification.Builder(context, channel) is API 26+; minSdk is 24.
+        val b = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, CHANNEL_ID)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(this).setPriority(Notification.PRIORITY_LOW)
+        }
+        val n: Notification = b
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setContentTitle("环游 VPN 已开启")
             .setContentText(name)
@@ -292,7 +337,14 @@ class XrayVpnService : VpnService() {
             .addAction(Notification.Action.Builder(null, "断开", stop).build())
             .build()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            // systemExempted is the type Android documents for VPN apps; if the
+            // system does not grant it on this device, specialUse still works.
+            try {
+                startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED)
+            } catch (e: Exception) {
+                Log.w(TAG, "systemExempted refused, using specialUse", e)
+                startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            }
         } else {
             startForeground(NOTIFICATION_ID, n)
         }

@@ -149,6 +149,13 @@ class AppController extends ChangeNotifier {
     _statusSub = Vpn.statusStream().listen(_onStatus, onError: (_) {});
     try {
       status = await Vpn.status();
+      if (status == VpnStatus.connected || status == VpnStatus.connecting) {
+        // The tunnel outlived the previous app run (the VPN keeps running when
+        // the app is closed): it is what the user wants, so it is kept up
+        // (auto-reconnect) like one connected in this run.
+        _wantConnected = true;
+        _wasConnected = status == VpnStatus.connected;
+      }
     } on PlatformException {
       // No native side (e.g. widget tests): stay disconnected.
     } on MissingPluginException {
@@ -273,6 +280,9 @@ class AppController extends ChangeNotifier {
   void _onStatus((VpnStatus, String?) e) {
     final prev = status;
     status = e.$1;
+    // Native messages are Chinese source strings: translated like the app's own.
+    final native = e.$2 == null || e.$2 == 'revoked' ? e.$2 : tr(e.$2!);
+    e = (e.$1, native);
     statusHint = e.$1 == VpnStatus.connecting ? e.$2 : null;
     // After a cancel, errors from the half-started tunnel are not news.
     if (cancelling && (e.$1 == VpnStatus.error || e.$1 == VpnStatus.disconnected)) {
@@ -293,11 +303,13 @@ class AppController extends ChangeNotifier {
     }
     if (e.$1 == VpnStatus.disconnected || e.$1 == VpnStatus.error) _stopRequested = false;
     if (e.$1 == VpnStatus.error) message = e.$2 ?? tr('连接失败');
-    if (e.$1 == VpnStatus.connected && prev != VpnStatus.connected) Analytics.track('vpn_connected');
+    // Counted when a connect of this run succeeds, not when a reopened app
+    // finds the tunnel already up.
+    if (e.$1 == VpnStatus.connected && prev == VpnStatus.connecting) Analytics.track('vpn_connected');
     if (e.$1 == VpnStatus.error && prev == VpnStatus.connecting) Analytics.track('vpn_connect_failed');
     if (e.$1 == VpnStatus.connected) {
       message = null;
-      connectedAt ??= DateTime.now();
+      connectedAt ??= Vpn.connectedSince ?? DateTime.now();
       _wasConnected = true;
       _reconnectTimer?.cancel();
       // Reset the reconnect backoff only once the tunnel has stayed up: a
@@ -342,7 +354,8 @@ class AppController extends ChangeNotifier {
   int _reconnectAttempt = 0;
   Timer? _reconnectTimer;
 
-  bool get reconnecting => _reconnectTimer?.isActive ?? false;
+  bool get reconnecting => (_reconnectTimer?.isActive ?? false) || _reconnectOnResume;
+  bool _reconnectOnResume = false;
 
   void _scheduleReconnect() {
     _reconnectTimer?.cancel();
@@ -355,7 +368,14 @@ class AppController extends ChangeNotifier {
     _reconnectAttempt++;
     message = tr('连接已断开，{0} 秒后自动重连（第 {1} 次）', [secs, _reconnectAttempt]);
     _reconnectTimer = Timer(Duration(seconds: secs), () {
-      if (_wantConnected && !active) connect(auto: true);
+      if (!_wantConnected || active) return;
+      // Android 12+ does not let a background app start the VPN service
+      // (foreground-service start restriction): do it when the app is back.
+      if (Platform.isAndroid && !foreground) {
+        _reconnectOnResume = true;
+        return;
+      }
+      connect(auto: true);
     });
   }
 
@@ -499,6 +519,10 @@ class AppController extends ChangeNotifier {
   /// Called when the app returns to the foreground.
   void onResumed() {
     foreground = true;
+    if (_reconnectOnResume) {
+      _reconnectOnResume = false;
+      if (_wantConnected && !active) connect(auto: true);
+    }
     if (loggedIn == true && api.token != null) {
       refresh(quiet: !loadFailed);
     } else {
@@ -574,6 +598,7 @@ class AppController extends ChangeNotifier {
     _wantConnected = false;
     _wasConnected = false;
     _reconnectTimer?.cancel();
+    _reconnectOnResume = false;
     _reconnectAttempt = 0;
     message = null;
     if (!startedNative) {
@@ -711,7 +736,7 @@ class AppController extends ChangeNotifier {
     } on PlatformException catch (e) {
       if (cancelled() || e.code == 'cancelled') return ConnectResult.cancelled;
       status = VpnStatus.disconnected;
-      message = e.message ?? tr('无法启动 VPN');
+      message = e.message != null ? tr(e.message!) : tr('无法启动 VPN');
       notifyListeners();
       return ConnectResult.failed;
     }
@@ -724,6 +749,7 @@ class AppController extends ChangeNotifier {
     _wantConnected = false;
     _wasConnected = false;
     _reconnectTimer?.cancel();
+    _reconnectOnResume = false;
     _reconnectAttempt = 0;
     _stopRequested = true;
     status = VpnStatus.disconnecting;
