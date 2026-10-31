@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,25 +27,56 @@ type planView struct {
 	OverQuotaKbps int     `json:"over_quota_kbps"`
 	Free          bool    `json:"free"`
 	Hot           bool    `json:"hot"`
+	// IAPProductID is the App Store product id the iOS app buys for this plan.
+	// Create a matching product in App Store Connect (same id). Only used on
+	// the iOS IAP face.
+	IAPProductID string `json:"iap_product_id,omitempty"`
 }
 
-func (s *Server) handlePlans(w http.ResponseWriter, _ *http.Request) {
+// iapMethod is the pseudo payment method shown on the iOS IAP face. There is
+// no web order for it: the app buys through StoreKit and the server grants
+// after verifying the receipt (iap.go).
+const iapMethod = "iap"
+
+// clientPlatform / clientBuild read what the app reports about itself. The app
+// sends ?platform=ios&build=7 on /api/v1/plans and /api/v1/apps so the server
+// can serve the right face. Absent (older clients, curl) = non-iOS gateway.
+func clientPlatform(r *http.Request) string { return r.URL.Query().Get("platform") }
+func clientBuild(r *http.Request) int       { b, _ := strconv.Atoi(r.URL.Query().Get("build")); return b }
+
+func (s *Server) handlePlans(w http.ResponseWriter, r *http.Request) {
 	cat := s.cat()
+	iap := cat.Payment.IOSIAPFace(clientPlatform(r), clientBuild(r))
 	list := cat.PlansByPrice()
 	plans := make([]planView, 0, len(list))
 	for _, p := range list {
 		if p.Hidden {
 			continue
 		}
-		plans = append(plans, planView{p.ID, p.Name, p.Description, p.PriceCents, p.DurationDays,
-			p.TrafficGB, p.SpeedMbps, p.OverQuotaKbps, p.ID == cat.FreePlan, p.Hot})
+		v := planView{ID: p.ID, Name: p.Name, Description: p.Description, PriceCents: p.PriceCents,
+			DurationDays: p.DurationDays, TrafficGB: p.TrafficGB, SpeedMbps: p.SpeedMbps,
+			OverQuotaKbps: p.OverQuotaKbps, Free: p.ID == cat.FreePlan, Hot: p.Hot}
+		if iap && !v.Free {
+			v.IAPProductID = p.IAPProductID()
+		}
+		plans = append(plans, v)
 	}
-	methods := s.payMethods()
-	enabled := !cat.Payment.Disabled && len(methods) > 0
-	if !enabled {
-		methods = []payment.Method{} // nothing to pick: the app greys the buy buttons
+	var methods []payment.Method
+	var enabled bool
+	payMode := "gateway"
+	if iap {
+		// App Review face: Apple in-app purchase only, no web order path.
+		payMode = "iap"
+		methods = []payment.Method{{ID: iapMethod, Name: "App 内购买"}}
+		enabled = true
+	} else {
+		methods = s.payMethods()
+		enabled = !cat.Payment.Disabled && len(methods) > 0
+		if !enabled {
+			methods = []payment.Method{} // nothing to pick: the app greys the buy buttons
+		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"plans": plans, "methods": methods,
+	writeJSON(w, http.StatusOK, map[string]any{"plans": plans, "methods": methods, "pay_mode": payMode,
 		"purchase": map[string]any{"enabled": enabled, "notice": cat.Payment.DisabledNotice}})
 }
 
@@ -82,6 +114,13 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request, u *st
 		return
 	}
 	cat := s.cat()
+	// On the iOS IAP face, digital goods must be bought through StoreKit, not
+	// a web order. The app uses /api/v1/iap/verify instead; refuse here so the
+	// review build never opens an external payment page.
+	if cat.Payment.IOSIAPFace(clientPlatform(r), clientBuild(r)) {
+		writeErr(w, http.StatusConflict, "use_iap", "请在 App 内购买")
+		return
+	}
 	if cat.Payment.Disabled {
 		writeErr(w, http.StatusForbidden, "purchase_disabled", cat.Payment.DisabledNotice)
 		return

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/api.dart';
 import '../../core/format.dart';
+import '../../core/iap.dart';
 import '../../core/open_url.dart';
 import '../../state/app_scope.dart';
 import '../../theme/app_theme.dart';
@@ -62,6 +63,8 @@ class _PlansPageState extends State<PlansPage> {
   Future<void> _buy() async {
     final plan = _plan;
     if (plan == null || !_purchase.enabled) return;
+    // iOS App Review face: buy through Apple in-app purchase (StoreKit).
+    if (_purchase.iap) return _buyIap(plan);
     if (_methods.isEmpty) return _snack(tr('暂无可用的支付方式'));
     Analytics.track('purchase_start');
     final method = _methods.length == 1 ? _methods.first : await _pickMethod(plan);
@@ -83,6 +86,27 @@ class _PlansPageState extends State<PlansPage> {
       }
     } on ApiException catch (e) {
       _snack(e.message);
+    } finally {
+      if (mounted) setState(() => _buying = false);
+    }
+  }
+
+  Future<void> _buyIap(Plan plan) async {
+    Analytics.track('purchase_start');
+    setState(() => _buying = true);
+    try {
+      await Iap.buy(
+        productId: plan.iapProductId.isNotEmpty ? plan.iapProductId : plan.id,
+        planId: plan.id,
+        api: AppScope.read(context).api,
+      );
+      if (!mounted) return;
+      _snack(tr('支付成功，{0}已生效', [plan.name]));
+      Navigator.pop(context, true);
+    } on IapException catch (e) {
+      if (!e.cancelled) _snack(e.message);
+    } catch (e) {
+      _snack(tr('购买失败：{0}', [e]));
     } finally {
       if (mounted) setState(() => _buying = false);
     }

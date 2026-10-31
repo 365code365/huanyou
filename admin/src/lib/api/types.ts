@@ -564,6 +564,7 @@ export interface PaymentSettings {
   disabled: boolean
   disabled_notice: string
   gateway: GatewaySettings
+  ios_review_build: number
 }
 
 export interface Ad {

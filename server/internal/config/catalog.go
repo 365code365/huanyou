@@ -51,6 +51,25 @@ type PaymentConfig struct {
 	Disabled       bool          `json:"disabled"`
 	DisabledNotice string        `json:"disabled_notice"` // shown in the app, default 暂不支持购买
 	Gateway        GatewayConfig `json:"gateway"`
+	// IOSReviewBuild gates the iOS payment "face". Apple requires digital
+	// goods to be sold through its in-app purchase (StoreKit); the custom web
+	// gateway is only used once an app version is approved. When this is the
+	// build currently under App Review, iOS clients at that build (or newer)
+	// are served the Apple IAP face: the app shows StoreKit purchases and the
+	// web order endpoint is refused. Every other client (older iOS builds,
+	// Android, desktop) keeps the gateway face. Set it to the submitted build
+	// before review; set it back to 0 after approval to flip those users to
+	// the gateway. 0 = off (gateway for everyone).
+	IOSReviewBuild int `json:"ios_review_build"`
+}
+
+// IOSIAPFace reports whether an iOS client at build should see the Apple
+// in-app-purchase face (what App Review must see). All other clients use the
+// web / gateway face. >= so a reviewer on a slightly higher build, or a
+// forgotten reset, errs toward IAP (safe for review) rather than exposing web
+// pay to a build Apple might re-review.
+func (p PaymentConfig) IOSIAPFace(platform string, build int) bool {
+	return platform == "ios" && p.IOSReviewBuild > 0 && build >= p.IOSReviewBuild
 }
 
 // GatewayConfig is the "下单链接" integration with an external payment
@@ -231,9 +250,22 @@ type Plan struct {
 	Sort          int  `json:"sort"`
 	// Hot marks a best seller: the app shows a 🔥 HOT badge.
 	Hot bool `json:"hot"`
+	// IOSProductID overrides the App Store in-app-purchase product id for this
+	// plan. Empty = use the plan id (create a product with the same id in App
+	// Store Connect). Only used on the iOS IAP face.
+	IOSProductID string `json:"ios_product_id,omitempty"`
 }
 
 func (p *Plan) QuotaBytes() int64 { return int64(p.TrafficGB * (1 << 30)) }
+
+// IAPProductID is the App Store product id for this plan (IOSProductID, or the
+// plan id by default).
+func (p *Plan) IAPProductID() string {
+	if p.IOSProductID != "" {
+		return p.IOSProductID
+	}
+	return p.ID
+}
 
 // ReferralConfig grants subscription days for successful invitations.
 type ReferralConfig struct {

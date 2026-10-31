@@ -84,7 +84,8 @@ class Plan {
         speedMbps = (j['speed_mbps'] as num).toInt(),
         overQuotaKbps = (j['over_quota_kbps'] as num).toInt(),
         free = j['free'] as bool? ?? false,
-        hot = j['hot'] as bool? ?? false;
+        hot = j['hot'] as bool? ?? false,
+        iapProductId = j['iap_product_id'] as String? ?? '';
   final String id;
   final String name;
   final String description;
@@ -95,13 +96,18 @@ class Plan {
   final int overQuotaKbps;
   final bool free;
   final bool hot; // 🔥 HOT badge
+  final String iapProductId; // App Store product id, only set on the iOS IAP face
 }
 
 /// Whether purchases are open (admin switch); notice is shown when not.
+/// [mode] is how to pay: "gateway" (web / custom) or "iap" (Apple in-app
+/// purchase, shown to App Review on iOS). "gateway" by default.
 class PurchaseState {
-  const PurchaseState({required this.enabled, required this.notice});
+  const PurchaseState({required this.enabled, required this.notice, this.mode = 'gateway'});
   final bool enabled;
   final String notice;
+  final String mode;
+  bool get iap => mode == 'iap';
 }
 
 /// One home banner / launch popup from GET /api/v1/ads.
@@ -364,6 +370,12 @@ class ApiClient {
   int _preferred = 0; // index of the last base URL that worked
   String? token;
 
+  // The app's platform and build, sent on /plans and /apps so the server can
+  // serve the right face (iOS App Review vs. normal). Set once at startup.
+  String clientPlatform = '';
+  int clientBuild = 0;
+  Map<String, String> get _clientTag => clientPlatform.isEmpty ? const {} : {'platform': clientPlatform, 'build': '$clientBuild'};
+
   /// No-login authentication: exchanges a stable device id for a session token,
   /// provisioning an account on first contact.
   Future<AuthResult> device(String deviceId, String platform, {String? inviteCode}) async {
@@ -416,7 +428,7 @@ class ApiClient {
   }
 
   Future<List<AppRec>> apps() async {
-    final j = await _send('GET', '/api/v1/apps');
+    final j = await _send('GET', '/api/v1/apps', query: _clientTag);
     return (j['apps'] as List).map((e) => AppRec.fromJson(e as Map<String, dynamic>)).toList();
   }
 
@@ -437,14 +449,21 @@ class ApiClient {
 
   /// Plans, payment methods and whether purchases are open.
   Future<(List<Plan>, List<PayMethod>, PurchaseState)> plansFull() async {
-    final j = await _send('GET', '/api/v1/plans');
+    final j = await _send('GET', '/api/v1/plans', query: _clientTag);
     final p = j['purchase'] as Map<String, dynamic>?;
     return (
       (j['plans'] as List).map((e) => Plan.fromJson(e as Map<String, dynamic>)).toList(),
       (j['methods'] as List).map((e) => PayMethod.fromJson(e as Map<String, dynamic>)).toList(),
-      PurchaseState(enabled: p?['enabled'] as bool? ?? true, notice: p?['notice'] as String? ?? ''),
+      PurchaseState(
+          enabled: p?['enabled'] as bool? ?? true,
+          notice: p?['notice'] as String? ?? '',
+          mode: j['pay_mode'] as String? ?? 'gateway'),
     );
   }
+
+  /// Verifies an App Store purchase receipt (iOS IAP face) and grants the plan.
+  Future<void> verifyIap(String planId, String receipt) =>
+      _send('POST', '/api/v1/iap/verify', body: {'plan_id': planId, 'receipt': receipt});
 
   Future<Ads> ads() async => Ads.fromJson(await _send('GET', '/api/v1/ads'));
 

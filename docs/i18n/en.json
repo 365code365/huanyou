@@ -316,6 +316,12 @@
   "网络环境异常（可能需要先登录 Wi-Fi 认证页），请切换网络后重试": "Network problem (you may need to sign in to the Wi-Fi first). Switch networks and try again.",
   "无法连接服务器，请检查网络后重试": "Cannot reach the server. Check your network and try again.",
   "登录状态异常，请稍后重试": "Sign-in problem, please try again later.",
-  "登录已刷新，请再点一次连接": "Sign-in refreshed, tap connect again."
+  "登录已刷新，请再点一次连接": "Sign-in refreshed, tap connect again.",
+  "当前设备不支持 App 内购买": "In-app purchase is not available on this device",
+  "商品暂不可用，请稍后重试": "This item is unavailable, please try again later",
+  "购买校验失败，请稍后在「我的」查看": "Purchase verification failed; please check \"Me\" shortly",
+  "购买失败": "Purchase failed",
+  "等待支付结果超时，如已扣款请稍后在「我的」查看": "Timed out waiting for the result; if charged, check \"Me\" shortly",
+  "购买失败：{0}": "Purchase failed: {0}"
  }
 }

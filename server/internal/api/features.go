@@ -125,8 +125,16 @@ type appView struct {
 	Desc     string `json:"desc"`
 }
 
-// handleApps returns the backend-configured recommended apps.
-func (s *Server) handleApps(w http.ResponseWriter, _ *http.Request) {
+// handleApps returns the backend-configured recommended apps. On the iOS App
+// Review face it returns none: Apple rejects an app that promotes or links out
+// to other apps (a "mini App Store"), so the tab is empty there and the app
+// hides it. Once approved the admin flips the review build off and iOS sees
+// the list like everyone else.
+func (s *Server) handleApps(w http.ResponseWriter, r *http.Request) {
+	if s.cat().Payment.IOSIAPFace(clientPlatform(r), clientBuild(r)) {
+		writeJSON(w, http.StatusOK, map[string]any{"apps": []appView{}})
+		return
+	}
 	list := append([]config.AppRec(nil), s.cat().Apps...)
 	sort.SliceStable(list, func(i, j int) bool { return list[i].Sort < list[j].Sort })
 	out := make([]appView, 0, len(list))

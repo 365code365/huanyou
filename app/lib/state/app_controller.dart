@@ -9,6 +9,7 @@ import '../core/api.dart';
 import '../core/device.dart';
 import '../core/node_quality.dart';
 import '../core/session.dart';
+import '../core/updater.dart';
 import '../core/vpn.dart';
 import '../i18n/i18n.dart';
 
@@ -129,6 +130,10 @@ class AppController extends ChangeNotifier {
   bool get active => status == VpnStatus.connected || status == VpnStatus.connecting;
 
   Future<void> init() async {
+    // Tell the server which platform/build this is, so it serves the right
+    // payment face (iOS App Review vs. normal) on /plans and /apps.
+    api.clientPlatform = Device.platform;
+    Updater.info().then((i) => api.clientBuild = Updater.buildOf(i)).catchError((_) => 0);
     _statusSub = Vpn.statusStream().listen(_onStatus, onError: (_) {});
     try {
       status = await Vpn.status();
@@ -558,6 +563,16 @@ class AppController extends ChangeNotifier {
     return r;
   }
 
+  /// Fetches a fresh profile and updates the cache, without touching the live
+  /// tunnel. Used after a fast-path connect so the next connect is current.
+  Future<void> _refreshProfile(String? node, String modeId) async {
+    try {
+      await session.saveProfile(await api.profile(nodeId: node, mode: modeId));
+    } catch (_) {
+      // keep the cached one; the next connect tries again
+    }
+  }
+
   /// [switching]: the tunnel is up and only gets another node / mode (desktop).
   Future<ConnectResult> _connectOnce({bool switching = false}) async {
     final attempt = ++_attempt;
@@ -575,23 +590,36 @@ class AppController extends ChangeNotifier {
       Profile profile;
       // Cluster and AI 优先 let the server choose (AI picks the most stable nodes).
       final node = mode == ConnectMode.cluster || mode == ConnectMode.ai ? null : selectedNode?.id;
-      try {
-        profile = await api.profile(nodeId: node, mode: mode.id);
-        await session.saveProfile(profile);
-      } on ApiException catch (e) {
-        if (e.unauthorized) {
-          await _onUnauthorized();
-          if (cancelled()) return ConnectResult.cancelled;
-          status = VpnStatus.disconnected;
-          message = tr('登录已刷新，请再点一次连接');
-          notifyListeners();
-          return ConnectResult.failed;
-        }
-        // API unreachable: reuse the last profile for the same node and mode.
-        final cached = await session.cachedProfile();
-        final sameTarget = cached != null && cached.mode == mode.id && (node == null || cached.node.id == node);
-        if (e.code != 'network' || !sameTarget) rethrow;
+      final cached = await session.cachedProfile();
+      final sameTarget = cached != null && cached.mode == mode.id && (node == null || cached.node.id == node);
+      final age = session.profileAge();
+      // Fast path: a very recent profile for the same target. The compiled
+      // profile can be large (the China routing table), so re-downloading it
+      // on every (re)connect is the usual cause of a slow connect on a poor
+      // network. Connect with the cached one now and refresh it in the
+      // background. Kept short (10 min) so a profile change (node UUID / set)
+      // is picked up quickly; longer-lived staleness only matters after admin
+      // changes, which are rare.
+      if (sameTarget && age != null && age < const Duration(minutes: 10)) {
         profile = cached;
+        unawaited(_refreshProfile(node, mode.id));
+      } else {
+        try {
+          profile = await api.profile(nodeId: node, mode: mode.id);
+          await session.saveProfile(profile);
+        } on ApiException catch (e) {
+          if (e.unauthorized) {
+            await _onUnauthorized();
+            if (cancelled()) return ConnectResult.cancelled;
+            status = VpnStatus.disconnected;
+            message = tr('登录已刷新，请再点一次连接');
+            notifyListeners();
+            return ConnectResult.failed;
+          }
+          // API unreachable: reuse the last profile for the same node and mode.
+          if (e.code != 'network' || !sameTarget) rethrow;
+          profile = cached;
+        }
       }
       if (cancelled()) return ConnectResult.cancelled;
       // From here a cancel has to stop the native tunnel (on mobile it keeps

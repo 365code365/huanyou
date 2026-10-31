@@ -2,6 +2,7 @@
 package api
 
 import (
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -44,6 +45,7 @@ type Server struct {
 	gw        gatewayCache // payment link gateway (gateway.go)
 	guard     guardState   // request flood / abuse protection (guard.go)
 	events    eventBuffer  // app analytics (analytics.go)
+	iap       iapVerifier  // App Store receipt verification (iap.go), nil = not configured
 }
 
 func New(cfg *config.API, live *config.LiveCatalog, st *store.Store, issuer *auth.Issuer, mon *monitor.Monitor) (*Server, error) {
@@ -51,8 +53,12 @@ func New(cfg *config.API, live *config.LiveCatalog, st *store.Store, issuer *aut
 	if err != nil {
 		return nil, err
 	}
-	return &Server{cfg: cfg, live: live, store: st, issuer: issuer, limiter: newIPLimiter(rate.Every(6*time.Second), 10),
-		providers: providers, mock: mock, monitor: mon}, nil
+	s := &Server{cfg: cfg, live: live, store: st, issuer: issuer, limiter: newIPLimiter(rate.Every(6*time.Second), 10),
+		providers: providers, mock: mock, monitor: mon}
+	if a := cfg.Payments.AppleIAP; a != nil && a.SharedSecret != "" {
+		s.iap = newAppleVerifier(a.SharedSecret, a.BundleID)
+	}
+	return s, nil
 }
 
 // cat returns the current catalog snapshot (read-only).
@@ -94,6 +100,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/orders", s.authed(s.handleCreateOrder))
 	mux.HandleFunc("GET /api/v1/orders", s.authed(s.handleListOrders))
 	mux.HandleFunc("GET /api/v1/orders/{id}", s.authed(s.handleGetOrder))
+	mux.HandleFunc("POST /api/v1/iap/verify", s.authed(s.handleIAPVerify))
 
 	// Payment provider callbacks (GET for 易支付, POST for Alipay / mock).
 	mux.HandleFunc("/pay/notify/{provider}", s.handleNotify)
@@ -394,7 +401,33 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request, u *store.
 		out = map[string]any{"node": s.nodeView(primary), "mode": mode, "config": pb, "format": "pb"}
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, out)
+	// The compiled profile carries the China routing table and is large
+	// (~200 KB); gzip cuts it several-fold, which is the main win for a slow
+	// connect on a poor network. The app's dart:io client sends
+	// Accept-Encoding: gzip and decompresses transparently.
+	writeJSONGzip(w, r, http.StatusOK, out)
+}
+
+// writeJSONGzip is writeJSON, but gzips a large body when the client accepts
+// it (small bodies are sent as-is: compression would not pay off).
+func writeJSONGzip(w http.ResponseWriter, r *http.Request, status int, v any) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "服务器错误")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if len(b) > 1400 && strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Add("Vary", "Accept-Encoding")
+		w.WriteHeader(status)
+		gz := gzip.NewWriter(w)
+		_, _ = gz.Write(b)
+		_ = gz.Close()
+		return
+	}
+	w.WriteHeader(status)
+	_, _ = w.Write(b)
 }
 
 // ---- node agent endpoints ----

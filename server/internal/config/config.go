@@ -70,8 +70,20 @@ type Payments struct {
 	Alipay  *AlipayConfig  `json:"alipay"`
 	Epay    *EpayConfig    `json:"epay"`
 	Cashier *CashierConfig `json:"cashier"`
+	// AppleIAP verifies iOS in-app purchase receipts (StoreKit), needed for
+	// the App Store review face.
+	AppleIAP *AppleIAPConfig `json:"apple_iap"`
 	// Mock enables a fake payment page for development. NEVER enable in production.
 	Mock bool `json:"mock"`
+}
+
+// AppleIAPConfig verifies App Store in-app purchases.
+type AppleIAPConfig struct {
+	// SharedSecret: App Store Connect → 你的 App → App 信息 → App 专用共享密钥
+	// (used by the legacy verifyReceipt API). Or env VPN_APPLE_SHARED_SECRET.
+	SharedSecret string `json:"shared_secret"`
+	// BundleID guards against receipts from another app (e.g. com.huanyou.vpn).
+	BundleID string `json:"bundle_id"`
 }
 
 // AlipayConfig: official Alipay open platform, 手机网站支付 (alipay.trade.wap.pay).

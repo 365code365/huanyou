@@ -14,6 +14,7 @@ class Session {
   static const _kNode = 'node_id';
   static const _kMode = 'mode';
   static const _kProfile = 'profile';
+  static const _kProfileAt = 'profile_at';
   static const _kDevice = 'device_id';
   static const _kMe = 'snapshot_me';
   static const _kNodes = 'snapshot_nodes';
@@ -71,7 +72,17 @@ class Session {
     }
   }
 
-  Future<void> saveProfile(Profile p) => Prefs.set(_kProfile, jsonEncode(p.toJson()));
+  Future<void> saveProfile(Profile p) async {
+    await Prefs.set(_kProfile, jsonEncode(p.toJson()));
+    await Prefs.set(_kProfileAt, '${DateTime.now().millisecondsSinceEpoch}');
+  }
+
+  /// How long ago the cached profile was saved, or null if there is none.
+  Duration? profileAge() {
+    final at = int.tryParse(Prefs.get(_kProfileAt) ?? '');
+    if (at == null) return null;
+    return DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(at));
+  }
 
   /// Last /me and /nodes responses (raw JSON), or null.
   (Map<String, dynamic>, List<dynamic>)? snapshot() {

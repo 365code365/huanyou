@@ -211,6 +211,13 @@ function PaymentTab({ loaded, onSaved }: { loaded: Loaded; onSaved: (p: PaymentS
             <Input maxLength={30} placeholder="暂不支持购买" />
           </Form.Item>
         )}
+        <h4 className="form-section">App Store 审核（iOS 支付 A/B 面）</h4>
+        <Alert type="warning" showIcon style={{ marginBottom: 16 }}
+          message="苹果要求数字商品走 App 内购买（IAP）。提审前把下面填成提交审核的 iOS 构建号，审核版本就只显示 Apple 内购、且不出现网页支付和第三方应用推荐；审核通过后改回 0，这些 iOS 用户立即切回下方的支付中心。只影响 iOS，安卓/桌面不受影响。" />
+        <Form.Item name="ios_review_build" label="审核中的 iOS 构建号"
+          extra="0 = 关闭（所有 iOS 用户用网页支付）。填写后，构建号 ≥ 此值的 iOS 客户端进入「审核面」（Apple 内购）。请填「版本发布」里提交审核的那个 iOS 构建号。">
+          <InputNumber min={0} max={1000000} style={{ width: 200 }} placeholder="0" />
+        </Form.Item>
         <h4 className="form-section">支付中心（下单链接）</h4>
         <Form.Item name={['gateway', 'enabled']} label="启用" valuePropName="checked"><Switch /></Form.Item>
         <Form.Item name={['gateway', 'name']} label="App 显示名称"><Input maxLength={20} placeholder="在线支付" /></Form.Item>

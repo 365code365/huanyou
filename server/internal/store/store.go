@@ -552,6 +552,31 @@ func (s *Store) OrderByID(ctx context.Context, id string) (*Order, error) {
 	return scanOrder(s.db.QueryRowContext(ctx, `SELECT `+orderCols+` FROM orders WHERE id = ?`, id))
 }
 
+// EnsureOrder creates an order with a caller-supplied id, or returns the
+// existing one. Used for App Store purchases, where the Apple transaction id
+// is the natural idempotency key (a re-verify or "restore purchases" must not
+// create a second order). created is false when the order already existed.
+func (s *Store) EnsureOrder(ctx context.Context, id string, userID int64, planID string, amountCents int64, method string) (o *Order, created bool, err error) {
+	if o, err = s.OrderByID(ctx, id); err == nil {
+		return o, false, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return nil, false, err
+	}
+	now := time.Now()
+	o = &Order{ID: id, UserID: userID, PlanID: planID, AmountCents: amountCents, Method: method, Status: "pending", CreatedAt: now}
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO orders (id, user_id, plan_id, amount_cents, method, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		o.ID, o.UserID, o.PlanID, o.AmountCents, o.Method, now.Unix(), now.Unix())
+	if err != nil {
+		// A concurrent verify may have inserted it first: treat as existing.
+		if o2, e2 := s.OrderByID(ctx, id); e2 == nil {
+			return o2, false, nil
+		}
+		return nil, false, err
+	}
+	return o, true, nil
+}
+
 func (s *Store) OrdersByUser(ctx context.Context, userID int64, limit int) ([]*Order, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+orderCols+` FROM orders WHERE user_id = ? AND status = 'paid' ORDER BY created_at DESC LIMIT ?`, userID, limit)
