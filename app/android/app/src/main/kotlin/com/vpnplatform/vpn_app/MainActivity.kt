@@ -1,11 +1,14 @@
 package com.vpnplatform.vpn_app
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.net.VpnService
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -24,7 +27,7 @@ class MainActivity : FlutterActivity() {
     // The status listener of this engine. The VPN service outlives the
     // activity, so it is removed when the engine goes; otherwise every reopen
     // would add one more listener posting to a dead engine.
-    private var statusListener: ((String, String?) -> Unit)? = null
+    private var statusListener: ((VpnState.Snapshot) -> Unit)? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -33,7 +36,10 @@ class MainActivity : FlutterActivity() {
 
         MethodChannel(messenger, "vpn_platform/vpn").setMethodCallHandler { call, result ->
             when (call.method) {
-                "status" -> result.success(VpnState.status)
+                // The tunnel runs in its own process (VpnState).
+                "status" -> result.success(VpnState.read(this).status)
+                // Why the tunnel stopped while the app was away (null: it didn't).
+                "takeInterruption" -> result.success(Interruption.take(this))
                 "connect" -> {
                     val config = call.argument<String>("config")
                     if (config.isNullOrEmpty()) {
@@ -85,32 +91,75 @@ class MainActivity : FlutterActivity() {
                     externalCacheDir?.listFiles()?.forEach { it.deleteRecursively() }
                     result.success(freed)
                 }
+                // Keeping the VPN alive in the background: battery optimization
+                // and the maker (each brand has its own background settings).
+                "background" -> {
+                    val pm = getSystemService(PowerManager::class.java)
+                    result.success(
+                        mapOf(
+                            "ignoring" to (pm?.isIgnoringBatteryOptimizations(packageName) == true),
+                            "maker" to Build.MANUFACTURER.lowercase(),
+                            "brand" to Build.BRAND.lowercase(),
+                        )
+                    )
+                }
+                "ignoreBatteryOptimizations" -> result.success(requestIgnoreBatteryOptimizations())
+                "openAppSettings" -> result.success(
+                    open(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+                )
                 else -> result.notImplemented()
             }
         }
 
         EventChannel(messenger, "vpn_platform/vpn_status").setStreamHandler(object : EventChannel.StreamHandler {
             override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
-                statusListener?.let { VpnState.removeListener(it) }
-                val l: (String, String?) -> Unit = { s, m ->
-                    events.success(mapOf("status" to s, "message" to m, "since" to VpnState.since))
+                statusListener?.let { VpnState.Watcher.remove(it) }
+                val l: (VpnState.Snapshot) -> Unit = { s ->
+                    events.success(mapOf("status" to s.status, "message" to s.message, "since" to s.since))
                 }
                 statusListener = l
-                VpnState.addListener(l)
-                l(VpnState.status, VpnState.message)
+                VpnState.Watcher.add(this@MainActivity, l) // sends the current state right away
             }
 
             override fun onCancel(arguments: Any?) {
-                statusListener?.let { VpnState.removeListener(it) }
+                statusListener?.let { VpnState.Watcher.remove(it) }
                 statusListener = null
             }
         })
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
-        statusListener?.let { VpnState.removeListener(it) }
+        statusListener?.let { VpnState.Watcher.remove(it) }
         statusListener = null
         super.cleanUpFlutterEngine(flutterEngine)
+    }
+
+    // While the app is on screen, notice a VPN process that died without a
+    // word (killed or crashed) within ~2 s.
+    override fun onResume() {
+        super.onResume()
+        VpnState.Watcher.resume(this)
+    }
+
+    override fun onPause() {
+        VpnState.Watcher.pause()
+        super.onPause()
+    }
+
+    /** The system dialog "let 环游 run in the background"; the settings list if a ROM lacks it. */
+    @SuppressLint("BatteryLife") // a VPN must keep running in the background
+    private fun requestIgnoreBatteryOptimizations(): Boolean {
+        val pm = getSystemService(PowerManager::class.java)
+        if (pm?.isIgnoringBatteryOptimizations(packageName) == true) return true
+        return open(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))) ||
+            open(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+    }
+
+    private fun open(i: Intent): Boolean = try {
+        startActivity(i)
+        true
+    } catch (_: Exception) {
+        false
     }
 
     private fun connect(name: String, result: MethodChannel.Result) {

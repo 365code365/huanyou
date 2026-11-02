@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../../core/analytics.dart';
 import '../../core/api.dart';
+import '../../core/background.dart';
 import '../../core/config.dart';
 import '../../core/format.dart';
 import '../../core/open_url.dart';
@@ -17,9 +18,11 @@ import '../../theme/appearance.dart';
 import '../../widgets/brand_mark.dart';
 import '../../widgets/section_card.dart';
 import '../update/update_dialog.dart';
+import 'background_sheet.dart';
 import 'preferences_sheets.dart';
 
-/// 我的 → 设置: language, appearance, updates, crash reports, cache, about.
+/// 我的 → 设置: background running (Android), language, appearance, updates,
+/// crash reports, cache, about.
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
   @override
@@ -32,6 +35,7 @@ class _SettingsPageState extends State<SettingsPage> {
   int? _cacheBytes;
   bool _checking = false;
   bool _crash = Analytics.crashReportsOn;
+  BackgroundState? _background; // Android only
 
   @override
   void initState() {
@@ -41,6 +45,12 @@ class _SettingsPageState extends State<SettingsPage> {
       if (mounted) setState(() => _version = '${i.version} (${Updater.buildOf(i)})');
     });
     _measureCache();
+    _loadBackground();
+  }
+
+  Future<void> _loadBackground() async {
+    final s = await BackgroundRun.state();
+    if (mounted) setState(() => _background = s);
   }
 
   Future<void> _measureCache() async {
@@ -105,6 +115,20 @@ class _SettingsPageState extends State<SettingsPage> {
       builder: (context, _) => Scaffold(
         appBar: AppBar(title: Text(tr('设置'))),
         body: ListView(padding: const EdgeInsets.fromLTRB(18, 4, 18, 32), children: [
+          // Android: keep the VPN from being closed by the phone in the background.
+          if (_background != null)
+            _Group(label: tr('连接'), children: [
+              MenuRow(
+                key: const Key('settings-background'),
+                icon: Icons.battery_charging_full_rounded,
+                title: tr('后台运行'),
+                value: _background!.ignoringBattery ? null : tr('建议设置'),
+                onTap: () async {
+                  await showBackgroundGuide(context);
+                  await _loadBackground();
+                },
+              ),
+            ]),
           _Group(label: tr('通用'), children: [
             MenuRow(
               key: const Key('settings-language'),

@@ -65,8 +65,15 @@ class XrayVpnService : VpnService() {
     // app showing "connected" with no tunnel.
     @Volatile private var lastStartId = 0
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    override fun onCreate() {
+        super.onCreate()
+        // This service has a process of its own (":vpn", manifest): its
+        // status reaches the UI process through VpnState.
         CrashCatcher.install(this)
+        VpnState.init(this)
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         lastStartId = startId
         if (intent?.action == ACTION_DISCONNECT) {
             worker.execute { stopVpn(startId = startId) }
@@ -80,6 +87,9 @@ class XrayVpnService : VpnService() {
             restarts = 0
             pendingRetry?.cancel(false)
             pendingRetry = null
+            // On the worker, in command order: a disconnect queued before
+            // this connect has already removed the marker.
+            Interruption.on(this)
             // An explicit connect while running (e.g. new node) replaces the tunnel.
             if (intent?.action == ACTION_CONNECT && Vpncore.isRunning()) cleanup()
             // A user connect reports a failure right away; a start by the system
@@ -99,6 +109,7 @@ class XrayVpnService : VpnService() {
     private fun scheduleRetry(name: String, reason: String?) {
         if (retryAttempt >= 6) {
             retryAttempt = 0
+            Interruption.off(this) // given up and reported: not an interruption
             VpnState.set("error", reason ?: "连接失败")
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf(lastStartId)
@@ -160,6 +171,7 @@ class XrayVpnService : VpnService() {
                 return
             }
             unwatchNetwork()
+            Interruption.off(this)
             VpnState.set("error", e.message)
             stopSelf(lastStartId)
         }
@@ -170,6 +182,7 @@ class XrayVpnService : VpnService() {
         pendingRetry?.cancel(false)
         pendingRetry = null
         retryAttempt = 0
+        Interruption.off(this) // the user's stop, or another VPN took over
         VpnState.set("disconnecting")
         unwatchNetwork()
         cleanup()

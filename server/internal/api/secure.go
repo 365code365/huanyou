@@ -321,6 +321,12 @@ func (sw *sealWriter) finish() {
 		_, _ = sw.w.Write(body)
 		return
 	}
+	if st == http.StatusNoContent {
+		// A 204 can carry no body, so not the sealed one the app needs to
+		// trust the answer: it read as a failure, and the app sent the same
+		// analytics events again every round. An empty object, as a 200.
+		st, body = http.StatusOK, []byte("{}")
+	}
 	zipped := h.Get("Content-Encoding") == "gzip"
 	if !zipped && len(body) > 1400 {
 		// Compress before encrypting: ciphertext does not compress.

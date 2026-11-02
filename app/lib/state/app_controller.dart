@@ -155,6 +155,8 @@ class AppController extends ChangeNotifier {
         // (auto-reconnect) like one connected in this run.
         _wantConnected = true;
         _wasConnected = status == VpnStatus.connected;
+      } else {
+        await _checkInterruption();
       }
     } on PlatformException {
       // No native side (e.g. widget tests): stay disconnected.
@@ -194,11 +196,58 @@ class AppController extends ChangeNotifier {
       notifyListeners();
       await deviceSignIn();
     }
+    _resumeTunnel();
     unawaited(_loadFace());
     // Keep traffic / node health current while the app is open.
     _refreshTimer = Timer.periodic(const Duration(minutes: 1), (_) {
       if (loggedIn == true && foreground) refresh(quiet: true);
     });
+  }
+
+  // ---- tunnel stopped while the app was away (Android) ----
+
+  /// The phone's background management closed the app while the VPN was on
+  /// (found at this start): the home page points to the 后台运行 settings.
+  bool backgroundNotice = false;
+  bool _resumeAfterStop = false;
+  static const _kBackgroundNotice = 'bg_notice_at';
+
+  /// The tunnel was on when the app last ran and nobody turned it off: the
+  /// system closed it (background cleanup, low memory), it crashed, the app
+  /// was updated or the phone restarted. It comes back once signed in.
+  Future<void> _checkInterruption() async {
+    final stop = await Vpn.takeInterruption();
+    if (stop == null) return;
+    Analytics.track('vpn_stop_${stop.reason}');
+    if (stop.reason == 'crash') {
+      unawaited(Analytics.reportError('VPN process exited (${stop.detail ?? 'no exit record'})', null, kind: 'native'));
+    }
+    // Force-stopped in the system settings: the user's choice.
+    if (stop.reason == 'user') return;
+    _resumeAfterStop = true;
+    if (stop.bySystem) backgroundNotice = _backgroundNoticeDue();
+  }
+
+  /// At most once a day: on a phone that keeps closing the app it would nag.
+  bool _backgroundNoticeDue() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final last = int.tryParse(Prefs.get(_kBackgroundNotice) ?? '') ?? 0;
+    if (now - last < const Duration(hours: 24).inMilliseconds) return false;
+    Prefs.set(_kBackgroundNotice, '$now');
+    return true;
+  }
+
+  void dismissBackgroundNotice() {
+    backgroundNotice = false;
+    notifyListeners();
+  }
+
+  void _resumeTunnel() {
+    if (!_resumeAfterStop || loggedIn != true) return;
+    _resumeAfterStop = false;
+    if (active) return;
+    _wasConnected = true; // retried with backoff like a tunnel that dropped
+    unawaited(connect(auto: true));
   }
 
   Future<void> _upgradeToken() async {
@@ -261,6 +310,7 @@ class AppController extends ChangeNotifier {
       message = null;
       notifyListeners();
       await refresh();
+      _resumeTunnel(); // the first sign-in of this start may have needed retries
     } catch (e) {
       // Any failure (network, unexpected response) retries with backoff:
       // the splash must never get stuck without a way forward. A user who

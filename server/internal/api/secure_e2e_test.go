@@ -228,6 +228,18 @@ func TestRequestSecurity(t *testing.T) {
 		}
 	})
 
+	t.Run("no-content answers arrive sealed too", func(t *testing.T) {
+		// A sealed 204 lost its body: the app took the post as failed and
+		// sent the same events again and again.
+		st, body, _ := c.do(secReq{method: "POST", path: "/api/v1/events", body: map[string]any{
+			"device_id": "sec-device-0001", "platform": "android", "version": "1.2.6",
+			"events": []map[string]any{{"name": "app_open", "count": 1}},
+		}})
+		if st != 200 || string(body) != "{}" {
+			t.Fatalf("events: %d %q", st, body)
+		}
+	})
+
 	t.Run("large profile-sized body is gzipped inside the seal", func(t *testing.T) {
 		st, body, _ := c.do(secReq{method: "GET", path: "/api/v1/plans?platform=android&build=1"})
 		if st != 200 || !json.Valid(body) {

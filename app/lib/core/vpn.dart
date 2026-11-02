@@ -7,6 +7,22 @@ import 'vpn_desktop.dart';
 
 enum VpnStatus { disconnected, connecting, connected, disconnecting, error }
 
+/// Why the VPN stopped while the app was away (Android).
+class VpnInterruption {
+  const VpnInterruption(this.reason, this.detail);
+
+  /// system (the phone's background cleanup), lowmem, crash, update (the
+  /// app was updated), reboot, user (force-stopped in the system settings).
+  final String reason;
+
+  /// The system's exit record, for crash reports.
+  final String? detail;
+
+  /// The phone closed it to save power / memory: allowing background
+  /// running prevents it.
+  bool get bySystem => reason == 'system' || reason == 'lowmem';
+}
+
 /// Bridge to the native VPN implementation
 /// (Android: XrayVpnService, iOS: PacketTunnel extension,
 /// Windows / macOS: huanyou-core in system-proxy mode, see vpn_desktop.dart).
@@ -49,6 +65,19 @@ class Vpn {
   static Future<void> disconnect() {
     if (_desktop) return DesktopVpn.disconnect();
     return _method.invokeMethod('disconnect');
+  }
+
+  /// Android: the tunnel stopped since the last run without the user turning
+  /// it off (see VpnInterruption). Reported once; null if it didn't.
+  static Future<VpnInterruption?> takeInterruption() async {
+    if (!Platform.isAndroid) return null;
+    try {
+      final m = await _method.invokeMapMethod<String, dynamic>('takeInterruption');
+      if (m == null) return null;
+      return VpnInterruption(m['reason'] as String? ?? 'system', m['detail'] as String?);
+    } catch (_) {
+      return null;
+    }
   }
 
   static VpnStatus _parse(String? s) => switch (s) {

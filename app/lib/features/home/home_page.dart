@@ -13,6 +13,7 @@ import '../../widgets/ad_banner.dart';
 import '../../widgets/brand_mark.dart';
 import '../../widgets/connect_button.dart';
 import '../../widgets/region_flag.dart';
+import '../me/background_sheet.dart';
 import '../nodes/node_list_page.dart';
 import '../plans/plans_page.dart';
 import '../../i18n/i18n.dart';
@@ -64,6 +65,16 @@ class _HomePageState extends State<HomePage> {
                   if (app.message != null) ...[
                     const SizedBox(height: 6),
                     _Notice(text: app.message!),
+                  ],
+                  if (app.backgroundNotice) ...[
+                    const SizedBox(height: 8),
+                    _BackgroundNotice(
+                      onSetup: () {
+                        app.dismissBackgroundNotice();
+                        showBackgroundGuide(context);
+                      },
+                      onClose: app.dismissBackgroundNotice,
+                    ),
                   ],
                   SizedBox(height: c.maxHeight * 0.035),
                   _NodeRow(
@@ -250,6 +261,55 @@ class _Notice extends StatelessWidget {
         Expanded(
           child: Text(text,
               key: const Key('home-message'), style: const TextStyle(color: AppColors.danger, fontSize: 13)),
+        ),
+      ]),
+    );
+  }
+}
+
+/// Shown after the phone closed the app in the background while the VPN was
+/// on (Android): points to the settings that prevent it.
+class _BackgroundNotice extends StatelessWidget {
+  const _BackgroundNotice({required this.onSetup, required this.onClose});
+  final VoidCallback onSetup, onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const Key('background-notice'),
+      padding: const EdgeInsetsDirectional.fromSTEB(14, 10, 4, 4),
+      decoration: BoxDecoration(
+        color: AppColors.warning.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 2),
+            child: Icon(Icons.battery_alert_rounded, size: 17, color: AppColors.warning),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.only(top: 1),
+              child: Text(
+                tr('手机在后台关闭了{0}，VPN 因此断开过。允许后台运行可以避免再次发生。', [AppConfig.appName]),
+                style: TextStyle(fontSize: 13, height: 1.45, color: AppColors.ink),
+              ),
+            ),
+          ),
+          IconButton(
+            key: const Key('background-notice-close'),
+            tooltip: tr('关闭'),
+            visualDensity: VisualDensity.compact,
+            iconSize: 18,
+            onPressed: onClose,
+            icon: Icon(Icons.close_rounded, color: AppColors.sub),
+          ),
+        ]),
+        Align(
+          alignment: AlignmentDirectional.centerEnd,
+          child: TextButton(onPressed: onSetup, child: Text(tr('去设置'))),
         ),
       ]),
     );

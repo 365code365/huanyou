@@ -7,6 +7,15 @@
 
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 我的 → 设置 → 后台运行: the system dialog to stop battery optimization
+         from closing the VPN in the background. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- The VPN process's status broadcasts to the UI process (VpnState):
+         signature-level, so no other app can send or read them. -->
+    <permission
+        android:name="${applicationId}.permission.VPN_STATE"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="${applicationId}.permission.VPN_STATE" />
     <application
         android:label="环游"
         android:name="${applicationName}"
@@ -36,8 +45,11 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Own process: when memory runs short, the system can reclaim the
+             UI (the Flutter engine) and keep the small tunnel process. -->
         <service
             android:name=".XrayVpnService"
+            android:process=":vpn"
             android:exported="false"
             android:foregroundServiceType="systemExempted|specialUse"
             android:permission="android.permission.BIND_VPN_SERVICE">
