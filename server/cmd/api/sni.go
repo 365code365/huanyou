@@ -77,11 +77,15 @@ func (l *chanListener) Accept() (net.Conn, error) {
 func (l *chanListener) Close() error   { l.once.Do(func() { close(l.done) }); return nil }
 func (l *chanListener) Addr() net.Addr { return l.addr }
 
-// sniRouter accepts on ln, sends domain connections to the returned listener
-// and relays all others to passthrough (host:port of the node).
-func sniRouter(ln net.Listener, domain, passthrough string) net.Listener {
+// sniRouter accepts on ln, sends connections for any of domains (the API's
+// domain and its aliases) to the returned listener and relays all others to
+// passthrough (host:port of the node).
+func sniRouter(ln net.Listener, domains []string, passthrough string) net.Listener {
 	api := &chanListener{addr: ln.Addr(), ch: make(chan net.Conn), done: make(chan struct{})}
-	domain = strings.ToLower(domain)
+	ours := map[string]bool{}
+	for _, d := range domains {
+		ours[strings.ToLower(d)] = true
+	}
 	go func() {
 		defer api.Close()
 		for {
@@ -97,7 +101,7 @@ func sniRouter(ln net.Listener, domain, passthrough string) net.Listener {
 				_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
 				sni, hello := peekSNI(c)
 				_ = c.SetReadDeadline(time.Time{})
-				if sni == domain {
+				if ours[sni] {
 					select {
 					case api.ch <- &prefixConn{Conn: c, r: io.MultiReader(bytes.NewReader(hello), c)}:
 					case <-api.done:

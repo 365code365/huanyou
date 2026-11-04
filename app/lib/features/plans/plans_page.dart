@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:in_app_purchase/in_app_purchase.dart' show ProductDetails;
@@ -7,6 +8,7 @@ import '../../core/api.dart';
 import '../../core/format.dart';
 import '../../core/iap.dart';
 import '../../core/open_url.dart';
+import '../../state/app_controller.dart';
 import '../../state/app_scope.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/primary_button.dart';
@@ -48,17 +50,26 @@ class _PlansPageState extends State<PlansPage> {
 
   Future<void> _load() async {
     try {
-      final (plans, methods, purchase) = await AppScope.read(context).api.plansFull();
+      var (plans, methods, purchase) = await AppScope.read(context).api.plansFull();
       Analytics.track('plans_view');
+      if (AppController.playStore && !purchase.gplay) {
+        // The Google Play build must never fall back to web payment, even if
+        // the server does not (yet) serve the Play face (an older API). Then
+        // purchases are simply unavailable.
+        purchase = PurchaseState(
+            enabled: false, notice: '暂不支持购买', mode: 'gplay',
+            termsUrl: purchase.termsUrl, privacyUrl: purchase.privacyUrl);
+        methods = const [];
+      }
       var paid = plans.where((p) => !p.free).toList();
-      var apple = <String, ProductDetails>{};
-      if (purchase.iap) {
-        // App Store face: prices come from Apple (the user's storefront and
-        // currency), never from our backend, so the page always matches what
-        // the App Store charges.
+      var store = <String, ProductDetails>{};
+      if (purchase.store) {
+        // App-store face (Apple / Google Play): prices come from the store
+        // (the user's storefront and currency), never from our backend, so the
+        // page always matches what the store charges.
         final byProduct = await Iap.products({for (final p in paid) _productId(p)});
-        apple = {for (final p in paid) if (byProduct[_productId(p)] != null) p.id: byProduct[_productId(p)]!};
-        paid = paid.where((p) => apple.containsKey(p.id)).toList();
+        store = {for (final p in paid) if (byProduct[_productId(p)] != null) p.id: byProduct[_productId(p)]!};
+        paid = paid.where((p) => store.containsKey(p.id)).toList();
       }
       if (!mounted) return;
       AppScope.read(context).setIapFace(purchase.iap);
@@ -68,7 +79,7 @@ class _PlansPageState extends State<PlansPage> {
         _plans = paid;
         _methods = methods;
         _purchase = purchase;
-        _apple = apple;
+        _apple = store;
         _selected = paid.any((p) => p.id == current?.planId) ? current!.planId : (paid.isEmpty ? null : paid.first.id);
       });
     } on ApiException catch (e) {
@@ -90,16 +101,21 @@ class _PlansPageState extends State<PlansPage> {
 
   Plan? get _plan => _plans?.where((p) => p.id == _selected).firstOrNull;
 
-  static String _productId(Plan p) => p.iapProductId.isNotEmpty ? p.iapProductId : p.id;
+  /// The store product id for [p]: Google Play's on the Play face, else the
+  /// App Store's (both fall back to the plan id).
+  static String _productId(Plan p) {
+    if (Platform.isAndroid) return p.gpProductId.isNotEmpty ? p.gpProductId : p.id;
+    return p.iapProductId.isNotEmpty ? p.iapProductId : p.id;
+  }
 
-  /// The price shown for [p]: Apple's localized price on the IAP face, our
-  /// backend price on the web face.
-  String _price(Plan p) => _purchase.iap ? (_apple[p.id]?.price ?? '') : formatYuan(p.priceCents);
+  /// The price shown for [p]: the store's localized price on an app-store
+  /// face, our backend price on the web face.
+  String _price(Plan p) => _purchase.store ? (_apple[p.id]?.price ?? '') : formatYuan(p.priceCents);
 
   /// "约 ¥20/月" for plans of two months or more ("" otherwise).
   String _perMonth(Plan p) {
     if (p.durationDays < 60) return '';
-    if (!_purchase.iap) return tr('约 {0}/月', [formatYuan(p.priceCents * 30 ~/ p.durationDays)]);
+    if (!_purchase.store) return tr('约 {0}/月', [formatYuan(p.priceCents * 30 ~/ p.durationDays)]);
     final pd = _apple[p.id];
     if (pd == null) return '';
     final v = pd.rawPrice * 30 / p.durationDays;
@@ -137,8 +153,9 @@ class _PlansPageState extends State<PlansPage> {
   Future<void> _buy() async {
     final plan = _plan;
     if (plan == null || !_purchase.enabled) return;
-    // iOS App Review face: buy through Apple in-app purchase (StoreKit).
-    if (_purchase.iap) return _buyIap(plan);
+    // App-store face: buy through the store's in-app purchase (StoreKit /
+    // Google Play Billing).
+    if (_purchase.store) return _buyStore(plan);
     if (_methods.isEmpty) return _snack(tr('暂无可用的支付方式'));
     Analytics.track('purchase_start');
     final method = _methods.length == 1 ? _methods.first : await _pickMethod(plan);
@@ -165,7 +182,7 @@ class _PlansPageState extends State<PlansPage> {
     }
   }
 
-  Future<void> _buyIap(Plan plan) async {
+  Future<void> _buyStore(Plan plan) async {
     Analytics.track('purchase_start');
     setState(() => _buying = true);
     try {
@@ -265,9 +282,9 @@ class _PlansPageState extends State<PlansPage> {
                       Padding(
                         padding: const EdgeInsets.only(top: 80),
                         child: Column(children: [
-                          Text(_purchase.iap ? tr('App Store 商品暂不可用，请稍后重试') : tr('暂无在售套餐'),
+                          Text(_purchase.store ? tr('商店商品暂不可用，请稍后重试') : tr('暂无在售套餐'),
                               style: TextStyle(color: AppColors.sub)),
-                          if (_purchase.iap) TextButton(onPressed: _retry, child: Text(tr('重试'))),
+                          if (_purchase.store) TextButton(onPressed: _retry, child: Text(tr('重试'))),
                         ]),
                       ),
                     if (plans.isNotEmpty) _Terms(
@@ -529,6 +546,12 @@ class _Terms extends StatelessWidget {
                 [p.name, price, p.durationDays]),
             style: small,
           )
+        else if (purchase.gplay && p != null)
+          Text(
+            tr('「{0}」{1}，有效期 {2} 天，购买后立即生效。本套餐为一次性购买，不会自动续费，可再次购买续期；续费同一套餐在原到期时间上顺延。付款将通过您的 Google Play 账户结算。',
+                [p.name, price, p.durationDays]),
+            style: small,
+          )
         else if (p != null)
           Text(tr('「{0}」{1}，有效期 {2} 天，付款成功后立即生效，到期不会自动扣费。', [p.name, price, p.durationDays]), style: small),
         const SizedBox(height: 8),
@@ -537,7 +560,7 @@ class _Terms extends StatelessWidget {
             InkWell(onTap: () => onOpen(purchase.termsUrl), child: Text(tr('《用户协议》'), style: link)),
           if (purchase.privacyUrl.isNotEmpty)
             InkWell(onTap: () => onOpen(purchase.privacyUrl), child: Text(tr('《隐私政策》'), style: link)),
-          if (purchase.iap) ...[
+          if (purchase.store) ...[
             Text('·', style: small),
             restoring
                 ? const SizedBox.square(dimension: 14, child: CircularProgressIndicator(strokeWidth: 2))
@@ -548,6 +571,9 @@ class _Terms extends StatelessWidget {
         if (purchase.iap) ...[
           const SizedBox(height: 6),
           Text(tr('换了新手机？用购买时的 Apple ID 点「恢复购买」，或在原设备「我的 → 多设备」生成令牌让新设备加入。'), style: small),
+        ] else if (purchase.gplay) ...[
+          const SizedBox(height: 6),
+          Text(tr('换了新手机？用购买时的 Google Play 账户点「恢复购买」，或在原设备「我的 → 多设备」生成令牌让新设备加入。'), style: small),
         ],
       ]),
     );

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -303,6 +304,13 @@ func (s *Server) apiEndpoints() (hosts, ips []string) {
 			}
 		} else if h != "localhost" {
 			hosts = append(hosts, h)
+		}
+	}
+	// Every domain the API answers on (an old domain kept as an alias is
+	// still what older app versions call).
+	for _, d := range s.cfg.TLS.Domains() {
+		if !slices.Contains(hosts, d) {
+			hosts = append(hosts, d)
 		}
 	}
 	seen := map[string]bool{}

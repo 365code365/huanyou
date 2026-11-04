@@ -218,6 +218,9 @@ function PaymentTab({ loaded, onSaved }: { loaded: Loaded; onSaved: (p: PaymentS
           extra="0 = 关闭（所有 iOS 用户用网页支付）。填写后，构建号 ≥ 此值的 iOS 客户端进入「审核面」（Apple 内购）。请填「版本发布」里提交审核的那个 iOS 构建号。">
           <InputNumber min={0} max={1000000} style={{ width: 200 }} placeholder="0" />
         </Form.Item>
+        <h4 className="form-section">Google Play 版（安卓支付面）</h4>
+        <Alert type="info" showIcon style={{ marginBottom: 16 }}
+          message="Google Play 版是单独的构建渠道（编译时 --dart-define=CHANNEL=play），固定走 Google Play 结算，不显示网页支付、第三方应用推荐和应用内更新，连接前有 VpnService 用途说明——对所有用户一致，不受此处开关影响，也无需在审核后切换。每个付费套餐在「套餐」页填写与 Play Console「一次性商品」一致的 Google Play 产品 ID；凭证校验的服务账号在 api.json 的 payments.google_play 配置。官网 APK（site 渠道）仍用下方支付中心。" />
         <h4 className="form-section">用户协议 / 隐私政策</h4>
         <Alert type="info" showIcon style={{ marginBottom: 16 }}
           message="App 购买页底部会显示《用户协议》《隐私政策》链接（苹果审核要求）。留空则使用系统内置页面：{对外地址}/legal/terms 和 /legal/privacy；App Store Connect 的「隐私政策网址」也可填内置地址。" />

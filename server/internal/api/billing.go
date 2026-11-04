@@ -32,12 +32,30 @@ type planView struct {
 	// Create a matching product in App Store Connect (same id). Only used on
 	// the iOS IAP face.
 	IAPProductID string `json:"iap_product_id,omitempty"`
+	// GPProductID is the Google Play in-app product id the Android app buys for
+	// this plan. Create a matching one-time product in Play Console (same id).
+	// Only used on the Google Play face.
+	GPProductID string `json:"gp_product_id,omitempty"`
 }
 
 // iapMethod is the pseudo payment method shown on the iOS IAP face. There is
 // no web order for it: the app buys through StoreKit and the server grants
 // after verifying the receipt (iap.go).
 const iapMethod = "iap"
+
+// gplayMethod is the pseudo payment method shown on the Google Play face. Like
+// iapMethod there is no web order: the app buys through Google Play Billing
+// and the server grants after verifying the purchase (iap_google.go).
+const gplayMethod = "gplay"
+
+// storeFace reports whether this client must be served an official-app-store
+// face: in-app purchase only, no web order, no external download / recommended
+// apps. True for iOS builds under App Review and for the Google Play build
+// channel (platform=android-play).
+func (s *Server) storeFace(r *http.Request) bool {
+	p := s.cat().Payment
+	return p.IOSIAPFace(clientPlatform(r), clientBuild(r)) || p.GPlayFace(clientPlatform(r))
+}
 
 // clientPlatform / clientBuild read what the app reports about itself. The app
 // sends ?platform=ios&build=7 on /api/v1/plans and /api/v1/apps so the server
@@ -48,6 +66,7 @@ func clientBuild(r *http.Request) int       { b, _ := strconv.Atoi(r.URL.Query()
 func (s *Server) handlePlans(w http.ResponseWriter, r *http.Request) {
 	cat := s.cat()
 	iap := cat.Payment.IOSIAPFace(clientPlatform(r), clientBuild(r))
+	gplay := cat.Payment.GPlayFace(clientPlatform(r))
 	list := cat.PlansByPrice()
 	plans := make([]planView, 0, len(list))
 	for _, p := range list {
@@ -60,17 +79,31 @@ func (s *Server) handlePlans(w http.ResponseWriter, r *http.Request) {
 		if iap && !v.Free {
 			v.IAPProductID = p.IAPProductID()
 		}
+		if gplay && !v.Free {
+			v.GPProductID = p.GooglePlayProductID()
+		}
 		plans = append(plans, v)
 	}
 	var methods []payment.Method
 	var enabled bool
 	payMode := "gateway"
-	if iap {
+	switch {
+	case iap:
 		// App Review face: Apple in-app purchase only, no web order path.
 		payMode = "iap"
 		methods = []payment.Method{{ID: iapMethod, Name: "App 内购买"}}
 		enabled = true
-	} else {
+	case gplay:
+		// Google Play face: Google Play Billing only, no web order path.
+		// Enabled only when the verifier is configured, else buy buttons grey
+		// out (the Play build must never fall back to a web payment page).
+		payMode = "gplay"
+		methods = []payment.Method{{ID: gplayMethod, Name: "Google Play"}}
+		enabled = s.gplay != nil && !cat.Payment.Disabled
+		if !enabled {
+			methods = []payment.Method{}
+		}
+	default:
 		methods = s.payMethods()
 		enabled = !cat.Payment.Disabled && len(methods) > 0
 		if !enabled {
@@ -116,10 +149,11 @@ func (s *Server) handleCreateOrder(w http.ResponseWriter, r *http.Request, u *st
 		return
 	}
 	cat := s.cat()
-	// On the iOS IAP face, digital goods must be bought through StoreKit, not
-	// a web order. The app uses /api/v1/iap/verify instead; refuse here so the
-	// review build never opens an external payment page.
-	if cat.Payment.IOSIAPFace(clientPlatform(r), clientBuild(r)) {
+	// On an app-store face (iOS App Review, Google Play), digital goods must be
+	// bought through the store's in-app purchase, not a web order. The app uses
+	// /api/v1/iap/verify or /api/v1/iap/google/verify instead; refuse here so
+	// the store build never opens an external payment page.
+	if s.storeFace(r) {
 		writeErr(w, http.StatusConflict, "use_iap", "请在 App 内购买")
 		return
 	}

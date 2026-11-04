@@ -19,6 +19,7 @@ export interface Plan {
   sort: number
   hot: boolean // 🔥 HOT badge in the app
   ios_product_id?: string // App Store product id; empty = plan id
+  android_product_id?: string // Google Play product id; empty = plan id
   free?: boolean // response only
 }
 

@@ -14,6 +14,7 @@ import 'dart:ui';
 
 import 'core/analytics.dart';
 import 'core/prefs.dart';
+import 'features/consent/vpn_disclosure_page.dart';
 import 'i18n/i18n.dart';
 import 'theme/app_theme.dart';
 import 'theme/appearance.dart';
@@ -189,6 +190,9 @@ class _Root extends StatefulWidget {
 
 class _RootState extends State<_Root> {
   bool _introDone = false;
+  // Google Play build: the VpnService prominent disclosure must be accepted
+  // once before the app can connect (Google Play policy).
+  bool _needConsent = AppController.playStore && !VpnConsent.given;
 
   @override
   void initState() {
@@ -247,7 +251,12 @@ class _RootState extends State<_Root> {
         );
       },
       child: app.loggedIn == true && _introDone
-          ? const MainShell(key: ValueKey('shell'))
+          ? (_needConsent
+              ? VpnDisclosurePage(
+                  key: const ValueKey('consent'),
+                  onAccept: () => setState(() => _needConsent = false),
+                )
+              : const MainShell(key: ValueKey('shell')))
           : BootstrapGate(
               key: const ValueKey('gate'),
               failed: app.loadFailed,

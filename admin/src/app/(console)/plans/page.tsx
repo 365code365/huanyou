@@ -133,6 +133,13 @@ export default function PlansPage() {
               <Input allowClear placeholder="留空 = 套餐 ID" />
             </Form.Item>
           )}
+          {!editingFree && (
+            <Form.Item name="android_product_id" label="Google Play 产品 ID"
+              rules={[{ pattern: /^[a-z0-9][a-z0-9._]{0,99}$/, message: '只能包含小写字母、数字、. 和 _' }]}
+              extra="仅 Google Play 版（play 渠道）使用。留空 = 使用套餐 ID；需与 Play Console 里的「一次性商品」产品 ID 完全一致。App 内显示的价格以 Google Play 返回为准。">
+              <Input allowClear placeholder="留空 = 套餐 ID" />
+            </Form.Item>
+          )}
         </Form>
       </Drawer>
     </div>

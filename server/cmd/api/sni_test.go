@@ -52,7 +52,7 @@ func TestSNIRouter(t *testing.T) {
 
 	front, _ := net.Listen("tcp", "127.0.0.1:0")
 	defer front.Close()
-	apiLn := sniRouter(front, "api.example.com", node.Addr().String())
+	apiLn := sniRouter(front, []string{"api.example.com", "old.example.com"}, node.Addr().String())
 	apiCert := selfSigned(t, "api.example.com")
 	go func() {
 		for {

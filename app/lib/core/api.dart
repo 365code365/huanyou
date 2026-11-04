@@ -87,7 +87,8 @@ class Plan {
         overQuotaKbps = (j['over_quota_kbps'] as num).toInt(),
         free = j['free'] as bool? ?? false,
         hot = j['hot'] as bool? ?? false,
-        iapProductId = j['iap_product_id'] as String? ?? '';
+        iapProductId = j['iap_product_id'] as String? ?? '',
+        gpProductId = j['gp_product_id'] as String? ?? '';
   final String id;
   final String name;
   final String description;
@@ -99,11 +100,13 @@ class Plan {
   final bool free;
   final bool hot; // 🔥 HOT badge
   final String iapProductId; // App Store product id, only set on the iOS IAP face
+  final String gpProductId; // Google Play product id, only set on the Play face
 }
 
 /// Whether purchases are open (admin switch); notice is shown when not.
-/// [mode] is how to pay: "gateway" (web / custom) or "iap" (Apple in-app
-/// purchase, shown to App Review on iOS). "gateway" by default.
+/// [mode] is how to pay: "gateway" (web / custom), "iap" (Apple in-app
+/// purchase, shown to App Review on iOS) or "gplay" (Google Play Billing, the
+/// Google Play Android build). "gateway" by default.
 class PurchaseState {
   const PurchaseState(
       {required this.enabled, required this.notice, this.mode = 'gateway', this.termsUrl = '', this.privacyUrl = ''});
@@ -112,7 +115,10 @@ class PurchaseState {
   final String mode;
   final String termsUrl; // 用户协议, linked from the purchase page
   final String privacyUrl; // 隐私政策
-  bool get iap => mode == 'iap';
+  bool get iap => mode == 'iap'; // Apple App Store
+  bool get gplay => mode == 'gplay'; // Google Play
+  /// An official app-store face: buy through the store, not a web page.
+  bool get store => iap || gplay;
 }
 
 /// Result of "恢复购买".
@@ -120,6 +126,9 @@ class RestoreResult {
   RestoreResult.fromJson(Map<String, dynamic> j)
       : granted = (j['granted'] as num?)?.toInt() ?? 0,
         linkedTo = j['linked_to'] as String? ?? '';
+  const RestoreResult.empty()
+      : granted = 0,
+        linkedTo = '';
   final int granted; // purchases newly granted to this device
   final String linkedTo; // recharge id of the account this device joined ("" = none)
 }
@@ -525,6 +534,13 @@ class ApiClient {
   /// purchases or joins this device to the account that bought them.
   Future<RestoreResult> restoreIap(String receipt) async =>
       RestoreResult.fromJson(await _send('POST', '/api/v1/iap/restore', body: {'receipt': receipt}));
+
+  /// Verifies a Google Play purchase and grants the plan. [data] is the Play
+  /// Billing purchase JSON (originalJson); [productId] and [token] are the
+  /// parsed fields the server falls back to. The server maps the product id
+  /// back to a plan and verifies the token with the Play Developer API.
+  Future<void> verifyGooglePlay({required String data, required String productId, required String token}) =>
+      _send('POST', '/api/v1/iap/google/verify', body: {'data': data, 'product_id': productId, 'token': token});
 
   Future<Ads> ads() async => Ads.fromJson(await _send('GET', '/api/v1/ads'));
 

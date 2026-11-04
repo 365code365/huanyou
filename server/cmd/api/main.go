@@ -138,7 +138,7 @@ func main() {
 func serveTLS(ctx context.Context, srv *http.Server, cfg *config.API, drained <-chan struct{}) {
 	m := &autocert.Manager{
 		Prompt:     autocert.AcceptTOS,
-		HostPolicy: autocert.HostWhitelist(cfg.TLS.Domain),
+		HostPolicy: autocert.HostWhitelist(cfg.TLS.Domains()...),
 		Cache:      autocert.DirCache(cfg.TLS.CacheDir),
 		Email:      cfg.TLS.Email,
 	}
@@ -173,14 +173,14 @@ func serveTLS(ctx context.Context, srv *http.Server, cfg *config.API, drained <-
 			<-drained
 			_ = ln.Close()
 		}()
-		slog.Info("api listening (tls, shared with node)", "domain", cfg.TLS.Domain, "node", p)
-		if err := srv.ServeTLS(sniRouter(ln, cfg.TLS.Domain, p), "", ""); err != nil &&
+		slog.Info("api listening (tls, shared with node)", "domains", cfg.TLS.Domains(), "node", p)
+		if err := srv.ServeTLS(sniRouter(ln, cfg.TLS.Domains(), p), "", ""); err != nil &&
 			!errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 			fatal("serve tls", err)
 		}
 		return
 	}
-	slog.Info("api listening (tls)", "domain", cfg.TLS.Domain)
+	slog.Info("api listening (tls)", "domains", cfg.TLS.Domains())
 	if err := srv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fatal("serve tls", err)
 	}

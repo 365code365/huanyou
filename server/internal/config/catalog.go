@@ -78,6 +78,15 @@ func (p PaymentConfig) IOSIAPFace(platform string, build int) bool {
 	return platform == "ios" && p.IOSReviewBuild > 0 && build >= p.IOSReviewBuild
 }
 
+// GPlayFace reports whether a client is the Google Play build (which reports
+// platform=android-play). Unlike the iOS face this is decided at compile time
+// by the app's build channel, not by a server switch: the Play build always
+// uses Google Play Billing and never exposes web payment / external downloads,
+// as Google Play policy requires. So there is nothing to flip after review.
+func (p PaymentConfig) GPlayFace(platform string) bool {
+	return platform == "android-play"
+}
+
 // GatewayConfig is the "下单链接" integration with an external payment
 // center (docs in the admin panel):
 //   - the app opens PayLink (the center's checkout) with signed order parameters;
@@ -279,6 +288,11 @@ type Plan struct {
 	// plan. Empty = use the plan id (create a product with the same id in App
 	// Store Connect). Only used on the iOS IAP face.
 	IOSProductID string `json:"ios_product_id,omitempty"`
+	// AndroidProductID overrides the Google Play in-app product id for this
+	// plan. Empty = use the plan id (create a one-time product with the same
+	// id in Play Console). Only used on the Google Play face (the `play` build
+	// channel). Google Play product ids are lowercase and may use . and _.
+	AndroidProductID string `json:"android_product_id,omitempty"`
 }
 
 func (p *Plan) QuotaBytes() int64 { return int64(p.TrafficGB * (1 << 30)) }
@@ -288,6 +302,15 @@ func (p *Plan) QuotaBytes() int64 { return int64(p.TrafficGB * (1 << 30)) }
 func (p *Plan) IAPProductID() string {
 	if p.IOSProductID != "" {
 		return p.IOSProductID
+	}
+	return p.ID
+}
+
+// GooglePlayProductID is the Google Play in-app product id for this plan
+// (AndroidProductID, or the plan id by default).
+func (p *Plan) GooglePlayProductID() string {
+	if p.AndroidProductID != "" {
+		return p.AndroidProductID
 	}
 	return p.ID
 }
@@ -419,6 +442,11 @@ var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 // iapProductPattern is what App Store Connect accepts as a product id.
 var iapProductPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._]{0,99}$`)
 
+// gplayProductPattern is what Play Console accepts as an in-app product id:
+// starts with a lowercase letter or number, then lowercase letters, numbers,
+// underscores and periods.
+var gplayProductPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._]{0,99}$`)
+
 // Normalize fills defaults and validates the catalog. Safe to call repeatedly.
 func (c *Catalog) Normalize() error {
 	if c.TrafficPeriodDays <= 0 {
@@ -542,10 +570,11 @@ func (c *Catalog) Normalize() error {
 }
 
 func (c *Catalog) validatePlans() error {
-	seen, products := map[string]bool{}, map[string]string{}
+	seen, products, gplayProducts := map[string]bool{}, map[string]string{}, map[string]string{}
 	for i := range c.Plans {
 		p := &c.Plans[i]
 		p.IOSProductID = strings.TrimSpace(p.IOSProductID)
+		p.AndroidProductID = strings.TrimSpace(p.AndroidProductID)
 		if p.ID != c.FreePlan {
 			pid := p.IAPProductID()
 			if p.IOSProductID != "" && !iapProductPattern.MatchString(pid) {
@@ -555,6 +584,14 @@ func (c *Catalog) validatePlans() error {
 				return fmt.Errorf("套餐 %s 和 %s 使用了同一个 App Store 产品 ID %q", other, p.ID, pid)
 			}
 			products[pid] = p.ID
+			if p.AndroidProductID != "" && !gplayProductPattern.MatchString(p.AndroidProductID) {
+				return fmt.Errorf("套餐 %s 的 Google Play 产品 ID %q 只能包含小写字母、数字、. 和 _", p.ID, p.AndroidProductID)
+			}
+			if gid := p.GooglePlayProductID(); gplayProducts[gid] != "" {
+				return fmt.Errorf("套餐 %s 和 %s 使用了同一个 Google Play 产品 ID %q", gplayProducts[gid], p.ID, gid)
+			} else {
+				gplayProducts[gid] = p.ID
+			}
 		}
 		switch {
 		case !idPattern.MatchString(p.ID):

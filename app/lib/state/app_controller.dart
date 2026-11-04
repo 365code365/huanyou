@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import '../core/analytics.dart';
 import '../core/api.dart';
+import '../core/config.dart';
 import '../core/device.dart';
 import '../core/iap.dart';
 import '../core/prefs.dart';
@@ -137,8 +138,10 @@ class AppController extends ChangeNotifier {
 
   Future<void> init() async {
     // Tell the server which platform/build this is, so it serves the right
-    // payment face (iOS App Review vs. normal) on /plans and /apps.
-    api.clientPlatform = Device.platform;
+    // payment face (iOS App Review, Google Play, or normal web) on /plans and
+    // /apps. The Google Play build reports a distinct platform so the server
+    // always serves the Play Billing face.
+    api.clientPlatform = playStore ? 'android-play' : Device.platform;
     // Awaited: /plans and /apps sent without the build would get the wrong face.
     try {
       api.clientBuild = Updater.buildOf(await Updater.info());
@@ -480,19 +483,30 @@ class AppController extends ChangeNotifier {
     await deviceSignIn();
   }
 
-  // ---- iOS App Store review face ----
+  // ---- official app-store face (Apple App Store / Google Play) ----
   static const _kFace = 'iap_face';
 
-  /// The server serves this client the App Store face (Apple in-app purchase
-  /// only, iOS builds under review). Then the app must not point anywhere
-  /// outside the App Store to pay or to download: no "send your ID to support
-  /// to top up", no download page, no self-update. Cached so it is right from
-  /// the first frame; unknown on iOS counts as the review face.
-  bool iapFace = Platform.isIOS && Prefs.get(_kFace) != '0';
+  /// The Google Play build: fixed at compile time (channel=play on Android).
+  /// The same for every user, never flipped by the server, so the Play build
+  /// always complies with Google Play policy.
+  static bool get playStore => Platform.isAndroid && AppConfig.isPlayStore;
+
+  // iOS App Review face, driven by the server (ios_review_build): Apple in-app
+  // purchase only. Cached so it is right from the first frame; unknown on iOS
+  // counts as the review face.
+  bool _iosFace = Platform.isIOS && Prefs.get(_kFace) != '0';
+
+  /// Whether this client must behave like an official app-store build: buy
+  /// only through the store, and point nowhere outside it to pay or download —
+  /// no "send your ID to support to top up", no download page, no self-update,
+  /// no recommended apps. True on the Google Play build and on iOS builds
+  /// under App Review.
+  bool get iapFace => playStore || _iosFace;
 
   void setIapFace(bool v) {
-    if (!Platform.isIOS || v == iapFace) return;
-    iapFace = v;
+    // Only the iOS face is server-driven; the Play face is a compile-time constant.
+    if (!Platform.isIOS || v == _iosFace) return;
+    _iosFace = v;
     Prefs.set(_kFace, v ? '1' : '0');
     notifyListeners();
   }

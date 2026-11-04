@@ -52,14 +52,26 @@ type ProvisionConfig struct {
 
 // TLSConfig enables built-in HTTPS with automatic certificates.
 type TLSConfig struct {
-	Domain   string `json:"domain"`    // e.g. vpn.example.com ("" = plain HTTP on Listen)
-	Email    string `json:"email"`     // optional Let's Encrypt contact
-	CacheDir string `json:"cache_dir"` // certificate cache, default <db dir>/acme
+	Domain string `json:"domain"` // e.g. vpn.example.com ("" = plain HTTP on Listen)
+	// Aliases are more domains served exactly like Domain (own certificate
+	// each). Used when the API moves to a new domain: installed apps have the
+	// old one built in and keep working (and receive the update) through it.
+	Aliases  []string `json:"aliases"`
+	Email    string   `json:"email"`     // optional Let's Encrypt contact
+	CacheDir string   `json:"cache_dir"` // certificate cache, default <db dir>/acme
 	// Passthrough: host:port of a VPN node on the same server. :443 is then
 	// shared: connections whose TLS SNI is Domain go to the API, all others
 	// are relayed to the node with a PROXY protocol header (the node must
 	// set accept_proxy_protocol).
 	Passthrough string `json:"passthrough"`
+}
+
+// Domains is Domain followed by its Aliases (empty without built-in TLS).
+func (t TLSConfig) Domains() []string {
+	if t.Domain == "" {
+		return nil
+	}
+	return append([]string{strings.ToLower(t.Domain)}, t.Aliases...)
 }
 
 // AdminConfig secures the web admin panel. Password can come from env VPN_ADMIN_PASSWORD.
@@ -74,6 +86,9 @@ type Payments struct {
 	// AppleIAP verifies iOS in-app purchase receipts (StoreKit), needed for
 	// the App Store review face.
 	AppleIAP *AppleIAPConfig `json:"apple_iap"`
+	// GooglePlay verifies Android in-app purchases (Google Play Billing),
+	// needed for the Google Play build channel.
+	GooglePlay *GooglePlayConfig `json:"google_play"`
 	// Mock enables a fake payment page for development. NEVER enable in production.
 	Mock bool `json:"mock"`
 }
@@ -85,6 +100,20 @@ type AppleIAPConfig struct {
 	SharedSecret string `json:"shared_secret"`
 	// BundleID guards against receipts from another app (e.g. com.huanyou.vpn).
 	BundleID string `json:"bundle_id"`
+}
+
+// GooglePlayConfig verifies Google Play in-app purchases with the Play
+// Developer API. Create a Google Cloud service account, grant it access in
+// Play Console (财务 → 订单管理 / 用户和权限, with "查看财务数据、订单和取消调查回复"
+// and "管理订单和订阅"), download its JSON key.
+type GooglePlayConfig struct {
+	// PackageName is the Android applicationId, e.g. com.vpnplatform.vpn_app.
+	// Guards against purchase tokens from another app.
+	PackageName string `json:"package_name"`
+	// ServiceAccountFile is the path to the service-account JSON key file. The
+	// key can also be supplied inline as the env var VPN_GOOGLE_SA_JSON (the
+	// whole JSON), which takes precedence.
+	ServiceAccountFile string `json:"service_account_file"`
 }
 
 // AlipayConfig: official Alipay open platform, 手机网站支付 (alipay.trade.wap.pay).
@@ -152,6 +181,14 @@ func LoadAPI(path string) (*API, error) {
 	if c.TLS.Domain != "" && c.TLS.CacheDir == "" {
 		c.TLS.CacheDir = filepath.Join(filepath.Dir(c.Database), "acme")
 	}
+	aliases := c.TLS.Aliases[:0]
+	for _, a := range c.TLS.Aliases {
+		a = strings.ToLower(strings.TrimSpace(a))
+		if a != "" && a != strings.ToLower(c.TLS.Domain) && !slices.Contains(aliases, a) {
+			aliases = append(aliases, a)
+		}
+	}
+	c.TLS.Aliases = aliases
 	if c.Provision.BinaryAmd64 == "" {
 		c.Provision.BinaryAmd64 = "/usr/local/bin/vpn-node"
 	}
@@ -167,6 +204,14 @@ func LoadAPI(path string) (*API, error) {
 		}
 		if k.APIURL == "" || k.MerchantID == "" || k.SignKey == "" || k.EncKey == "" {
 			return nil, errors.New("payments.cashier: api_url, merchant_id, sign_key and enc_key are required")
+		}
+	}
+	if g := c.Payments.GooglePlay; g != nil {
+		if g.PackageName == "" {
+			return nil, errors.New("payments.google_play: package_name is required")
+		}
+		if g.ServiceAccountFile == "" && os.Getenv("VPN_GOOGLE_SA_JSON") == "" {
+			return nil, errors.New("payments.google_play: service_account_file (or env VPN_GOOGLE_SA_JSON) is required")
 		}
 	}
 	hasPayments := c.Payments.Alipay != nil || c.Payments.Epay != nil || c.Payments.Cashier != nil || c.Payments.Mock

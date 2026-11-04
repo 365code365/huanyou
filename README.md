@@ -90,19 +90,19 @@
 
 ## 当前线上部署
 
-香港节点 **162.211.181.15**（Debian 12），域名 **net-w.51aihelp.com**。2026-10-30 从 64.83.22.32 用「克隆 → 服务迁移」搬过来，后台和香港节点共用这台服务器：
+香港节点 **162.211.181.15**（Debian 12），域名 **rely-vpn-go.com**（2026-11-04 从 net-w.51aihelp.com 换过来，旧域名作为别名继续可用，给还没升级的旧版 App 用）。2026-10-30 从 64.83.22.32 用「克隆 → 服务迁移」搬过来，后台和香港节点共用这台服务器：
 
 ```
 :443  vpn-api（按 TLS SNI 分流，PROXY protocol 传真实 IP）
-      ├─ SNI = net-w.51aihelp.com → vpn-api 自己的 HTTPS（Let's Encrypt，TLS-ALPN 验证，自动续期）
+      ├─ SNI = rely-vpn-go.com / net-w.51aihelp.com → vpn-api 自己的 HTTPS（各自一张 Let's Encrypt 证书，TLS-ALPN 验证，自动续期）
       └─ 其它 SNI（VPN 客户端 / 探测）→ 127.0.0.1:4443 vpn-node（REALITY，伪装 www.apple.com）
 :80   本机原有的 nginx（与本系统无关）
 ```
 
-- API / 管理后台：`https://net-w.51aihelp.com/`、`https://net-w.51aihelp.com/admin/`（管理员密码在 `/etc/vpn/api.env`）。
-- 配置：`/etc/vpn/api.json`（`tls.domain`、`tls.passthrough=127.0.0.1:4443`）；节点 `node.json` 里 `listen=127.0.0.1`、`vision_port=4443`、`accept_proxy_protocol=true`（原配置备份为 `node.json.bak-pre-clone`）。证书缓存在 `/var/lib/vpn/acme/`。
+- API / 管理后台：`https://rely-vpn-go.com/`、`https://rely-vpn-go.com/admin/`（管理员密码在 `/etc/vpn/api.env`）。
+- 配置：`/etc/vpn/api.json`（`public_url`、`tls.domain`、`tls.aliases`（旧域名，所有旧版 App 升级后可删）、`tls.passthrough`）；节点 `node.json` 的 `api_url` 也已改成新域名；节点 `node.json` 里 `listen=127.0.0.1`、`vision_port=4443`、`accept_proxy_protocol=true`（原配置备份为 `node.json.bak-pre-clone`）。证书缓存在 `/var/lib/vpn/acme/`。
 - 「备份与克隆」页顶部的「当前服务器」卡片显示公网 IP、域名解析是否指向本机、证书剩余天数和本机节点。
-- App 编译时用 `--dart-define=API_BASE_URLS=https://net-w.51aihelp.com`。iOS 默认禁止明文 HTTP，所以真机必须走 HTTPS。
+- App（≥ 1.2.7）编译时默认 `API_BASE_URLS=https://rely-vpn-go.com,https://net-w.51aihelp.com`：新域名优先，旧域名备用。1.2.6 及更早的 App 只认旧域名，所以旧域名的 DNS 和 `tls.aliases` 要保留到这些版本都升级为止。iOS 默认禁止明文 HTTP，所以真机必须走 HTTPS。
 
 > 仍是演示配置：`payments.mock` 为开启状态，上线前关闭。
 
@@ -219,7 +219,7 @@ App 下单后用系统浏览器打开支付页面，然后每 2 秒查询一次�
 
 `public_url` 必须能从公网访问，否则收不到支付结果通知。
 
-> iOS 的 App Store 版本里，App 内购买数字服务必须走 Apple 内购，审核会拒绝外部支付链接。目前只实现了外部支付，上架 App Store 需要另外接入 StoreKit。
+> App Store（iOS）和 Google Play（Android play 渠道）版本里，购买数字服务必须走各自的应用内购买，商店会拒绝外部支付链接。iOS 走 StoreKit（见「iOS 额外步骤」），Android play 渠道走 Google Play 结算（见「Google Play 上架」）；官网 APK / 桌面版仍用这里的外部支付。
 
 ### 1.8 用户管理
 
@@ -265,9 +265,13 @@ cd mobile && ./build.sh            # 或 ./build.sh android / ./build.sh ios
 cd ../app
 flutter run --dart-define=API_BASE_URLS=https://api.example.com,https://api2.example.com
 flutter build apk --release --split-per-abi --target-platform android-arm,android-arm64 \
-  --obfuscate --split-debug-info=build/symbols --dart-define=API_BASE_URLS=...   # 直接分发
-flutter build appbundle --release --dart-define=API_BASE_URLS=...                 # Google Play
+  --obfuscate --split-debug-info=build/symbols --dart-define=API_BASE_URLS=...   # 官网 APK（site 渠道）
+scripts/build_play.sh https://api.example.com                                     # Google Play（play 渠道，AAB）
 ```
+
+> Android 有两个分发渠道（编译时用 `--dart-define=CHANNEL=` 区分，默认 `site`）：
+> **site**（官网 APK / `scripts/build_android.sh`）保持现状——支付宝 / 易支付 / 网关支付、应用内更新、下载页、推荐应用。
+> **play**（Google Play / `scripts/build_play.sh`，输出 AAB）固定走 Google Play 结算，没有网页支付、应用内更新、站外下载链接和推荐应用，连接前显示 VpnService 用途说明。两个渠道对各自用户行为一致，play 渠道不依赖服务端开关，也不在审核后切换。详见下方「Google Play 上架」。
 
 > 每个 CPU 架构的 APK 约 20 MB：大陆 IP 库和配置解析放在服务端（API 下发编译好的 protobuf 配置），Go 核心只编入用到的协议。
 > 发布用 `build/app/outputs/flutter-apk/app-arm64-v8a-release.apk`。`--split-per-abi` 会把 versionCode 设为「架构 × 1000 + 构建号」（arm64 为 2004），App 检查更新时会自动去掉前缀，所以**构建号要小于 1000，并且以后一直用分架构 APK 发布**（换成通用 APK 的 versionCode 会变小，无法覆盖安装）。
@@ -293,6 +297,40 @@ PacketTunnel 扩展 target 已经通过 `app/ios/scripts/setup_packet_tunnel.rb`
 2. 在 Apple Developer 后台注册两个 App ID：`com.vpnplatform.vpnApp` 和 `com.vpnplatform.vpnApp.PacketTunnel`，都勾选 **Network Extensions** 能力。
 3. 在 Xcode 里打开 `ios/Runner.xcworkspace`，给 Runner 和 PacketTunnel 两个 target 都选上你的 Team。如果要改 Bundle ID，两个都要改，扩展的 ID 必须是 `<App ID>.PacketTunnel`。
 4. 注意：国区 App Store 不允许上架 VPN 类 App，需要上架到其他地区。
+
+### Google Play 上架
+
+VPN 类 App 可以上 Google Play（Psiphon、Lantern 等抗审查工具都在架）。但 Play 要求数字服务走 Google Play 结算，且不能有站外下载和应用内自更新。为此 Android 有一个单独的 **play** 构建渠道（`scripts/build_play.sh`，`--dart-define=CHANNEL=play`），与官网 APK 相互独立，行为对所有用户一致、不受服务端开关影响：
+
+| | play（Google Play） | site（官网 APK） |
+|---|---|---|
+| 支付 | Google Play 结算（Play Billing） | 支付宝 / 易支付 / 网关 |
+| 应用内更新 | 关闭，由 Play 更新 | 保留 |
+| 站外下载 / 推荐应用 / 「发客服充值」 | 隐藏 | 保留 |
+| VpnService 用途说明 | 连接前展示并需同意 | 不展示 |
+| 上报平台 | `android-play` | `android` |
+
+服务端对接（Google Play Developer API 校验购买凭证）：
+
+1. 建一个 Google Cloud 服务账号，在 Play Console「用户和权限」授予它「查看财务数据」和「管理订单和订阅」权限，下载 JSON 密钥。
+2. 在 `api.json` 填 `payments.google_play`：
+   ```json
+   "google_play": {
+     "package_name": "com.vpnplatform.vpn_app",
+     "service_account_file": "/etc/vpn/google-sa.json"
+   }
+   ```
+   密钥也可以用环境变量 `VPN_GOOGLE_SA_JSON`（整段 JSON）传入，优先级更高。
+3. 在 Play Console 为每个付费套餐建一个**一次性商品**，产品 ID 填到后台「套餐」页的「Google Play 产品 ID」（留空则用套餐 ID，需与 Play Console 完全一致）。App 内显示的价格以 Google Play 返回为准。
+4. App 买到后把购买凭证 POST 到 `/api/v1/iap/google/verify`，服务端用 Play Developer API 校验 `purchaseState`，用 Google 订单号做幂等开通套餐。套餐按「一次性商品」消耗，可重复购买续期（时长顺延）。
+
+Play Console 提交时还要：填写 **VpnService 声明表**（选「VPN 是核心功能」）、提交 90 秒内演示连接的视频和一段演示 VpnService 用途说明（prominent disclosure）同意/拒绝流程的视频、在商店描述里写明使用了 VpnService、如实填写**数据安全**表单（设备标识 ANDROID_ID、行为统计、崩溃日志、连接来源 IP）并附隐私政策链接。
+
+签名：启用 Play App Signing 时，**导入现有的 `android/keystore` 密钥作为 Play 应用签名密钥**，这样从 Play 安装的应用签名证书（以及绑定它的 ANDROID_ID 免登录身份）和官网 APK 一致。
+
+> Google Play 在中国大陆不可用，主要面向海外用户；大陆用户仍走官网 APK。部分地区（美国 / 欧洲经济区 / 英国）如需在 Play 内提供外部支付，可报名 Google 的 billing choice 计划（按规范显示支付方式选择页、向 Google 上报交易并缴纳服务费），本仓库暂未实现该流程。
+>
+> 不实现「只给审核员看合规界面、普通用户切回外部支付」这类按审核状态翻转的做法：那属于规避平台审核，一旦被判定为欺骗，通常会终止开发者账号及其关联账号。
 
 ### 桌面版（Windows / macOS）
 
@@ -350,7 +388,7 @@ cd app && flutter test integration_test/app_test.dart -d <模拟器或设备 ID>
 
 ## 已知限制 / 后续可做
 
-- iOS 上架 App Store 需要接入 Apple 内购（见 1.7）。
+- iOS 上架 App Store 需要接入 Apple 内购（见 1.7）；Android 上架 Google Play 用 play 渠道走 Google Play 结算（见「Google Play 上架」）。
 - 管理员只有一个共享密码，没有多管理员和操作日志。
 - 预警记录保存在内存里，API 重启后清空（Webhook 推送不受影响）。
 - 节点 IP 仍可能因为流量过大被封。要有多个节点，被封时更换 IP，再改 `api.json` 里的 `address`（App 每次连接都会拉取最新配置）。

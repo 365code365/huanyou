@@ -9,7 +9,7 @@
 # installed apps cannot learn new addresses later.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-urls="${1:-https://net-w.51aihelp.com}"
+urls="${1:-https://rely-vpn-go.com,https://net-w.51aihelp.com}"
 case "$urls" in http://10.*|http://127.*|http://localhost*) echo "refusing a local API address for a release build: $urls" >&2; exit 1;; esac
 # Official signing key (android/key.properties). Its certificate hash is
 # baked in: a copy re-signed by anyone else refuses to run, and the server

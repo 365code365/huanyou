@@ -81,8 +81,8 @@
 
 ```json
 {"out_trade_no":"VP…","amount":2500,"currency":"CNY","subject":"月套餐","channel":"alipay",
- "notify_url":"https://net-w.51aihelp.com/pay/notify/cashier",
- "return_url":"https://net-w.51aihelp.com/pay/return?order=VP…","expire_at":1793335133}
+ "notify_url":"https://rely-vpn-go.com/pay/notify/cashier",
+ "return_url":"https://rely-vpn-go.com/pay/return?order=VP…","expire_at":1793335133}
 ```
 
 响应：HTTP 200 + 信封，`data`：
@@ -109,7 +109,7 @@
 
 ### 4.3 支付回调 `POST {notify_url}`（收银台 → 商户）
 
-即 `https://net-w.51aihelp.com/pay/notify/cashier`。Body 为信封，`data`：
+即 `https://rely-vpn-go.com/pay/notify/cashier`。Body 为信封，`data`：
 
 ```json
 {"out_trade_no":"VP…","trade_no":"T…","amount":2500,"currency":"CNY","status":"PAID","paid_at":1793333400}

@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/mail"
 	"net/netip"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -40,17 +41,18 @@ type Server struct {
 	mock            *payment.Mock
 	monitor         *monitor.Monitor
 	nodeUsers       nodeUserCache
-	risk            riskState    // blocked IPs / users (risk.go)
-	ips             ipRecorder   // buffered IP records (risk.go)
-	segCache        segmentCache // user segmentation (segments.go)
-	gw              gatewayCache // payment link gateway (gateway.go)
-	guard           guardState   // request flood / abuse protection (guard.go)
-	events          eventBuffer  // app analytics (analytics.go)
-	iap             iapVerifier  // App Store receipt verification (iap.go), nil = not configured
-	nonces          nonceCache   // request nonces seen (secure.go)
-	envLogged       sync.Map     // user id -> last integrity log (secure.go)
-	signups         signupGuard  // new device accounts per network (signup_guard.go)
-	trafficInflight sync.Map     // node/batch of traffic reports being applied (billing.go)
+	risk            riskState     // blocked IPs / users (risk.go)
+	ips             ipRecorder    // buffered IP records (risk.go)
+	segCache        segmentCache  // user segmentation (segments.go)
+	gw              gatewayCache  // payment link gateway (gateway.go)
+	guard           guardState    // request flood / abuse protection (guard.go)
+	events          eventBuffer   // app analytics (analytics.go)
+	iap             iapVerifier   // App Store receipt verification (iap.go), nil = not configured
+	gplay           gplayVerifier // Google Play purchase verification (iap_google.go), nil = not configured
+	nonces          nonceCache    // request nonces seen (secure.go)
+	envLogged       sync.Map      // user id -> last integrity log (secure.go)
+	signups         signupGuard   // new device accounts per network (signup_guard.go)
+	trafficInflight sync.Map      // node/batch of traffic reports being applied (billing.go)
 }
 
 func New(cfg *config.API, live *config.LiveCatalog, st *store.Store, issuer *auth.Issuer, mon *monitor.Monitor) (*Server, error) {
@@ -67,6 +69,25 @@ func New(cfg *config.API, live *config.LiveCatalog, st *store.Store, issuer *aut
 			slog.Error("apple_iap.bundle_id is not set: in-app purchase stays off")
 		} else {
 			s.iap = newAppleVerifier(a.SharedSecret, a.BundleID)
+		}
+	}
+	if g := cfg.Payments.GooglePlay; g != nil && g.PackageName != "" {
+		saJSON := []byte(os.Getenv("VPN_GOOGLE_SA_JSON"))
+		if len(saJSON) == 0 && g.ServiceAccountFile != "" {
+			b, err := os.ReadFile(g.ServiceAccountFile)
+			if err != nil {
+				return nil, fmt.Errorf("read google_play.service_account_file: %w", err)
+			}
+			saJSON = b
+		}
+		if len(saJSON) == 0 {
+			slog.Error("google_play configured without a service account key: Play purchases stay off")
+		} else {
+			v, err := newGoogleVerifier(saJSON, g.PackageName)
+			if err != nil {
+				return nil, fmt.Errorf("google_play: %w", err)
+			}
+			s.gplay = v
 		}
 	}
 	return s, nil
@@ -114,6 +135,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/orders/{id}", s.authed(s.handleGetOrder))
 	mux.HandleFunc("POST /api/v1/iap/verify", s.authed(s.handleIAPVerify))
 	mux.HandleFunc("POST /api/v1/iap/restore", s.authed(s.handleIAPRestore))
+	mux.HandleFunc("POST /api/v1/iap/google/verify", s.authed(s.handleGPlayVerify))
 	mux.HandleFunc("GET /legal/{doc}", s.handleLegal)
 
 	// Payment provider callbacks (GET for 易支付, POST for Alipay / mock).
