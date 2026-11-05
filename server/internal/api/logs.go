@@ -146,7 +146,8 @@ func (s *Server) withAccessLog(next http.Handler) http.Handler {
 		d := time.Since(start)
 		p := logPath(r.URL.Path)
 		streaming := strings.HasSuffix(p, "/logs") || strings.HasSuffix(p, "/clone") || strings.HasSuffix(p, "/backup") ||
-			strings.Contains(p, "/database/") || strings.HasSuffix(p, "/provision") || strings.HasSuffix(p, "/ask")
+			strings.Contains(p, "/database/") || strings.HasSuffix(p, "/provision") || strings.HasSuffix(p, "/ask") ||
+			strings.HasPrefix(p, "/dl/") // file downloads (APK / DMG) take minutes on slow networks
 		switch {
 		case sw.status >= 500:
 			slog.Error("request failed", "method", r.Method, "path", p, "status", sw.status, "ms", d.Milliseconds(), "ip", s.clientIP(r))

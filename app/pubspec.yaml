@@ -46,6 +46,7 @@ dependencies:
   crypto: ^3.0.8
   in_app_purchase: ^3.2.0 # iOS App Store in-app purchase (A/B payment face)
   in_app_purchase_storekit: ^0.4.16 # receipt refresh for 恢复购买
+  in_app_purchase_android: ^0.5.0 # Google Play: consume only after the server granted
   cryptography: ^2.9.0
 
 dev_dependencies:

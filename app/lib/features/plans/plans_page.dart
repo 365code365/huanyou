@@ -133,7 +133,11 @@ class _PlansPageState extends State<PlansPage> {
           ? tr('已恢复：本机已加入原购买账号 {0} 的订阅', [r.linkedTo])
           : r.granted > 0
               ? tr('已恢复 {0} 笔购买', [r.granted])
-              : tr('购买已恢复，套餐已生效'));
+              : _purchase.gplay
+                  // Play redelivers unfinished purchases asynchronously; any
+                  // found are granted in the background and the account refreshes.
+                  ? tr('已同步 Google Play 购买记录，未到账的购买会自动到账')
+                  : tr('购买已恢复，套餐已生效'));
     } on IapException catch (e) {
       if (!e.cancelled) _snack(e.message);
     } on ApiException catch (e) {

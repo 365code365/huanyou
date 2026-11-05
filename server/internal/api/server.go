@@ -675,6 +675,11 @@ func (s *Server) clientIP(r *http.Request) string {
 	if err != nil {
 		host = r.RemoteAddr
 	}
+	if s.cfg.TrustCloudflare {
+		if ip := cloudflareClientIP(r, host); ip != "" {
+			return ip
+		}
+	}
 	if s.cfg.TrustProxyHeader {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 			if peer := net.ParseIP(host); peer != nil && (peer.IsLoopback() || peer.IsPrivate()) {

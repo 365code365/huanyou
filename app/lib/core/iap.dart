@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
+import 'package:in_app_purchase_android/in_app_purchase_android.dart';
 import 'package:in_app_purchase_storekit/in_app_purchase_storekit.dart';
 import 'api.dart';
 import 'config.dart';
@@ -124,14 +125,28 @@ class Iap {
         if (!w.done.isCompleted) w.done.completeError(IapException(tr('购买失败，请重试')));
       }
     });
+    if (Platform.isAndroid) {
+      // Unlike StoreKit, Play does not redeliver an unfinished purchase on its
+      // own: a purchase paid while the app died, or whose verify failed, sits
+      // unconsumed until we ask. Ask once per run; it arrives on the stream
+      // above and is granted there (the grant is idempotent).
+      unawaited(_iap.restorePurchases().catchError((Object _) {}));
+    }
   }
 
-  static Future<void> _finish(PurchaseDetails p) async {
-    if (!p.pendingCompletePurchase) return;
+  /// Ends a purchase. On Android a granted purchase is consumed, so the same
+  /// plan can be bought again (时长顺延); a purchase that is not granted is
+  /// left alone (never consumed) so it can be redeemed later. On iOS this
+  /// finishes the StoreKit transaction.
+  static Future<void> _finish(PurchaseDetails p, {bool granted = false}) async {
     try {
-      // On Android this also consumes the one-time product so it can be bought
-      // again (plans顺延 on repurchase); on iOS it finishes the transaction.
-      await _iap.completePurchase(p);
+      if (Platform.isAndroid) {
+        if (!granted) return;
+        final add = _iap.getPlatformAddition<InAppPurchaseAndroidPlatformAddition>();
+        await add.consumePurchase(p);
+        return;
+      }
+      if (p.pendingCompletePurchase) await _iap.completePurchase(p);
     } catch (_) {
       // The store delivers it again next launch; finishing then is harmless.
     }
@@ -191,7 +206,7 @@ class Iap {
           // paid purchase is never lost to a network error.
           return fail(IapException(tr('购买已完成，正在等待服务器确认，稍后会自动到账；也可在购买页点「恢复购买」')));
         }
-        await _finish(p);
+        await _finish(p, granted: true);
         if (w != null && !w.done.isCompleted) w.done.complete();
     }
   }
@@ -212,10 +227,11 @@ class Iap {
       try {
         if (Platform.isAndroid) {
           // One-time products bought as consumables so the same plan can be
-          // repurchased (时长顺延). The token stays verifiable with the Play
-          // Developer API after consumption, so the server grant (idempotent)
-          // is never lost even if consumption races the verify.
-          await _iap.buyConsumable(purchaseParam: param);
+          // repurchased (时长顺延). autoConsume must stay off: the plugin
+          // would consume before our server grants, and a consumed purchase
+          // is never redelivered, so a failed verify would lose a paid plan.
+          // _finish consumes it once the server has granted it.
+          await _iap.buyConsumable(purchaseParam: param, autoConsume: false);
         } else {
           // iOS plans are fixed-duration non-renewing subscriptions: they stay
           // in the App Store receipt, which is what makes 恢复购买 possible.

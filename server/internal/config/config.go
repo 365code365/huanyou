@@ -23,6 +23,10 @@ type API struct {
 	AllowRegister bool   `json:"allow_register"`
 	// TrustProxyHeader: use X-Forwarded-For for client IP (only behind your own reverse proxy).
 	TrustProxyHeader bool `json:"trust_proxy_header"`
+	// TrustCloudflare: the API domain is proxied by Cloudflare. The client IP
+	// is then read from CF-Connecting-IP on connections from Cloudflare's
+	// address ranges (never from anyone else).
+	TrustCloudflare bool `json:"trust_cloudflare"`
 	// PublicURL is the externally reachable base URL of this API (payment callbacks, invite links).
 	PublicURL string          `json:"public_url"`
 	Payments  Payments        `json:"payments"`
