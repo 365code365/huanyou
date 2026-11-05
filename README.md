@@ -100,7 +100,8 @@
 ```
 
 - API / 管理后台：`https://rely-vpn-go.com/`、`https://rely-vpn-go.com/admin/`（管理员密码在 `/etc/vpn/api.env`）。
-- 配置：`/etc/vpn/api.json`（`public_url`、`tls.domain`、`tls.aliases`（旧域名，所有旧版 App 升级后可删）、`tls.passthrough`）；节点 `node.json` 的 `api_url` 也已改成新域名；节点 `node.json` 里 `listen=127.0.0.1`、`vision_port=4443`、`accept_proxy_protocol=true`（原配置备份为 `node.json.bak-pre-clone`）。证书缓存在 `/var/lib/vpn/acme/`。
+- 配置：`/etc/vpn/api.json`（`public_url`、`tls.domain`、`tls.aliases`（旧域名，所有旧版 App 升级后可删）、`tls.passthrough`）；节点 `node.json` 的 `api_url` 也已改成新域名；
+- `rely-vpn-go.com` 在 Cloudflare 上开了代理（橙色云朵），用户经 Cloudflare 边缘访问 API，旧域名直连本机。因此 `api.json` 开了 `trust_cloudflare`：只对来自 Cloudflare 官方网段的连接读取 `CF-Connecting-IP` 作为真实 IP，否则限流、自动封禁、新设备上限都会打到共享的边缘 IP。网段列表在 `server/internal/api/cloudflare.go`，Cloudflare 公布新网段时要更新。本机 `/etc/hosts` 加了 `127.0.0.1 rely-vpn-go.com`，让同机节点直接连本机 API，不绕 Cloudflare；节点 `node.json` 里 `listen=127.0.0.1`、`vision_port=4443`、`accept_proxy_protocol=true`（原配置备份为 `node.json.bak-pre-clone`）。证书缓存在 `/var/lib/vpn/acme/`。
 - 「备份与克隆」页顶部的「当前服务器」卡片显示公网 IP、域名解析是否指向本机、证书剩余天数和本机节点。
 - App（≥ 1.2.7）编译时默认 `API_BASE_URLS=https://rely-vpn-go.com,https://net-w.51aihelp.com`：新域名优先，旧域名备用。1.2.6 及更早的 App 只认旧域名，所以旧域名的 DNS 和 `tls.aliases` 要保留到这些版本都升级为止。iOS 默认禁止明文 HTTP，所以真机必须走 HTTPS。
 
