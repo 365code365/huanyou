@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"vpnplatform/server/internal/api"
 	"vpnplatform/server/internal/auth"
 	"vpnplatform/server/internal/config"
+	"vpnplatform/server/internal/ipclass"
 	"vpnplatform/server/internal/logbuf"
 	"vpnplatform/server/internal/memlimit"
 	"vpnplatform/server/internal/monitor"
@@ -144,21 +146,57 @@ func serveTLS(ctx context.Context, srv *http.Server, cfg *config.API, drained <-
 	}
 	srv.Addr = ":443"
 	srv.TLSConfig = m.TLSConfig()
+	acmeHTTP := m.HTTPHandler(nil) // also enables the http-01 challenge type
+	// Behind Cloudflare with "Always Use HTTPS", the CA's http-01 request is
+	// redirected to https and arrives here: answer challenge paths on :443 too.
+	api := srv.Handler
+	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/.well-known/acme-challenge/") {
+			acmeHTTP.ServeHTTP(w, r)
+			return
+		}
+		api.ServeHTTP(w, r)
+	})
 	redirect := &http.Server{
 		Addr:              ":80",
-		Handler:           m.HTTPHandler(nil),
+		Handler:           acmeHTTP,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	servers := []*http.Server{redirect}
 	go func() {
 		if err := redirect.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			// Another web server owns :80 (common on a shared box): only the
-			// http -> https redirect is lost; certificates use TLS-ALPN on :443.
+			// http -> https redirect is lost; certificates use TLS-ALPN on
+			// :443, or http-01 forwarded to acme_http_listen.
 			slog.Warn("port 80 unavailable, http:// is not redirected to https://", "err", err)
 		}
 	}()
+	if a := cfg.TLS.ACMEHTTPListen; a != "" {
+		challenges := &http.Server{
+			Addr: a,
+			// Only challenge paths; anything else is not ours to answer.
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !strings.HasPrefix(r.URL.Path, "/.well-known/acme-challenge/") {
+					http.NotFound(w, r)
+					return
+				}
+				acmeHTTP.ServeHTTP(w, r)
+			}),
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		servers = append(servers, challenges)
+		go func() {
+			slog.Info("acme http-01 listening", "addr", a)
+			if err := challenges.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("acme http-01 listener failed: renewals of Cloudflare-proxied domains will fail", "addr", a, "err", err)
+			}
+		}()
+	}
 	go func() {
 		<-ctx.Done()
-		_ = redirect.Close()
+		for _, s := range servers {
+			_ = s.Close()
+		}
 	}()
 	if p := cfg.TLS.Passthrough; p != "" {
 		// :443 is shared with a VPN node on this server: route by SNI.
@@ -173,8 +211,9 @@ func serveTLS(ctx context.Context, srv *http.Server, cfg *config.API, drained <-
 			<-drained
 			_ = ln.Close()
 		}()
-		slog.Info("api listening (tls, shared with node)", "domains", cfg.TLS.Domains(), "node", p)
-		if err := srv.ServeTLS(sniRouter(ln, cfg.TLS.Domains(), p), "", ""); err != nil &&
+		slog.Info("api listening (tls, shared with node)", "domains", cfg.TLS.Domains(), "cloudflare_only", cfg.TLS.CloudflareOnly, "node", p)
+		route := domainRoute(cfg.TLS.Domains(), cfg.TLS.CloudflareOnly, ipclass.IsCloudflare)
+		if err := srv.ServeTLS(sniRouter(ln, route, p), "", ""); err != nil &&
 			!errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 			fatal("serve tls", err)
 		}

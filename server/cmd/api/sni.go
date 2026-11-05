@@ -24,19 +24,70 @@ import (
 
 var errSNIDone = errors.New("sni: hello read")
 
-// peekSNI reads the ClientHello from c and returns its server name and the
-// bytes consumed, which must be replayed to whoever handles the connection.
-func peekSNI(c net.Conn) (string, []byte) {
+// clientHello is what the router needs from a ClientHello.
+type clientHello struct {
+	sni  string   // lowercased server name ("" = none)
+	alpn []string // offered application protocols
+}
+
+// peekSNI reads the ClientHello from c and returns its server name / ALPN and
+// the bytes consumed, which must be replayed to whoever handles the connection.
+func peekSNI(c net.Conn) (clientHello, []byte) {
 	var buf bytes.Buffer
-	var sni string
+	var h clientHello
 	_ = tls.Server(readOnlyConn{r: io.TeeReader(c, &buf)}, &tls.Config{
-		GetConfigForClient: func(h *tls.ClientHelloInfo) (*tls.Config, error) {
-			sni = h.ServerName
+		GetConfigForClient: func(ch *tls.ClientHelloInfo) (*tls.Config, error) {
+			h = clientHello{sni: strings.ToLower(ch.ServerName), alpn: ch.SupportedProtos}
 			return nil, errSNIDone
 		},
 	}).Handshake()
-	return strings.ToLower(sni), buf.Bytes()
+	return h, buf.Bytes()
 }
+
+// apiRoute decides whether a connection is for the API (true) or is relayed
+// to the node (false).
+type apiRoute func(h clientHello, peer net.Addr) bool
+
+// domainRoute sends the API's domains to the API. A domain in cloudflareOnly
+// is served exclusively through Cloudflare: a connection for it that comes
+// from anywhere else (a scanner probing the origin IP with that SNI) is
+// relayed to the node like any unknown name, so it sees the node's
+// camouflage site instead of the API certificate and page, and cannot tie the
+// Cloudflare-hidden domain to this IP. Exceptions: loopback (the node agent on
+// this server) and ACME TLS-ALPN validation (acme-tls/1, which serves no
+// content and only succeeds while a certificate order is pending).
+func domainRoute(domains, cloudflareOnly []string, isCloudflare func(ip string) bool) apiRoute {
+	ours, locked := map[string]bool{}, map[string]bool{}
+	for _, d := range domains {
+		ours[strings.ToLower(d)] = true
+	}
+	for _, d := range cloudflareOnly {
+		locked[strings.ToLower(d)] = true
+	}
+	return func(h clientHello, peer net.Addr) bool {
+		if !ours[h.sni] {
+			return false
+		}
+		if !locked[h.sni] {
+			return true
+		}
+		for _, p := range h.alpn {
+			if p == acmeALPN {
+				return true
+			}
+		}
+		ip := ""
+		if a, ok := peer.(*net.TCPAddr); ok {
+			if a.IP.IsLoopback() {
+				return true
+			}
+			ip = a.IP.String()
+		}
+		return isCloudflare(ip)
+	}
+}
+
+const acmeALPN = "acme-tls/1"
 
 // readOnlyConn lets crypto/tls parse a ClientHello without writing anything.
 type readOnlyConn struct{ r io.Reader }
@@ -77,15 +128,11 @@ func (l *chanListener) Accept() (net.Conn, error) {
 func (l *chanListener) Close() error   { l.once.Do(func() { close(l.done) }); return nil }
 func (l *chanListener) Addr() net.Addr { return l.addr }
 
-// sniRouter accepts on ln, sends connections for any of domains (the API's
-// domain and its aliases) to the returned listener and relays all others to
-// passthrough (host:port of the node).
-func sniRouter(ln net.Listener, domains []string, passthrough string) net.Listener {
+// sniRouter accepts on ln, sends connections that route accepts (the API's
+// domains) to the returned listener and relays all others to passthrough
+// (host:port of the node).
+func sniRouter(ln net.Listener, route apiRoute, passthrough string) net.Listener {
 	api := &chanListener{addr: ln.Addr(), ch: make(chan net.Conn), done: make(chan struct{})}
-	ours := map[string]bool{}
-	for _, d := range domains {
-		ours[strings.ToLower(d)] = true
-	}
 	go func() {
 		defer api.Close()
 		for {
@@ -99,9 +146,9 @@ func sniRouter(ln net.Listener, domains []string, passthrough string) net.Listen
 			}
 			go func() {
 				_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
-				sni, hello := peekSNI(c)
+				h, hello := peekSNI(c)
 				_ = c.SetReadDeadline(time.Time{})
-				if ours[sni] {
+				if route(h, c.RemoteAddr()) {
 					select {
 					case api.ch <- &prefixConn{Conn: c, r: io.MultiReader(bytes.NewReader(hello), c)}:
 					case <-api.done:

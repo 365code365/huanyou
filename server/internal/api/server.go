@@ -152,7 +152,46 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /internal/v1/traffic", s.handleTraffic)
 
 	s.registerAdmin(mux)
-	return withSecurityHeaders(withServerTime(s.withAccessLog(withRecover(s.withGuard(s.withRiskIP(mux))))))
+	return withSecurityHeaders(withServerTime(s.withAccessLog(withRecover(s.withGuard(s.withRiskIP(s.withAPIOnlyHosts(mux)))))))
+}
+
+// withAPIOnlyHosts: on tls.api_only domains (an old domain kept for app
+// versions that have it built in, which resolves straight to this server)
+// only what apps call is served. The download site and the admin panel are
+// not: someone probing this IP with that name sees no VPN website, only
+// JSON 404s. Everything else keeps working on the main domain.
+func (s *Server) withAPIOnlyHosts(next http.Handler) http.Handler {
+	if len(s.cfg.TLS.APIOnly) == 0 {
+		return next
+	}
+	only := map[string]bool{}
+	for _, d := range s.cfg.TLS.APIOnly {
+		only[strings.ToLower(d)] = true
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if r.TLS != nil && r.TLS.ServerName != "" {
+			host = r.TLS.ServerName
+		}
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if only[strings.ToLower(host)] && !apiOnlyPath(r.URL.Path) {
+			writeErr(w, http.StatusNotFound, "not_found", "not found")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// apiOnlyPath: what installed apps, node agents and payment callbacks use.
+func apiOnlyPath(p string) bool {
+	for _, pre := range []string{"/api/", "/internal/", "/pay/", "/legal/", "/dl/releases/", "/.well-known/acme-challenge/"} {
+		if strings.HasPrefix(p, pre) {
+			return true
+		}
+	}
+	return p == "/healthz"
 }
 
 // ---- app endpoints ----

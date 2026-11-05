@@ -60,9 +60,24 @@ type TLSConfig struct {
 	// Aliases are more domains served exactly like Domain (own certificate
 	// each). Used when the API moves to a new domain: installed apps have the
 	// old one built in and keep working (and receive the update) through it.
-	Aliases  []string `json:"aliases"`
-	Email    string   `json:"email"`     // optional Let's Encrypt contact
-	CacheDir string   `json:"cache_dir"` // certificate cache, default <db dir>/acme
+	Aliases []string `json:"aliases"`
+	// CloudflareOnly lists domains (Domain / Aliases) that are served only
+	// through Cloudflare's proxy. With Passthrough, direct connections for
+	// them are relayed to the node like unknown names, so scanning the origin
+	// IP does not reveal the API (or tie the hidden domain to this IP).
+	CloudflareOnly []string `json:"cloudflare_only"`
+	// APIOnly lists domains that serve only the app / node / payment API,
+	// not the download site or the admin panel (e.g. an old domain kept for
+	// installed apps that resolves straight to this server).
+	APIOnly []string `json:"api_only"`
+	// ACMEHTTPListen: when :80 belongs to another web server, a loopback
+	// address (e.g. 127.0.0.1:8081) where the API answers ACME http-01
+	// challenges; that server forwards /.well-known/acme-challenge/ here.
+	// Needed for a domain behind Cloudflare: Cloudflare terminates TLS, so
+	// the tls-alpn-01 challenge never reaches us and renewal needs http-01.
+	ACMEHTTPListen string `json:"acme_http_listen"`
+	Email          string `json:"email"`     // optional Let's Encrypt contact
+	CacheDir       string `json:"cache_dir"` // certificate cache, default <db dir>/acme
 	// Passthrough: host:port of a VPN node on the same server. :443 is then
 	// shared: connections whose TLS SNI is Domain go to the API, all others
 	// are relayed to the node with a PROXY protocol header (the node must
@@ -193,6 +208,16 @@ func LoadAPI(path string) (*API, error) {
 		}
 	}
 	c.TLS.Aliases = aliases
+	for _, d := range c.TLS.CloudflareOnly {
+		if !slices.Contains(c.TLS.Domains(), strings.ToLower(strings.TrimSpace(d))) {
+			return nil, fmt.Errorf("tls.cloudflare_only: %q is not tls.domain or one of tls.aliases", d)
+		}
+	}
+	for _, d := range c.TLS.APIOnly {
+		if strings.EqualFold(strings.TrimSpace(d), c.TLS.Domain) {
+			return nil, fmt.Errorf("tls.api_only: %q is the main domain (the site and admin panel live there)", d)
+		}
+	}
 	if c.Provision.BinaryAmd64 == "" {
 		c.Provision.BinaryAmd64 = "/usr/local/bin/vpn-node"
 	}
