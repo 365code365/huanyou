@@ -1,0 +1,60 @@
+{{define "title"}}概览{{end}}
+{{define "content"}}
+<div class="page-head">
+  <div><h1>概览</h1><p class="sub">{{.Today}} · 统计不含测试订单</p></div>
+  <div class="actions">
+    <a class="btn" href="/admin/tests">{{template "icon" "tests"}}测试下单</a>
+    <a class="btn btn-pri" href="/admin/orders">{{template "icon" "orders"}}订单管理</a>
+  </div>
+</div>
+{{if gt .S.Duplicates 0}}<div class="alert alert-warn">{{template "icon" "alert"}}<div>有 <b>{{.S.Duplicates}}</b> 笔订单被重复支付（用户用两种方式各付了一次），需要在信联pay 后台人工退款。<a href="/admin/orders?dup=1">查看订单 →</a></div></div>{{end}}
+{{if gt .S.NotifyFailed 0}}<div class="alert alert-bad">{{template "icon" "bell"}}<div>有 <b>{{.S.NotifyFailed}}</b> 笔已支付订单 24 小时内都没能通知到 VPN，用户可能还没开通套餐。<a href="/admin/orders?status=NOTIFY_FAILED">去处理 →</a></div></div>{{end}}
+
+<div class="grid g4">
+  <div class="card stat"><div class="si t-pri">{{template "icon" "money"}}</div><div><div class="lbl">今日收款</div><div class="val">¥{{yuan .S.TodayCents}}</div><div class="foot">近 7 日 ¥{{yuan .S.WeekCents}}</div></div></div>
+  <div class="card stat"><div class="si t-ok">{{template "icon" "orders"}}</div><div><div class="lbl">今日支付笔数</div><div class="val">{{.S.TodayPaid}} <small>/ {{.S.TodayOrders}} 单</small></div><div class="foot">支付转化率 {{.S.Conv}}%</div></div></div>
+  <div class="card stat"><div class="si t-info">{{template "icon" "send"}}</div><div><div class="lbl">待通知 VPN</div><div class="val">{{.S.NotifyPending}}</div><div class="foot"><a href="/admin/orders?status=NOTIFY_PENDING">按 1m/5m/30m/2h 自动重试</a></div></div></div>
+  <div class="card stat"><div class="si {{if gt .S.NotifyFailed 0}}t-bad{{else}}t-ok{{end}}">{{template "icon" "bell"}}</div><div><div class="lbl">通知失败</div><div class="val">{{.S.NotifyFailed}}</div><div class="foot">{{if gt .S.NotifyFailed 0}}<a href="/admin/orders?status=NOTIFY_FAILED">需要手动重发</a>{{else}}一切正常{{end}}</div></div></div>
+</div>
+
+<div class="grid split">
+  <div>
+    <div class="card">
+      <div class="card-head"><h3>{{template "icon" "money"}}近 7 日收款</h3><span class="hint">按支付时间统计</span></div>
+      <div class="card-body">
+        <div class="chart">{{range .Bars}}
+          <div class="bar"><div class="v">{{if .Cents}}¥{{yuan .Cents}}{{end}}</div>
+            <div class="track"><div class="col{{if not .Cents}} zero{{end}}" style="height:{{.Pct}}%" data-tip="{{.Count}} 笔 · ¥{{yuan .Cents}}"></div></div>
+            <div class="lbl">{{.Label}}</div></div>{{end}}
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>{{template "icon" "orders"}}最近订单</h3><a href="/admin/orders" class="hint">全部订单 →</a></div>
+      {{template "orderTable" .Recent}}
+    </div>
+  </div>
+  <div class="stack">
+    <div class="card">
+      <div class="card-head"><h3>{{template "icon" "shield"}}接入进度</h3><span class="hint">{{.Done}} / 5 已完成</span></div>
+      <div class="card-body" style="padding-bottom:4px"><div class="progress"><i style="width:{{.DonePct}}%"></i></div></div>
+      <ul class="checklist">{{range .Checks}}
+        <li class="{{if .Done}}done{{end}}"><span class="ck">{{if .Done}}{{template "icon" "check"}}{{end}}</span>
+          <div><div class="t">{{.Title}}</div><div class="hint">{{.Desc}}</div></div>
+          {{if not .Done}}<a class="go" href="{{.Link}}">去完成 →</a>{{end}}</li>{{end}}
+      </ul>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>{{template "icon" "link"}}VPN 对接地址</h3><span class="hint">填到 VPN 后台「系统设置 → 支付」</span></div>
+      <div class="card-body">
+        {{if .C.PublicURL}}
+        <div class="copy-label">下单链接</div>
+        <div class="copy-field"><code>{{.PayLink}}</code><button class="btn btn-sm btn-ghost" type="button" data-copy="{{.PayLink}}">{{template "icon" "copy"}}</button></div>
+        <div class="copy-label">订单查询接口</div>
+        <div class="copy-field"><code>{{.QueryURL}}</code><button class="btn btn-sm btn-ghost" type="button" data-copy="{{.QueryURL}}">{{template "icon" "copy"}}</button></div>
+        {{else}}<p class="hint">先到 <a href="/admin/settings">系统设置</a> 填写对外地址。</p>{{end}}
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}

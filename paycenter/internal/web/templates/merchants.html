@@ -1,0 +1,31 @@
+{{define "title"}}VPN 商户{{end}}
+{{define "content"}}
+<div class="page-head">
+  <div><h1>VPN 商户</h1><p class="sub">每个接入的 VPN 系统是一个商户，商户号和两把密钥要与 VPN 后台「系统设置 → 支付」一致</p></div>
+  <div class="actions"><a class="btn btn-pri" href="/admin/merchants/new">{{template "icon" "plus"}}接入 VPN</a></div>
+</div>
+<div class="card">
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>名称</th><th>商户号</th><th>签名密钥</th><th>加密密钥</th><th>支付通道</th><th class="num">真实订单</th><th>状态</th><th></th></tr></thead>
+    <tbody>
+    {{range .List}}
+    <tr>
+      <td><a href="/admin/merchants/{{.ID}}"><b>{{.Name}}</b></a>{{if .Remark}}<div class="sub">{{.Remark}}</div>{{end}}</td>
+      <td><span class="mono">{{.MerchantID}}</span> <button class="btn btn-sm btn-ghost icon-btn" type="button" data-copy="{{.MerchantID}}" title="复制">{{template "icon" "copy"}}</button></td>
+      <td class="mono hint">{{mask .SignKey}}</td>
+      <td class="mono hint">{{mask .EncKey}}</td>
+      <td>{{with index $.ChannelNames .ChannelID}}{{.}}{{else}}<span class="badge b-bad">未绑定</span>{{end}}</td>
+      <td class="num">{{index $.Counts .MerchantID}}</td>
+      <td>{{if .Enabled}}<span class="badge b-ok">启用</span>{{else}}<span class="badge b-muted">停用</span>{{end}}</td>
+      <td class="act">
+        <a class="btn btn-sm btn-ghost" href="/admin/tests?merchant={{.MerchantID}}">测试</a>
+        <a class="btn btn-sm btn-ghost" href="/admin/merchants/{{.ID}}">编辑</a>
+      </td>
+    </tr>
+    {{else}}
+    <tr><td colspan="8"><div class="empty">{{template "icon" "merchants"}}<div>还没有接入 VPN</div><a class="btn btn-pri" href="/admin/merchants/new">{{template "icon" "plus"}}接入 VPN</a></div></td></tr>
+    {{end}}
+    </tbody>
+  </table></div>
+</div>
+{{end}}

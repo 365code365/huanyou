@@ -1,0 +1,66 @@
+{{define "title"}}测试下单{{end}}
+{{define "content"}}
+{{$c := .C}}
+<div class="page-head">
+  <div><h1>测试下单</h1><p class="sub">支付中心扮演 VPN：按 VPN 的规则签名下单、接收通知、发起查询。不需要 VPN 系统参与，测试订单也不会通知到真实 VPN。</p></div>
+</div>
+{{if not .C.PublicURL}}<div class="alert alert-warn">{{template "icon" "alert"}}<div>需要先在 <a href="/admin/settings">系统设置</a> 填写对外地址，下单链接要用它。</div></div>{{end}}
+{{if not .Merchants}}<div class="alert alert-warn">{{template "icon" "alert"}}<div>还没有启用的 VPN 商户，测试订单要用商户的密钥签名。<a href="/admin/merchants/new">去添加 →</a></div></div>{{end}}
+
+<div class="grid g2">
+  <form class="card" method="post" action="/admin/tests/selftest">
+    <input type="hidden" name="_csrf" value="{{$c.CSRF}}">
+    <div class="card-head"><h3>{{template "icon" "zap"}}一键自检</h3><span class="badge plain b-pri">推荐</span></div>
+    <div class="card-body">
+      <p class="hint">自动跑完整条链路，约 2 秒，不会扣款：签名下单链接 → 验签建单 → 篡改金额被拒 → 查询 PENDING → <em>（可选）上游下单 / 查单 / 关单</em> → 模拟支付 → 模拟 VPN 收到通知 → 查询 PAID → 重放被拒。</p>
+      <div class="fields">
+        <div class="field"><label>VPN 商户</label>
+          <select name="merchant_id" required>{{range .Merchants}}<option value="{{.MerchantID}}" {{if eq $.Sel .MerchantID}}selected{{end}}>{{.Name}} · {{.MerchantID}}</option>{{end}}</select></div>
+        <div class="field"><label>金额（元）</label><input name="amount" value="0.01" inputmode="decimal" required></div>
+        <div class="field full">
+          <label class="switch"><input type="checkbox" name="upstream" value="1"><span class="track"></span>同时测试上游通道（信联pay）</label>
+          <span class="hint">会真实调用信联pay 的下单、查单、关单接口各一次，上游订单创建后立即关闭，不需要付款。</span>
+        </div>
+      </div>
+    </div>
+    <div class="form-foot"><button class="btn btn-pri" type="submit" data-busy="自检中…" {{if not .Merchants}}disabled{{end}}>{{template "icon" "play"}}开始自检</button></div>
+  </form>
+
+  <form class="card" method="post" action="/admin/tests">
+    <input type="hidden" name="_csrf" value="{{$c.CSRF}}">
+    <div class="card-head"><h3>{{template "icon" "link"}}手动测试订单</h3><span class="hint">可真实付款</span></div>
+    <div class="card-body">
+      <p class="hint">生成一条和 VPN App 打开的一模一样的签名下单链接。用手机扫码进入收银台走真实支付（建议 0.01 元），或在详情页点「模拟支付成功」。</p>
+      <div class="fields">
+        <div class="field"><label>VPN 商户</label>
+          <select name="merchant_id" required>{{range .Merchants}}<option value="{{.MerchantID}}" {{if eq $.Sel .MerchantID}}selected{{end}}>{{.Name}} · {{.MerchantID}}</option>{{end}}</select></div>
+        <div class="field"><label>金额（元）</label><input name="amount" value="0.01" inputmode="decimal" required></div>
+        <div class="field full"><label>商品名称</label><input name="subject" value="测试订单" maxlength="60"></div>
+      </div>
+    </div>
+    <div class="form-foot"><button class="btn btn-pri" type="submit" {{if not .Merchants}}disabled{{end}}>{{template "icon" "plus"}}生成测试订单</button></div>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-head"><h3>{{template "icon" "clock"}}测试记录</h3><span class="hint">最近 50 条</span></div>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>测试单号</th><th>类型</th><th>商户号</th><th class="num">金额</th><th>结果</th><th>订单状态</th><th>模拟 VPN 收到通知</th><th>创建时间</th><th></th></tr></thead>
+    <tbody>
+    {{range .Rows}}
+    <tr>
+      <td><a class="mono" href="/admin/tests/{{.R.ID}}">{{.R.OutTradeNo}}</a></td>
+      <td>{{if eq .R.Kind "auto"}}<span class="badge plain b-pri">自检</span>{{else}}<span class="badge plain b-test">手动</span>{{end}}</td>
+      <td class="mono">{{.R.MerchantID}}</td>
+      <td class="num money">¥{{yuan .R.Amount}}</td>
+      <td>{{if eq .R.Kind "auto"}}{{if .R.Passed}}<span class="badge b-ok">通过 {{.PassN}}/{{.Steps}}</span>{{else}}<span class="badge b-bad">未通过 {{.PassN}}/{{.Steps}}</span>{{end}}{{else}}<span class="hint">—</span>{{end}}</td>
+      <td>{{if .O}}<span class="badge {{statusTone (orderCode .O)}}">{{orderStatus .O}}</span>{{else}}<span class="badge b-muted">链接未打开</span>{{end}}</td>
+      <td>{{if .Notices}}<span class="badge b-ok">{{.Notices}} 次</span>{{else}}<span class="hint">—</span>{{end}}</td>
+      <td class="hint nowrap">{{ts .R.CreatedAt}}</td>
+      <td class="act"><a class="btn btn-sm btn-ghost" href="/admin/tests/{{.R.ID}}">详情</a></td>
+    </tr>
+    {{else}}<tr><td colspan="9"><div class="empty">{{template "icon" "tests"}}<div>还没有测试记录，先跑一次一键自检吧</div></div></td></tr>{{end}}
+    </tbody>
+  </table></div>
+</div>
+{{end}}

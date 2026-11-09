@@ -1,0 +1,35 @@
+{{define "title"}}订单管理{{end}}
+{{define "content"}}
+<div class="page-head">
+  <div><h1>订单管理</h1><p class="sub">VPN 通过下单链接发来的订单{{if eq .Dup "1"}}（只看重复支付）{{end}}</p></div>
+  <div class="actions"><a class="btn" href="/admin/tests">{{template "icon" "tests"}}发起测试订单</a></div>
+</div>
+<div class="card">
+  <div class="tabs">{{range .Tabs}}<a href="{{.Link}}" class="{{if .On}}on{{end}}">{{.Name}}<span class="n">{{.N}}</span></a>{{end}}</div>
+  <form class="toolbar" method="get" action="/admin/orders">
+    {{if .Status}}<input type="hidden" name="status" value="{{.Status}}">{{end}}
+    {{if .Dup}}<input type="hidden" name="dup" value="{{.Dup}}">{{end}}
+    <div class="search">{{template "icon" "search"}}<input name="q" value="{{.Q}}" placeholder="VPN 订单号 / 平台单号 / 上游单号"></div>
+    <select name="merchant">
+      <option value="">全部商户</option>
+      {{range .Merchants}}<option value="{{.MerchantID}}" {{if eq $.Merchant .MerchantID}}selected{{end}}>{{.Name}}</option>{{end}}
+    </select>
+    <select name="type">
+      <option value="">全部类型</option>
+      <option value="real" {{if eq .Type "real"}}selected{{end}}>真实订单</option>
+      <option value="test" {{if eq .Type "test"}}selected{{end}}>测试订单</option>
+    </select>
+    <input type="date" name="from" value="{{.From}}" title="开始日期"><span class="sep">至</span><input type="date" name="to" value="{{.To}}" title="结束日期">
+    <button class="btn btn-pri" type="submit">{{template "icon" "search"}}查询</button>
+    {{if .Filtered}}<a class="btn btn-ghost" href="/admin/orders{{if .Status}}?status={{.Status}}{{end}}">重置</a>{{end}}
+  </form>
+  {{template "orderTable" .List}}
+  <div class="pager">
+    <span>共 {{.Total}} 条 · 第 {{.Page}} / {{.Pages}} 页</span>
+    <div class="actions">
+      {{if .Prev}}<a class="btn btn-sm" href="{{.Prev}}">上一页</a>{{end}}
+      {{if .Next}}<a class="btn btn-sm" href="{{.Next}}">下一页</a>{{end}}
+    </div>
+  </div>
+</div>
+{{end}}

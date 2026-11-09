@@ -1,0 +1,85 @@
+{{define "title"}}订单详情{{end}}
+{{define "content"}}
+{{$c := .C}}
+<a class="back" href="/admin/orders">← 订单管理</a>
+<div class="page-head">
+  <div>
+    <h1><span class="mono" style="font-size:19px">{{.O.TradeNo}}</span>
+      <span class="badge {{statusTone (orderCode .O)}}">{{orderStatus .O}}</span>
+      {{if .O.IsTest}}<span class="badge plain b-test">测试订单</span>{{end}}</h1>
+    <p class="sub">VPN 订单号 <span class="mono">{{.O.OutTradeNo}}</span> · {{if .M.Name}}{{.M.Name}}{{else}}{{.O.MerchantID}}{{end}} · 创建于 {{ts .O.CreatedAt}}</p>
+  </div>
+  <div class="actions">
+    {{if .RunID}}<a class="btn" href="/admin/tests/{{.RunID}}">{{template "icon" "tests"}}测试详情</a>{{end}}
+    <a class="btn" href="{{.PayLink}}" target="_blank" rel="noopener">{{template "icon" "external"}}打开收银台</a>
+    <form method="post" action="/admin/orders/{{.O.ID}}/sync"><input type="hidden" name="_csrf" value="{{$c.CSRF}}"><button class="btn" type="submit" data-busy="查询中…">{{template "icon" "refresh"}}向上游查单</button></form>
+    {{if eq .O.Status "PAID"}}
+    <form method="post" action="/admin/orders/{{.O.ID}}/renotify" data-confirm="立即向 VPN 重新发送这笔订单的支付结果通知？VPN 侧是幂等的，不会重复开通。" data-title="重发 VPN 通知" data-yes="发送">
+      <input type="hidden" name="_csrf" value="{{$c.CSRF}}"><button class="btn btn-pri" type="submit">{{template "icon" "send"}}重发 VPN 通知</button></form>
+    {{end}}
+  </div>
+</div>
+
+<div class="grid split">
+  <div>
+    <div class="card">
+      <div class="card-head"><h3>{{template "icon" "orders"}}订单信息</h3><span class="big-money">¥{{yuan .O.Amount}}</span></div>
+      <div class="card-body">
+        <dl class="kv cols2">
+          <dt>商品</dt><dd>{{or .O.Subject "—"}}</dd>
+          <dt>币种</dt><dd>{{.O.Currency}}</dd>
+          <dt>商户号</dt><dd class="mono">{{.O.MerchantID}}</dd>
+          <dt>支付方式</dt><dd>{{payName .O.PayType}}</dd>
+          <dt>上游单号</dt><dd class="mono">{{or .O.UpstreamTradeNo "—"}}</dd>
+          <dt>用户 IP</dt><dd>{{or .O.ClientIP "—"}}</dd>
+          <dt>创建时间</dt><dd>{{ts .O.CreatedAt}}</dd>
+          <dt>过期时间</dt><dd>{{ts .O.ExpireAt}}</dd>
+          <dt>支付时间</dt><dd>{{ts .O.PaidAt}}</dd>
+          <dt>最近查单</dt><dd>{{ts .O.LastSyncAt}}</dd>
+        </dl>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>{{template "icon" "send"}}VPN 通知</h3><span class="badge {{notifyTone .O.NotifyStatus}}">{{notifyLabel .O.NotifyStatus}}</span></div>
+      <div class="card-body">
+        <dl class="kv">
+          <dt>通知地址</dt><dd class="mono">{{if .O.IsTest}}模拟 VPN（支付中心内置）{{else}}{{or .O.NotifyURL "—"}}{{end}}</dd>
+          <dt>已尝试</dt><dd>{{.O.NotifyAttempts}} 次</dd>
+          <dt>上次通知</dt><dd>{{ts .O.LastNotifyAt}}</dd>
+          <dt>下次通知</dt><dd>{{ts .O.NextNotifyAt}}</dd>
+          <dt>最近结果</dt><dd class="mono">{{or .O.LastNotifyResult "—"}}</dd>
+          <dt>返回地址</dt><dd class="mono">{{or .O.ReturnURL "—"}}</dd>
+        </dl>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>{{template "icon" "channels"}}上游订单</h3><span class="hint">用户每选一次支付方式产生一笔</span></div>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>上游商户单号</th><th>平台单号</th><th>方式</th><th class="num">金额</th><th>受理类型</th><th>状态</th><th>创建时间</th><th>最近查询</th></tr></thead>
+        <tbody>
+        {{range .Attempts}}
+        <tr>
+          <td class="mono">{{.UpstreamOutTradeNo}}{{if .Error}}<div class="sub" style="color:var(--bad)">{{.Error}}</div>{{end}}</td>
+          <td class="mono">{{or .UpstreamTradeNo "—"}}</td>
+          <td class="nowrap">{{payName .PayType}} <span class="hint">{{.Device}}</span></td>
+          <td class="num">¥{{.Money}}</td>
+          <td>{{or .RespType "—"}}</td>
+          <td><span class="badge {{attemptTone .Status}}">{{attemptStatus .Status}}</span></td>
+          <td class="hint nowrap">{{ts .CreatedAt}}</td>
+          <td class="hint nowrap">{{ts .LastQueryAt}}</td>
+        </tr>
+        {{else}}<tr><td colspan="8"><div class="empty">{{template "icon" "inbox"}}<div>用户还没有选择支付方式</div></div></td></tr>{{end}}
+        </tbody>
+      </table></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-head"><h3>{{template "icon" "clock"}}处理记录</h3><span class="hint">最新在上</span></div>
+    <div class="card-body">
+      {{if .Logs}}<ul class="timeline">{{range .Logs}}
+        <li><span class="dot {{logTone .Kind}}"></span><div class="t">{{logLabel .Kind}}</div><div class="m">{{.Message}}</div><div class="time">{{ts .CreatedAt}}</div></li>{{end}}
+      </ul>{{else}}<div class="empty">{{template "icon" "clock"}}<div>暂无记录</div></div>{{end}}
+    </div>
+  </div>
+</div>
+{{end}}

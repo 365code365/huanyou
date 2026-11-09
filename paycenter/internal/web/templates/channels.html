@@ -1,0 +1,34 @@
+{{define "title"}}支付通道{{end}}
+{{define "content"}}
+{{$c := .C}}
+<div class="page-head">
+  <div><h1>支付通道</h1><p class="sub">上游收款账户（信联pay 商户）。用户在收银台选择支付方式后，用这里的账户向信联pay 下单</p></div>
+  <div class="actions"><a class="btn btn-pri" href="/admin/channels/new">{{template "icon" "plus"}}添加通道</a></div>
+</div>
+<div class="grid g3">
+  {{range .List}}
+  <div class="card ch-card">
+    <div class="card-body">
+      <div class="ch-top">
+        <div class="ch-ico">{{template "icon" "channels"}}</div>
+        <div><h3>{{.Name}}</h3><div class="sub">信联pay · pid <span class="mono">{{.PID}}</span></div></div>
+        {{if .Enabled}}<span class="badge b-ok">启用</span>{{else}}<span class="badge b-muted">停用</span>{{end}}
+      </div>
+      <div class="chips">{{range .PayTypeList}}<span class="chip">{{.Name}} <span class="hint mono">{{.Code}}</span></span>{{end}}</div>
+      <div>
+        <div class="dl-row"><span>接口地址</span><span class="mono">{{host .APIBase}}</span></div>
+        <div class="dl-row"><span>签名方式</span><span>{{.SignType}}</span></div>
+        <div class="dl-row"><span>使用中的商户</span><span>{{index $.Used .ID}} 个</span></div>
+      </div>
+      <div><div class="copy-label">异步回调地址（下单时自动带上）</div>
+        <div class="copy-field"><code>{{$c.PublicURL}}/notify/xinlian/{{.ID}}</code><button class="btn btn-sm btn-ghost" type="button" data-copy="{{$c.PublicURL}}/notify/xinlian/{{.ID}}">{{template "icon" "copy"}}</button></div></div>
+    </div>
+    <div class="form-foot">
+      <a class="btn btn-sm" href="/admin/channels/{{.ID}}">{{template "icon" "edit"}}编辑</a>
+      <form method="post" action="/admin/channels/{{.ID}}/test"><input type="hidden" name="_csrf" value="{{$c.CSRF}}"><button class="btn btn-sm" type="submit" data-busy="连接中…">{{template "icon" "zap"}}测试连接</button></form>
+    </div>
+  </div>
+  {{end}}
+  <a class="add-card" href="/admin/channels/new">{{template "icon" "plus"}}<div>添加支付通道</div></a>
+</div>
+{{end}}

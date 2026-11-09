@@ -1,0 +1,7 @@
+{{define "content"}}
+{{template "summary" .}}
+<form method="post" action="{{.FormURL}}" id="autoform">
+  {{range $k, $v := .Fields}}<input type="hidden" name="{{$k}}" value="{{$v}}">{{end}}
+  <button type="submit" class="btn wide">正在跳转到{{.PayName}}，如未跳转请点这里</button>
+</form>
+{{end}}

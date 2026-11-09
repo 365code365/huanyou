@@ -1,0 +1,97 @@
+{{define "title"}}{{if .Ch.ID}}编辑通道{{else}}添加通道{{end}}{{end}}
+{{define "content"}}
+{{$c := .C}}
+<a class="back" href="/admin/channels">← 支付通道</a>
+<div class="page-head">
+  <div><h1>{{if .Ch.ID}}{{.Ch.Name}} {{if .Ch.Enabled}}<span class="badge b-ok">启用</span>{{else}}<span class="badge b-muted">停用</span>{{end}}{{else}}添加通道{{end}}</h1>
+    <p class="sub">信联pay 开放 API · 文档 <a href="https://c02.z-cn.top/doc" target="_blank" rel="noopener">c02.z-cn.top/doc</a></p></div>
+</div>
+
+<div class="grid split">
+  <form method="post" action="/admin/channels/{{if .Ch.ID}}{{.Ch.ID}}{{else}}new{{end}}" class="card">
+    <input type="hidden" name="_csrf" value="{{$c.CSRF}}">
+    <div class="form-sec">
+      <h4>基本信息</h4><p class="desc">信联pay 后台进件后获得的商户号</p>
+      <div class="fields">
+        <div class="field"><label>通道名称<span class="req">*</span></label><input name="name" value="{{.Ch.Name}}" required></div>
+        <div class="field"><label>商户号 pid<span class="req">*</span></label><input name="pid" value="{{.Ch.PID}}" class="mono" placeholder="例如 1001" required></div>
+        <div class="field full"><label>接口地址<span class="req">*</span></label><input name="api_base" value="{{.Ch.APIBase}}" placeholder="https://c02.z-cn.top" required><span class="hint">平台域名，不带 /api/...</span></div>
+        <div class="field full"><label class="switch"><input type="checkbox" name="enabled" value="1" {{if .Ch.Enabled}}checked{{end}}><span class="track"></span>启用</label></div>
+      </div>
+    </div>
+    <div class="form-sec">
+      <h4>签名与密钥</h4><p class="desc">密钥只保存在本系统，用于本地计算签名，不会出现在任何页面和日志里</p>
+      <div class="fields">
+        <div class="field full"><span class="label">签名方式</span>
+          <div class="seg">
+            <label><input type="radio" name="sign_type" value="MD5" {{if ne .Ch.SignType "RSA"}}checked{{end}}><span>MD5</span></label>
+            <label><input type="radio" name="sign_type" value="RSA" {{if eq .Ch.SignType "RSA"}}checked{{end}}><span>RSA-SHA256</span></label>
+          </div></div>
+        <div class="field full"><label>MD5 密钥<span class="req">*</span></label>
+          <div class="input-group"><input id="md5" name="md5_key" type="password" autocomplete="new-password" placeholder="{{if .Ch.MD5Key}}已设置（{{mask .Ch.MD5Key}}），留空表示不修改{{else}}必填{{end}}">
+            <button class="btn" type="button" data-reveal="md5" title="显示">{{template "icon" "eye"}}</button></div>
+          <span class="hint">即使用 RSA 下单也要填：信联pay 的异步回调固定用 MD5 签名。</span></div>
+        <div class="field full" id="rsaBlock"><label>RSA 商户私钥</label>
+          <textarea name="rsa_private_key" rows="5" placeholder="{{if .Ch.RSAPrivateKey}}已设置，留空表示不修改{{else}}PEM 或裸 Base64（PKCS#8 / PKCS#1）{{end}}"></textarea>
+          {{if .Ch.RSAPrivateKey}}<label class="switch"><input type="checkbox" name="clear_rsa" value="1"><span class="track"></span>清除已保存的私钥</label>{{end}}</div>
+        <div class="field full"><label class="switch"><input type="checkbox" name="sign_with_type" value="1" {{if .Ch.SignWithType}}checked{{end}}><span class="track"></span>待签名串包含 sign_type</label>
+          <span class="hint">信联pay 文档的规则写剔除 sign_type，示例里却保留了。默认关闭；「测试连接」返回 4015 签名校验失败时再打开。</span></div>
+      </div>
+    </div>
+    <div class="form-sec">
+      <h4>支付方式</h4><p class="desc">收银台展示的支付方式。通道编码以信联pay 后台开通的为准，如 alipay、wxpay</p>
+      <div class="pt-head"><span>通道编码 type</span><span>收银台显示名称</span><span></span></div>
+      <div id="ptList">
+        {{range .Ch.PayTypeList}}<div class="pt-row"><input name="pt_code" value="{{.Code}}" class="mono" placeholder="alipay"><input name="pt_name" value="{{.Name}}" placeholder="支付宝"><button class="btn btn-ghost icon-btn" type="button" data-pt-del title="删除">{{template "icon" "trash"}}</button></div>
+        {{else}}<div class="pt-row"><input name="pt_code" class="mono" placeholder="alipay"><input name="pt_name" placeholder="支付宝"><button class="btn btn-ghost icon-btn" type="button" data-pt-del title="删除">{{template "icon" "trash"}}</button></div>{{end}}
+      </div>
+      <template id="ptTpl"><div class="pt-row"><input name="pt_code" class="mono" placeholder="wxpay"><input name="pt_name" placeholder="微信支付"><button class="btn btn-ghost icon-btn" type="button" data-pt-del title="删除">{{template "icon" "trash"}}</button></div></template>
+      <button class="btn btn-sm" type="button" id="ptAdd">{{template "icon" "plus"}}添加支付方式</button>
+      <div class="fields mt">
+        <div class="field"><label>终端类型 device</label>
+          <select name="device">
+            <option value="auto" {{if or (eq .Ch.Device "auto") (eq .Ch.Device "")}}selected{{end}}>自动（手机 wap / 电脑 pc）</option>
+            <option value="wap" {{if eq .Ch.Device "wap"}}selected{{end}}>wap</option>
+            <option value="pc" {{if eq .Ch.Device "pc"}}selected{{end}}>pc</option>
+            <option value="qrcode" {{if eq .Ch.Device "qrcode"}}selected{{end}}>qrcode</option>
+          </select></div>
+      </div>
+    </div>
+    <div class="form-foot"><a class="btn btn-ghost" href="/admin/channels">取消</a><button type="submit" class="btn btn-pri">{{template "icon" "check"}}保存</button></div>
+  </form>
+
+  <div class="stack">
+    {{if .Ch.ID}}
+    <div class="card">
+      <div class="card-head"><h3>{{template "icon" "zap"}}测试连接</h3></div>
+      <div class="card-body">
+        <p class="hint" style="margin-top:0">先调用 <code class="mono">/api/merchant/info</code> 验证密钥，再用第一种支付方式下一笔 0.01 元订单并立即关闭，确认真的能下单（例如域名已授权）。不需要付款。</p>
+        <form method="post" action="/admin/channels/{{.Ch.ID}}/test"><input type="hidden" name="_csrf" value="{{$c.CSRF}}"><button class="btn btn-pri btn-block" type="submit" data-busy="连接中…">{{template "icon" "zap"}}测试连接</button></form>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>{{template "icon" "link"}}异步回调地址</h3></div>
+      <div class="card-body">
+        <div class="copy-field"><code>{{$c.PublicURL}}/notify/xinlian/{{.Ch.ID}}</code><button class="btn btn-sm btn-ghost" type="button" data-copy="{{$c.PublicURL}}/notify/xinlian/{{.Ch.ID}}">{{template "icon" "copy"}}</button></div>
+        <p class="hint">下单时作为 notify_url 自动带给信联pay，不需要在信联pay 后台配置。</p>
+      </div>
+    </div>
+    <form method="post" action="/admin/channels/{{.Ch.ID}}/delete" class="card danger" data-confirm="确定删除这个通道？正在使用它的商户需要先改绑。" data-title="删除通道 {{.Ch.Name}}" data-yes="删除" data-danger>
+      <input type="hidden" name="_csrf" value="{{$c.CSRF}}">
+      <div class="card-head"><h3>{{template "icon" "trash"}}危险操作</h3></div>
+      <div class="card-body"><button type="submit" class="btn btn-danger">{{template "icon" "trash"}}删除通道</button></div>
+    </form>
+    {{else}}
+    <div class="card">
+      <div class="card-head"><h3>{{template "icon" "shield"}}接入说明</h3></div>
+      <div class="card-body">
+        <div class="dl-row"><span>1</span><span>在信联pay 完成进件，拿到 pid 和 MD5 密钥</span></div>
+        <div class="dl-row"><span>2</span><span>填写左侧表单并保存</span></div>
+        <div class="dl-row"><span>3</span><span>点「测试连接」确认密钥正确</span></div>
+        <div class="dl-row"><span>4</span><span>在「VPN 商户」里绑定这个通道</span></div>
+      </div>
+    </div>
+    {{end}}
+  </div>
+</div>
+{{end}}

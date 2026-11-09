@@ -3,6 +3,9 @@ server/bin/
 server/data/
 server/api.json
 server/node.json
+# paycenter
+paycenter/bin/
+paycenter/data/
 *.db
 *.db-wal
 *.db-shm

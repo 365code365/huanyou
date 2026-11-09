@@ -1,0 +1,27 @@
+{{define "content"}}
+{{template "summary" .}}
+{{if eq .Status "PAID"}}
+  <div class="msg">
+    <div class="icon ok">✓</div>
+    <h2>支付成功</h2>
+    <p class="muted">套餐将在几秒内开通，请返回 App 查看。</p>
+    {{if .Return}}<a class="btn" href="{{.Return}}">返回</a>{{end}}
+  </div>
+{{else if eq .Status "CLOSED"}}
+  <div class="msg">
+    <div class="icon err">!</div>
+    <h2>订单已过期</h2>
+    <p class="muted">请返回 App 重新下单。如果已经付款，系统会自动处理，请勿重复支付。</p>
+  </div>
+{{else}}
+  {{if .Err}}<p class="err">{{.Err}}</p>{{end}}
+  <form method="post" action="/pay/{{.Order.TradeNo}}/submit" class="methods" id="methods">
+    <input type="hidden" name="t" value="{{.Token}}">
+    {{range .PayTypes}}
+    <button type="submit" name="pay_type" value="{{.Code}}" class="method m-{{.Code}}"><span class="dot"></span>{{.Name}}</button>
+    {{end}}
+  </form>
+  <p class="muted small c">付款完成后本页会自动跳转；如未跳转，请返回 App 刷新订单。</p>
+  {{template "poll" .}}
+{{end}}
+{{end}}

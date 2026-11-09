@@ -1,0 +1,84 @@
+{{define "title"}}{{if .M.ID}}编辑商户{{else}}接入 VPN{{end}}{{end}}
+{{define "content"}}
+{{$c := .C}}
+<a class="back" href="/admin/merchants">← VPN 商户</a>
+<div class="page-head">
+  <div><h1>{{if .M.ID}}{{.M.Name}} {{if .M.Enabled}}<span class="badge b-ok">启用</span>{{else}}<span class="badge b-muted">停用</span>{{end}}{{else}}接入 VPN{{end}}</h1>
+    <p class="sub">{{if .M.ID}}商户号 <span class="mono">{{.M.MerchantID}}</span>{{else}}把 VPN 后台生成的商户号和密钥填进来，或在这里生成后填到 VPN 后台{{end}}</p></div>
+  {{if .M.ID}}<div class="actions"><a class="btn" href="/admin/tests?merchant={{.M.MerchantID}}">{{template "icon" "tests"}}测试下单</a></div>{{end}}
+</div>
+
+<div class="grid split">
+  <form method="post" action="/admin/merchants/{{if .M.ID}}{{.M.ID}}{{else}}new{{end}}" class="card" id="mform">
+    <input type="hidden" name="_csrf" value="{{$c.CSRF}}">
+    <div class="form-sec">
+      <h4>基本信息</h4><p class="desc">名称只在后台显示</p>
+      <div class="fields">
+        <div class="field"><label>名称<span class="req">*</span></label><input name="name" value="{{.M.Name}}" placeholder="例如 幻游 VPN" required></div>
+        <div class="field"><label>备注</label><input name="remark" value="{{.M.Remark}}" placeholder="可选"></div>
+        <div class="field full"><label class="switch"><input type="checkbox" name="enabled" value="1" {{if .M.Enabled}}checked{{end}}><span class="track"></span>启用（停用后这个 VPN 的下单链接和查询都会被拒绝）</label></div>
+      </div>
+    </div>
+    <div class="form-sec">
+      <h4>商户号与密钥</h4><p class="desc">与 VPN 后台「系统设置 → 支付」完全一致，两边不一致会导致验签失败</p>
+      <div class="fields">
+        <div class="field full"><label>商户号 merchant_id<span class="req">*</span></label>
+          <div class="input-group"><input id="mid" name="merchant_id" value="{{.M.MerchantID}}" class="mono" required><button class="btn" type="button" data-copy-from="mid" title="复制">{{template "icon" "copy"}}</button></div></div>
+        <div class="field full"><label>签名密钥 sign_key（hex，HMAC-SHA256）<span class="req">*</span></label>
+          <div class="input-group"><input id="sk" name="sign_key" type="password" value="{{.M.SignKey}}" class="mono" autocomplete="off" required>
+            <button class="btn" type="button" data-reveal="sk" title="显示">{{template "icon" "eye"}}</button><button class="btn" type="button" data-copy-from="sk" title="复制">{{template "icon" "copy"}}</button></div></div>
+        <div class="field full"><label>加密密钥 enc_key（hex 64 位，AES-256-GCM）<span class="req">*</span></label>
+          <div class="input-group"><input id="ek" name="enc_key" type="password" value="{{.M.EncKey}}" class="mono" autocomplete="off" required>
+            <button class="btn" type="button" data-reveal="ek" title="显示">{{template "icon" "eye"}}</button><button class="btn" type="button" data-copy-from="ek" title="复制">{{template "icon" "copy"}}</button></div></div>
+        <div class="field full"><div><button type="button" class="btn" id="genkeys" data-csrf="{{$c.CSRF}}">{{template "icon" "key"}}生成新的商户号和密钥</button></div></div>
+      </div>
+    </div>
+    <div class="form-sec">
+      <h4>收款与通知</h4><p class="desc">用户付款走哪个上游通道，支付结果通知到哪里</p>
+      <div class="fields">
+        <div class="field"><label>支付通道<span class="req">*</span></label>
+          <select name="channel_id" required>
+            <option value="">请选择</option>
+            {{range .Channels}}<option value="{{.ID}}" {{if eq $.M.ChannelID .ID}}selected{{end}}>{{.Name}}（pid {{.PID}}）{{if not .Enabled}} · 已停用{{end}}</option>{{end}}
+          </select>
+          {{if not .Channels}}<span class="hint">还没有通道，<a href="/admin/channels/new">先添加 →</a></span>{{end}}</div>
+        <div class="field"><label>固定通知地址</label>
+          <input name="notify_url" value="{{.M.NotifyURL}}" placeholder="留空则用下单链接里的 notify_url">
+          <span class="hint">填写后只通知这个地址，如 https://api.example.com/pay/gateway/notify</span></div>
+      </div>
+    </div>
+    <div class="form-foot"><a class="btn btn-ghost" href="/admin/merchants">取消</a><button type="submit" class="btn btn-pri">{{template "icon" "check"}}保存</button></div>
+  </form>
+
+  <div class="stack">
+    <div class="card">
+      <div class="card-head"><h3>{{template "icon" "link"}}填到 VPN 后台</h3></div>
+      <div class="card-body">
+        {{if .C.PublicURL}}
+        <div class="copy-label">下单链接</div>
+        <div class="copy-field"><code>{{.PayLink}}</code><button class="btn btn-sm btn-ghost" type="button" data-copy="{{.PayLink}}">{{template "icon" "copy"}}</button></div>
+        <div class="copy-label">订单查询接口</div>
+        <div class="copy-field"><code>{{.QueryURL}}</code><button class="btn btn-sm btn-ghost" type="button" data-copy="{{.QueryURL}}">{{template "icon" "copy"}}</button></div>
+        <p class="hint mt">商户号、签名密钥、加密密钥与左侧保持一致。</p>
+        {{else}}<p class="hint">尚未设置对外地址，<a href="/admin/settings">去设置 →</a></p>{{end}}
+      </div>
+    </div>
+    {{if .M.ID}}
+    <form method="post" action="/admin/merchants/{{.M.ID}}/test-notify" class="card">
+      <input type="hidden" name="_csrf" value="{{$c.CSRF}}">
+      <div class="card-head"><h3>{{template "icon" "send"}}测试真实 VPN 通知</h3></div>
+      <div class="card-body">
+        <p class="hint">向真实 VPN 发送一条不存在订单的「已支付」通知。VPN 返回 ORDER_NOT_FOUND 说明地址和密钥都正确；返回 BAD_SIGN 说明密钥不一致。</p>
+        <div class="field"><label>VPN 通知地址</label><input name="target" value="{{.M.NotifyURL}}" placeholder="留空用固定通知地址或最近一笔订单的地址"></div>
+      </div>
+      <div class="form-foot"><button type="submit" class="btn" data-busy="发送中…">{{template "icon" "send"}}发送测试通知</button></div>
+    </form>
+    <form method="post" action="/admin/merchants/{{.M.ID}}/delete" class="card danger" data-confirm="删除后这个 VPN 的下单链接和订单查询都会失败，历史订单保留。" data-title="删除商户 {{.M.Name}}" data-yes="删除" data-danger>
+      <input type="hidden" name="_csrf" value="{{$c.CSRF}}">
+      <div class="card-head"><h3>{{template "icon" "trash"}}危险操作</h3></div>
+      <div class="card-body"><p class="hint" style="margin:0 0 12px">删除商户后无法恢复，需要重新填写密钥。</p><button type="submit" class="btn btn-danger">{{template "icon" "trash"}}删除商户</button></div>
+    </form>
+    {{end}}
+  </div>
+</div>
+{{end}}

@@ -1,0 +1,47 @@
+{{define "title"}}系统设置{{end}}
+{{define "content"}}
+{{$c := .C}}
+<div class="page-head"><div><h1>系统设置</h1><p class="sub">对外地址、管理员密码和运行信息</p></div></div>
+<div class="grid split">
+  <div>
+    <form method="post" action="/admin/settings" class="card">
+      <input type="hidden" name="_csrf" value="{{$c.CSRF}}">
+      <div class="card-head"><h3>{{template "icon" "globe"}}对外地址</h3>{{if .Guessed}}<span class="badge b-warn">未保存</span>{{end}}</div>
+      <div class="card-body">
+        {{if .Guessed}}<div class="alert alert-warn">{{template "icon" "alert"}}<div>还没有设置对外地址，下面是根据当前访问地址推测的值，确认后请保存。</div></div>{{end}}
+        <div class="field"><label>本支付中心的公网地址<span class="req">*</span></label>
+          <input name="public_url" value="{{.PublicURL}}" placeholder="https://pay.example.com" required>
+          <span class="hint">用于生成 VPN 的下单链接 / 查询接口、信联pay 的异步回调地址和支付后的跳转地址。信联pay 只接受公网回调地址，生产环境请用 https。</span></div>
+      </div>
+      <div class="form-foot"><button type="submit" class="btn btn-pri">{{template "icon" "check"}}保存</button></div>
+    </form>
+
+    <form method="post" action="/admin/settings/password" class="card" id="password">
+      <input type="hidden" name="_csrf" value="{{$c.CSRF}}">
+      <div class="card-head"><h3>{{template "icon" "lock"}}修改密码</h3><span class="hint">用户名 {{.User}}</span></div>
+      <div class="card-body">
+        <div class="fields">
+          <div class="field full"><label>原密码</label><input name="old" type="password" autocomplete="current-password" required></div>
+          <div class="field"><label>新密码（至少 8 位）</label><input name="new" type="password" autocomplete="new-password" minlength="8" required></div>
+          <div class="field"><label>再输入一次</label><input name="new2" type="password" autocomplete="new-password" minlength="8" required></div>
+        </div>
+      </div>
+      <div class="form-foot"><span class="hint">修改后其他设备上的登录会失效</span><button type="submit" class="btn btn-pri">{{template "icon" "check"}}修改密码</button></div>
+    </form>
+  </div>
+  <div class="card">
+    <div class="card-head"><h3>{{template "icon" "db"}}运行信息</h3></div>
+    <div class="card-body">
+      <div class="dl-row"><span>数据库</span><span>{{.C.DB}}</span></div>
+      <div class="dl-row"><span>运行时长</span><span>{{.Uptime}}</span></div>
+      <div class="dl-row"><span>启动时间</span><span>{{ts .Started}}</span></div>
+      <div class="dl-row"><span>Go 版本</span><span class="mono">{{.GoVersion}}</span></div>
+      <div class="dl-row"><span>订单总数</span><span>{{.Counts.Orders}}</span></div>
+      <div class="dl-row"><span>VPN 商户</span><span>{{.Counts.Merchants}}</span></div>
+      <div class="dl-row"><span>支付通道</span><span>{{.Counts.Channels}}</span></div>
+      <div class="dl-row"><span>测试记录</span><span>{{.Counts.Tests}}</span></div>
+      <p class="hint mt">切换 MySQL：设置环境变量 <code class="mono">PAYCENTER_DB_DRIVER=mysql</code> 和 <code class="mono">PAYCENTER_DB_DSN</code> 后重启。</p>
+    </div>
+  </div>
+</div>
+{{end}}

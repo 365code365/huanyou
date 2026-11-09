@@ -1,0 +1,91 @@
+{{define "title"}}测试详情{{end}}
+{{define "content"}}
+{{$c := .C}}
+<a class="back" href="/admin/tests">← 测试下单</a>
+<div class="page-head" id="runState" data-url="/admin/tests/{{.R.ID}}/state" data-state="{{.State}}">
+  <div>
+    <h1><span class="mono" style="font-size:19px">{{.R.OutTradeNo}}</span>
+      {{if eq .R.Kind "auto"}}<span class="badge plain b-pri">自检</span>{{else}}<span class="badge plain b-test">手动测试</span>{{end}}
+      {{if .O}}<span class="badge {{statusTone (orderCode .O)}}">{{orderStatus .O}}</span>{{else}}<span class="badge b-muted">链接未打开</span>{{end}}</h1>
+    <p class="sub">{{if .M.Name}}{{.M.Name}} · {{end}}<span class="mono">{{.R.MerchantID}}</span> · ¥{{yuan .R.Amount}} · {{.R.Subject}} · {{ts .R.CreatedAt}}</p>
+  </div>
+  <div class="actions">
+    {{if .O}}<a class="btn" href="/admin/orders/{{.O.ID}}">{{template "icon" "orders"}}订单详情</a>{{end}}
+    <form method="post" action="/admin/tests/{{.R.ID}}/query"><input type="hidden" name="_csrf" value="{{$c.CSRF}}"><button class="btn" type="submit" data-busy="查询中…">{{template "icon" "search"}}模拟 VPN 查询</button></form>
+    {{if .Paid}}<form method="post" action="/admin/tests/{{.R.ID}}/renotify"><input type="hidden" name="_csrf" value="{{$c.CSRF}}"><button class="btn" type="submit" data-busy="发送中…">{{template "icon" "send"}}重发通知</button></form>{{end}}
+    {{if .CanSimulate}}<form method="post" action="/admin/tests/{{.R.ID}}/simulate" data-confirm="把这笔测试订单标记为已支付（不经过上游、不会扣款），然后通知模拟 VPN。" data-title="模拟支付成功" data-yes="模拟支付">
+      <input type="hidden" name="_csrf" value="{{$c.CSRF}}"><button class="btn btn-pri" type="submit">{{template "icon" "check"}}模拟支付成功</button></form>{{end}}
+  </div>
+</div>
+
+{{if .Steps}}
+<div class="card">
+  <div class="result-banner">
+    {{if .R.Passed}}<div class="big t-ok">{{template "icon" "check"}}</div><div><h3>自检通过</h3><p>{{.PassN}} / {{len .Steps}} 项通过 · 耗时 {{.TotalMs}} ms · 下单、通知、查询链路都正常</p></div>
+    {{else}}<div class="big t-bad">{{template "icon" "x"}}</div><div><h3>自检未通过</h3><p>{{.PassN}} / {{len .Steps}} 项通过 · 请查看下面标红的步骤</p></div>{{end}}
+  </div>
+  <ul class="steps">{{range $i, $s := .Steps}}
+    <li class="{{if $s.Skip}}skip{{else if $s.OK}}ok{{else}}fail{{end}}">
+      <span class="sx">{{if $s.Skip}}–{{else if $s.OK}}{{template "icon" "check"}}{{else}}{{template "icon" "x"}}{{end}}</span>
+      <div><div class="name">{{add $i 1}}. {{$s.Name}}</div><div class="detail">{{$s.Detail}}</div></div>
+      {{if not $s.Skip}}<span class="ms">{{$s.Ms}} ms</span>{{end}}
+    </li>{{end}}
+  </ul>
+</div>
+{{end}}
+
+{{with .Trace}}
+<div class="card">
+  <div class="card-head"><h3>{{template "icon" "search"}}模拟 VPN 查询结果</h3>
+    <span>{{if .Err}}<span class="badge b-bad">{{.Err}}</span>{{else}}<span class="badge b-ok">HTTP {{.Status}} · {{.Order.Status}}</span>{{end}} <span class="hint">{{.Ms}} ms</span></span></div>
+  <div class="card-body">
+    <div class="grid g2" style="margin-bottom:0">
+      <div><div class="code-title"><span>① 请求明文</span></div><pre class="code">{{.Plain}}</pre>
+        <div class="code-title mt"><span>② 加密信封（POST /api/order/query）</span></div><pre class="code">{{.Request}}</pre></div>
+      <div><div class="code-title"><span>③ 响应</span><span>HTTP {{.Status}}</span></div><pre class="code">{{.Response}}</pre>
+        {{if .Decoded}}<div class="code-title mt"><span>④ 解密后的响应</span></div><pre class="code">{{.Decoded}}</pre>{{end}}</div>
+    </div>
+  </div>
+</div>
+{{end}}
+
+<div class="grid split">
+  <div class="card">
+    <div class="card-head"><h3>{{template "icon" "link"}}下单链接</h3><span class="hint">与 VPN App 打开的链接完全相同</span></div>
+    <div class="card-body">
+      <div class="copy-field"><code id="paylink">{{.R.PayLink}}</code>
+        <button class="btn btn-sm" type="button" data-copy-from="paylink">{{template "icon" "copy"}}复制</button>
+        <a class="btn btn-sm btn-pri" href="{{.R.PayLink}}" target="_blank" rel="noopener">{{template "icon" "external"}}打开收银台</a></div>
+      {{if .Expired}}<p class="hint" style="color:var(--warn)">链接已超过 30 分钟有效期，打开会被拒绝，请重新生成。</p>{{end}}
+      <div class="code-title mt"><span>签名参数（按名称排序，sign 之外的参数参与 HMAC-SHA256）</span></div>
+      <dl class="kv tight">{{range .Params}}<dt class="mono">{{.K}}</dt><dd class="mono">{{.V}}</dd>{{end}}</dl>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-head"><h3>{{template "icon" "qr"}}手机扫码</h3></div>
+    <div class="card-body c">
+      {{if .QR}}<img class="qr" src="{{.QR}}" width="200" height="200" alt="下单链接二维码">{{end}}
+      <p class="hint">用手机扫码进入收银台，可以选择支付方式走真实上游付款。付款后本页会自动刷新。</p>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head"><h3>{{template "icon" "inbox"}}模拟 VPN 收到的通知</h3><span class="hint">按 VPN 的规则验签、解密、防重放、核对金额后回复</span></div>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th>收到时间</th><th>回复</th><th>status</th><th class="num">amount（分）</th><th>trade_no</th><th>说明</th></tr></thead>
+    <tbody>
+    {{range .Notices}}
+    <tr>
+      <td class="nowrap hint">{{ts .CreatedAt}}</td>
+      <td>{{if eq .Code "SUCCESS"}}<span class="badge b-ok">SUCCESS</span>{{else}}<span class="badge b-bad">{{.Code}}</span>{{end}}</td>
+      <td class="mono">{{.Status}}</td>
+      <td class="num">{{.Amount}}</td>
+      <td class="mono">{{.TradeNo}}</td>
+      <td>{{.Detail}}</td>
+    </tr>
+    {{else}}<tr><td colspan="6"><div class="empty">{{template "icon" "inbox"}}<div>还没有收到通知。订单支付成功后，支付中心会立即通知到这里。</div></div></td></tr>{{end}}
+    </tbody>
+  </table></div>
+</div>
+{{end}}

@@ -1,0 +1,42 @@
+{{define "layout"}}<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>登录 · 支付中心</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/admin.css?v=3">
+</head>
+<body>
+<div class="auth">
+  <div class="auth-art">
+    <div class="brand"><span class="logo"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4l5 7 5-7M7 13h10M7 17h10M12 11v9"/></svg></span>支付中心</div>
+    <div>
+      <h2>VPN 支付对接<br>统一管理控制台</h2>
+      <p>连接 VPN 系统与信联pay：签名下单链接、收银台、支付通知、订单查询，一处配置、全程可追踪。</p>
+      <ul>
+        <li><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>HMAC-SHA256 链接签名，金额无法篡改</li>
+        <li><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>AES-256-GCM 加密通知，失败自动重试 24 小时</li>
+        <li><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>内置模拟 VPN，一键自检整条支付链路</li>
+      </ul>
+    </div>
+    <div class="foot">仅限管理员访问 · 所有登录都会被记录</div>
+  </div>
+  <div class="auth-panel">
+    <div class="auth-card">
+      <h1>欢迎回来</h1>
+      <p class="sub">请使用管理员账号登录</p>
+      {{if .Err}}<div class="alert alert-bad"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg><div>{{.Err}}</div></div>{{end}}
+      <form method="post" action="/admin/login">
+        <input type="hidden" name="next" value="{{.Next}}">
+        <div class="field"><label for="u">用户名</label>
+          <div class="input-ic"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><input id="u" name="user" value="{{.User}}" autocomplete="username" required autofocus placeholder="admin"></div></div>
+        <div class="field"><label for="p">密码</label>
+          <div class="input-ic"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><input id="p" name="password" type="password" autocomplete="current-password" required placeholder="请输入密码"></div></div>
+        <button type="submit" class="btn btn-pri btn-lg btn-block">登录</button>
+      </form>
+    </div>
+  </div>
+</div>
+</body>
+</html>{{end}}
