@@ -8,6 +8,7 @@ import '../core/open_url.dart';
 import '../core/prefs.dart';
 import '../i18n/i18n.dart';
 import '../theme/app_theme.dart';
+import 'skeleton.dart';
 
 /// Ads configured in the admin panel (both slots are off by default).
 class AdsStore extends ChangeNotifier {
@@ -16,6 +17,15 @@ class AdsStore extends ChangeNotifier {
 
   Ads? ads;
   DateTime? _loadedAt;
+
+  /// True once the first load has finished (or failed). Until then the home
+  /// page shows skeletons, but only for slots the last answer had content in
+  /// (remembered across launches), so nothing flashes when ads are off.
+  bool settled = false;
+  static const _kShape = 'ads_shape'; // "<banners>,<announcements>" of the last answer
+  bool get expectBanner => _shape(0) > 0;
+  bool get expectMarquee => _shape(1) > 0;
+  int _shape(int i) => int.tryParse((Prefs.get(_kShape) ?? '').split(',').elementAtOrNull(i) ?? '') ?? 0;
   Future<void>? _loading;
   String _sig = '';
 
@@ -32,6 +42,7 @@ class AdsStore extends ChangeNotifier {
       try {
         final next = await api.ads();
         _loadedAt = DateTime.now();
+        Prefs.set(_kShape, '${next.home.length},${next.marquee.length}');
         final sig = _signature(next);
         if (sig != _sig) {
           _sig = sig;
@@ -42,6 +53,10 @@ class AdsStore extends ChangeNotifier {
         // Offline / old server: keep what we have.
       } finally {
         _loading = null;
+        if (!settled) {
+          settled = true;
+          notifyListeners(); // drop the skeletons
+        }
       }
     }();
   }
@@ -135,7 +150,15 @@ class _MarqueeBarState extends State<MarqueeBar> with SingleTickerProviderStateM
   @override
   Widget build(BuildContext context) {
     final items = _items;
-    if (items.isEmpty) return SizedBox(height: widget.gap);
+    if (items.isEmpty) {
+      if (!AdsStore.instance.settled && AdsStore.instance.expectMarquee) {
+        return Padding(
+          padding: EdgeInsets.symmetric(vertical: ((widget.gap - 34) / 2).clamp(4.0, 20.0)),
+          child: const SizedBox(height: 34, child: Skeleton(radius: 17)),
+        );
+      }
+      return SizedBox(height: widget.gap);
+    }
     final a = items[_i % items.length];
     return Padding(
       padding: EdgeInsets.symmetric(vertical: ((widget.gap - 34) / 2).clamp(4.0, 20.0)),
@@ -231,7 +254,13 @@ class _AdBannerState extends State<AdBanner> {
     final ads = AdsStore.instance.ads;
     final items = ads?.home ?? const <AdItem>[];
     _arm(items.length, ads?.interval ?? 5);
-    if (items.isEmpty) return const SizedBox.shrink();
+    if (items.isEmpty) {
+      // Banners were configured last time: hold their space until they arrive.
+      if (!AdsStore.instance.settled && AdsStore.instance.expectBanner) {
+        return const AspectRatio(aspectRatio: 3, child: Skeleton(radius: AppRadius.card));
+      }
+      return const SizedBox.shrink();
+    }
     final dpr = MediaQuery.devicePixelRatioOf(context);
     return LayoutBuilder(builder: (context, c) {
       final w = c.maxWidth;
@@ -258,6 +287,7 @@ class _AdBannerState extends State<AdBanner> {
                         fit: BoxFit.cover,
                         // Decode at display size: banners are often uploaded at 2–3x.
                         cacheWidth: (w * dpr).round(),
+                        loadingBuilder: (_, child, p) => p == null ? child : const Skeleton(),
                         errorBuilder: (_, _, _) => const SizedBox.shrink(),
                       ),
                     ),
@@ -344,6 +374,10 @@ Future<void> _showPopup(BuildContext context, AdItem a) async {
                 child: Image.network(a.image,
                     fit: BoxFit.cover,
                     cacheWidth: (w * MediaQuery.devicePixelRatioOf(ctx)).round(),
+                    // Hold a portrait-sized space while the image downloads.
+                    loadingBuilder: (_, child, p) => p == null
+                        ? child
+                        : SizedBox(height: MediaQuery.sizeOf(ctx).height * 0.42, child: const Skeleton()),
                     errorBuilder: (_, _, _) => const SizedBox.shrink()),
               ),
             ),
