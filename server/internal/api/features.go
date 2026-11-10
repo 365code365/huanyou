@@ -48,9 +48,11 @@ func (s *Server) handleReferral(w http.ResponseWriter, r *http.Request, u *store
 		"invited_count": invited,
 		"inviter_days":  ref.InviterDays,
 		"invitee_days":  ref.InviteeDays,
-		"max_invites":   ref.MaxInvites,
-		"invited":       u.InvitedBy != 0,
-		"can_bind":      ref.Enabled && u.InvitedBy == 0 && time.Since(u.CreatedAt) < bindWindow,
+		// Extra days to the inviter when the friend first pays (0 = none).
+		"inviter_paid_days": ref.InviterPaidDays,
+		"max_invites":       ref.MaxInvites,
+		"invited":           u.InvitedBy != 0,
+		"can_bind":          ref.Enabled && u.InvitedBy == 0 && time.Since(u.CreatedAt) < bindWindow,
 	})
 }
 

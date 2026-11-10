@@ -31,8 +31,126 @@ class AdsStore extends ChangeNotifier {
 
 void _open(AdItem a) {
   if (a.link.isEmpty) return;
+  final u = Uri.tryParse(a.link);
+  if (u == null) return;
   Analytics.track('ad_click');
-  openUrl(Uri.parse(a.link));
+  a.open == 'webview' ? openInApp(u) : openUrl(u);
+}
+
+/// Home-page scrolling announcements: each line scrolls across once, then
+/// the next one. Tapping opens the line's link. Off unless the admin set it.
+class MarqueeBar extends StatefulWidget {
+  const MarqueeBar({super.key, required this.gap});
+  final double gap; // vertical space this replaces when there is nothing to show
+
+  @override
+  State<MarqueeBar> createState() => _MarqueeBarState();
+}
+
+class _MarqueeBarState extends State<MarqueeBar> with SingleTickerProviderStateMixin {
+  late final AnimationController _anim = AnimationController(vsync: this)..addStatusListener(_done);
+  int _i = 0;
+  double _box = 0, _text = 0;
+  static final _style = TextStyle(fontSize: 13, color: AppColors.sub, fontWeight: FontWeight.w500);
+  static const _speed = 45.0; // logical px per second
+
+  @override
+  void initState() {
+    super.initState();
+    AdsStore.instance.addListener(_changed);
+  }
+
+  void _changed() {
+    if (!mounted) return;
+    setState(() {
+      _i = 0;
+      _box = 0; // re-measure and restart
+    });
+  }
+
+  List<AdItem> get _items => AdsStore.instance.ads?.marquee ?? const [];
+
+  void _done(AnimationStatus s) {
+    if (s != AnimationStatus.completed || !mounted || _items.isEmpty) return;
+    setState(() {
+      _i = (_i + 1) % _items.length;
+      _box = 0;
+    });
+  }
+
+  // Measures the line and (re)starts the scroll when the line or width changes.
+  void _start(double box, String text) {
+    if (box == _box) return;
+    final tp = TextPainter(
+      text: TextSpan(text: text, style: _style),
+      maxLines: 1,
+      textDirection: TextDirection.ltr,
+    )..layout();
+    _box = box;
+    _text = tp.width;
+    tp.dispose();
+    _anim.duration = Duration(milliseconds: ((box + _text) / _speed * 1000).round().clamp(2000, 120000));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _anim.forward(from: 0);
+    });
+  }
+
+  @override
+  void dispose() {
+    AdsStore.instance.removeListener(_changed);
+    _anim.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = _items;
+    if (items.isEmpty) return SizedBox(height: widget.gap);
+    final a = items[_i % items.length];
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: ((widget.gap - 34) / 2).clamp(4.0, 20.0)),
+      child: GestureDetector(
+        onTap: () => _open(a),
+        child: Semantics(
+          label: a.text,
+          button: a.link.isNotEmpty,
+          child: Container(
+            height: 34,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(color: AppColors.sunken, borderRadius: BorderRadius.circular(17)),
+            child: Row(
+              children: [
+                Icon(Icons.campaign_outlined, size: 18, color: AppColors.sub),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, c) {
+                      _start(c.maxWidth, a.text);
+                      return ClipRect(
+                        child: AnimatedBuilder(
+                          animation: _anim,
+                          builder: (_, child) => Transform.translate(
+                            offset: Offset(c.maxWidth - (c.maxWidth + _text) * _anim.value, 0),
+                            child: child,
+                          ),
+                          child: OverflowBox(
+                            alignment: Alignment.centerLeft,
+                            maxWidth: double.infinity,
+                            child: Text(a.text, maxLines: 1, softWrap: false, style: _style),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                if (a.link.isNotEmpty) Icon(Icons.chevron_right, size: 18, color: AppColors.sub),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Home banner: one image, or an auto-advancing carousel when there are several.
@@ -157,6 +275,11 @@ Future<void> maybeShowAdPopup(BuildContext context) async {
   await Prefs.set(key, today);
   Analytics.track('ad_popup_shown');
   if (!context.mounted) return;
+  // A link-only popup set to open in the app: show the page itself.
+  if (a.open == 'webview' && a.link.isNotEmpty && a.image.isEmpty && a.text.isEmpty) {
+    _open(a);
+    return;
+  }
   await showDialog<void>(
     context: context,
     builder: (ctx) {

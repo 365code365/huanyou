@@ -155,6 +155,7 @@ export interface ReferralSettings {
   reward_plan_id: string
   inviter_days: number
   invitee_days: number
+  inviter_paid_days: number
   max_invites: number
 }
 
@@ -576,7 +577,8 @@ export interface PaymentSettings {
 
 export interface Ad {
   id: string
-  slot: 'home' | 'popup'
+  slot: 'home' | 'popup' | 'marquee'
+  open?: 'browser' | 'webview'
   title: string
   text: string
   image: string
@@ -592,6 +594,7 @@ export interface AdsSettings {
   home_interval: number
   popup_enabled: boolean
   popup_frequency: 'every_launch' | 'daily' | 'once'
+  marquee_enabled: boolean
   items: Ad[]
 }
 

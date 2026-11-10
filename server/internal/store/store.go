@@ -88,6 +88,9 @@ type Store struct {
 	db   *dbx
 	d    dialect
 	path string // SQLite file ("" for MySQL / PostgreSQL)
+	// PaidReferral, when set, returns the current "invitee paid" bonus rule;
+	// MarkPaid applies it on a user's first paid order.
+	PaidReferral func() PaidReferralRule
 }
 
 // Driver returns "sqlite", "mysql" or "postgres".
@@ -415,11 +418,15 @@ func lockUser(ctx context.Context, tx *txx, id int64) (*User, error) {
 }
 
 func grantPlanTx(ctx context.Context, tx *txx, userID int64, planID string, days int, now time.Time) error {
+	return grantPlanForTx(ctx, tx, userID, planID, time.Duration(days)*24*time.Hour, now)
+}
+
+// grantPlanForTx is grantPlanTx for any length (e.g. half a day).
+func grantPlanForTx(ctx context.Context, tx *txx, userID int64, planID string, add time.Duration, now time.Time) error {
 	u, err := lockUser(ctx, tx, userID)
 	if err != nil {
 		return err
 	}
-	add := time.Duration(days) * 24 * time.Hour
 	if u.PaidPlanActive(now) && u.PlanID == planID {
 		_, err = tx.ExecContext(ctx, `UPDATE users SET expires_at = ?, updated_at = ? WHERE id = ?`,
 			u.ExpiresAt.Add(add).Unix(), now.Unix(), userID)
@@ -711,6 +718,11 @@ func (s *Store) MarkPaid(ctx context.Context, orderID, tradeNo string, durationD
 	}
 	if err := grantPlanTx(ctx, tx, o.UserID, o.PlanID, durationDays, now); err != nil {
 		return false, err
+	}
+	if s.PaidReferral != nil {
+		if err := paidReferralTx(ctx, tx, o.UserID, s.PaidReferral(), now); err != nil {
+			return false, err
+		}
 	}
 	return true, tx.Commit()
 }

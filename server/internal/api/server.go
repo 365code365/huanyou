@@ -62,6 +62,13 @@ func New(cfg *config.API, live *config.LiveCatalog, st *store.Store, issuer *aut
 	}
 	s := &Server{cfg: cfg, live: live, store: st, issuer: issuer, limiter: newIPLimiter(rate.Every(6*time.Second), 10),
 		providers: providers, mock: mock, monitor: mon}
+	st.PaidReferral = func() store.PaidReferralRule {
+		r := s.cat().Referral
+		if !r.Enabled {
+			return store.PaidReferralRule{}
+		}
+		return store.PaidReferralRule{PlanID: r.RewardPlanID, Days: r.InviterPaidDays, MaxInvites: r.MaxInvites}
+	}
 	if a := cfg.Payments.AppleIAP; a != nil && a.SharedSecret != "" {
 		if a.BundleID == "" {
 			// Without it, a receipt from any app (with a product id named like

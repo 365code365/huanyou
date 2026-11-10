@@ -116,8 +116,9 @@ function MainForm({ part, loaded, plans, onSaved, onReset }: {
               <Form.Item name={['referral', 'reward_plan_id']} label="奖励套餐" rules={[{ required: true, message: '请选择付费套餐' }]} extra="奖励按该套餐发放；对方已有同一套餐则顺延">
                 <PlanSelect plans={plans.filter((p) => p.id !== freePlan)} />
               </Form.Item>
-              <Form.Item name={['referral', 'inviter_days']} label="邀请人获得"><NumberUnit min={0} unit="天 / 人" /></Form.Item>
-              <Form.Item name={['referral', 'invitee_days']} label="被邀请人获得"><NumberUnit min={0} unit="天" /></Form.Item>
+              <Form.Item name={['referral', 'inviter_days']} label="好友注册，邀请人得" extra="好友填邀请码进入体验即发放，可填 0.5 天"><NumberUnit min={0} step={0.5} precision={1} unit="天 / 人" /></Form.Item>
+              <Form.Item name={['referral', 'inviter_paid_days']} label="好友付费，邀请人再得" extra="好友第一次付费成功时额外发放，0 = 不送"><NumberUnit min={0} step={0.5} precision={1} unit="天 / 人" /></Form.Item>
+              <Form.Item name={['referral', 'invitee_days']} label="被邀请人获得"><NumberUnit min={0} step={0.5} precision={1} unit="天" /></Form.Item>
               <Form.Item name={['referral', 'max_invites']} label="每人奖励上限" extra="0 = 不限"><NumberUnit min={0} unit="人" /></Form.Item>
             </>
           )}
@@ -295,7 +296,8 @@ function PaymentTab({ loaded, onSaved }: { loaded: Loaded; onSaved: (p: PaymentS
 
 // ---- ads ----
 
-const newAd = (slot: Ad['slot']): Ad => ({ id: 'ad' + Date.now().toString(36), slot, title: '', text: '', image: '', link: '', enabled: true, sort: 0, start_at: null, end_at: null })
+const adSlots: Record<Ad['slot'], [string, string]> = { home: ['首页横幅', 'blue'], popup: ['开屏弹窗', 'purple'], marquee: ['滚动公告', 'orange'] }
+const newAd = (slot: Ad['slot']): Ad => ({ id: 'ad' + Date.now().toString(36), slot, open: 'browser', title: '', text: '', image: '', link: '', enabled: true, sort: 0, start_at: null, end_at: null })
 
 function AdsTab({ value, onSaved }: { value: AdsSettings; onSaved: (a: AdsSettings) => void }) {
   const { message } = App.useApp()
@@ -345,13 +347,15 @@ function AdsTab({ value, onSaved }: { value: AdsSettings; onSaved: (a: AdsSettin
         <Form.Item name="popup_frequency" label="弹出频率">
           <Segmented options={[{ label: '每次打开', value: 'every_launch' }, { label: '每天一次', value: 'daily' }, { label: '只弹一次', value: 'once' }]} />
         </Form.Item>
+        <Form.Item name="marquee_enabled" label="滚动公告" valuePropName="checked"><Switch /></Form.Item>
         <Form.Item><Button type="primary" loading={busy} onClick={() => save()}>保存开关</Button></Form.Item>
       </Form>
       <Alert type="info" showIcon style={{ marginBottom: 12 }}
-        message="首页横幅：一张时单张展示，多张自动轮播；点击跳转到链接（浏览器打开）。开屏弹窗：取排序最前、在投放时间内的一条，可只有文字作为通知。两个开关默认关闭。" />
+        message="首页横幅：一张时单张展示，多张自动轮播；点击跳转到链接（浏览器打开）。开屏弹窗：取排序最前、在投放时间内的一条，可只有文字作为通知，也可以只填链接并选「App 内打开」，打开 App 时直接弹出该网页。滚动公告：首页顶部滚动显示一句话，多条依次滚动，可带链接。开关默认关闭。" />
       <div className="toolbar">
         <Button icon={<PlusOutlined />} onClick={() => openAd(newAd('home'))}>添加首页横幅</Button>
         <Button icon={<PlusOutlined />} onClick={() => openAd(newAd('popup'))}>添加开屏弹窗</Button>
+        <Button icon={<PlusOutlined />} onClick={() => openAd(newAd('marquee'))}>添加滚动公告</Button>
       </div>
       <Table<Ad>
         rowKey="id"
@@ -360,9 +364,9 @@ function AdsTab({ value, onSaved }: { value: AdsSettings; onSaved: (a: AdsSettin
         pagination={false}
         locale={{ emptyText: '还没有广告' }}
         columns={[
-          { title: '位置', width: 90, render: (_, a) => <Tag bordered={false} color={a.slot === 'home' ? 'blue' : 'purple'}>{a.slot === 'home' ? '首页横幅' : '开屏弹窗'}</Tag> },
+          { title: '位置', width: 90, render: (_, a) => <Tag bordered={false} color={adSlots[a.slot][1]}>{adSlots[a.slot][0]}</Tag> },
           { title: '图片', width: 130, render: (_, a) => (a.image ? <img src={preview(a.image)} alt="" style={{ width: 110, height: 44, objectFit: 'cover', borderRadius: 6 }} /> : <span className="muted">纯文字</span>) },
-          { title: '标题', render: (_, a) => <>{a.title || <span className="muted">—</span>}{a.link && <div className="muted" style={{ fontSize: 12 }}>{a.link}</div>}</> },
+          { title: '标题', render: (_, a) => <>{a.title || (a.slot === 'marquee' ? a.text : '') || <span className="muted">—</span>}{a.link && <div className="muted" style={{ fontSize: 12 }}>{a.link}</div>}</> },
           { title: '投放时间', width: 190, render: (_, a) => <span className="muted">{a.start_at ? dayjs(a.start_at).format('MM-DD HH:mm') : '立即'} ~ {a.end_at ? dayjs(a.end_at).format('MM-DD HH:mm') : '长期'}</span> },
           { title: '排序', dataIndex: 'sort', width: 60 },
           {
@@ -389,11 +393,12 @@ function AdsTab({ value, onSaved }: { value: AdsSettings; onSaved: (a: AdsSettin
         <Form form={adForm} layout="vertical">
           <Form.Item name="id" hidden><Input /></Form.Item>
           <Form.Item name="slot" label="位置">
-            <Segmented options={[{ label: '首页横幅', value: 'home' }, { label: '开屏弹窗 / 通知', value: 'popup' }]} />
+            <Segmented options={[{ label: '首页横幅', value: 'home' }, { label: '开屏弹窗 / 通知', value: 'popup' }, { label: '滚动公告', value: 'marquee' }]} />
           </Form.Item>
-          <Form.Item name="title" label="标题" rules={[{ required: adSlot === 'popup', message: '弹窗需要标题' }]}><Input maxLength={40} /></Form.Item>
+          <Form.Item name="title" label={adSlot === 'marquee' ? '备注名（App 不显示）' : '标题'} rules={[{ required: adSlot === 'popup', message: '弹窗需要标题' }]}><Input maxLength={40} /></Form.Item>
           {adSlot === 'popup' && <Form.Item name="text" label="正文" extra="没有图片时作为通知内容显示"><Input.TextArea rows={3} maxLength={300} /></Form.Item>}
-          <Form.Item label={adSlot === 'home' ? '图片（按 3:1 裁剪，App 首页横幅比例）' : '图片（可选）'} required={adSlot === 'home'}
+          {adSlot === 'marquee' && <Form.Item name="text" label="公告文字" rules={[{ required: true, message: '请填写公告文字' }]}><Input maxLength={120} showCount /></Form.Item>}
+          {adSlot !== 'marquee' && <Form.Item label={adSlot === 'home' ? '图片（按 3:1 裁剪，App 首页横幅比例）' : '图片（可选）'} required={adSlot === 'home'}
             extra="上传后可在线裁剪、缩放、旋转，并自动压缩（GIF 不裁剪，需小于 2 MB）">
             <Space direction="vertical" style={{ width: '100%' }}>
               <Space wrap>
@@ -414,9 +419,13 @@ function AdsTab({ value, onSaved }: { value: AdsSettings; onSaved: (a: AdsSettin
               </Form.Item>
               {adImage && <img src={adImage} alt="" style={{ maxWidth: '100%', maxHeight: 180, borderRadius: 8 }} />}
             </Space>
-          </Form.Item>
-          <Form.Item name="link" label="点击跳转链接" extra="留空则不可点击；用系统浏览器打开" rules={[{ pattern: /^https?:\/\//, message: '以 http(s):// 开头' }]}>
+          </Form.Item>}
+          <Form.Item name="link" label="点击跳转链接" extra="留空则不可点击" rules={[{ pattern: /^https?:\/\//, message: '以 http(s):// 开头' }]}>
             <Input placeholder="https://…" />
+          </Form.Item>
+          <Form.Item name="open" label="打开方式" initialValue="browser"
+            extra={adSlot === 'popup' ? '选「App 内打开」且不填图片和正文时，打开 App 直接弹出这个网页' : undefined}>
+            <Segmented options={[{ label: '系统浏览器', value: 'browser' }, { label: 'App 内打开', value: 'webview' }]} />
           </Form.Item>
           <Space size={16} wrap>
             <Form.Item name="start_at" label="开始时间" {...toISO}><DatePicker showTime={{ format: 'HH:mm' }} format="YYYY-MM-DD HH:mm" /></Form.Item>

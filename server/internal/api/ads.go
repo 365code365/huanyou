@@ -28,6 +28,7 @@ type adView struct {
 	Text  string `json:"text,omitempty"`
 	Image string `json:"image"`
 	Link  string `json:"link"`
+	Open  string `json:"open"` // browser | webview
 }
 
 func (s *Server) absURL(u string) string {
@@ -43,24 +44,28 @@ func (s *Server) handleAds(w http.ResponseWriter, _ *http.Request) {
 	now := time.Now()
 	items := append([]config.Ad(nil), a.Items...)
 	sort.SliceStable(items, func(i, j int) bool { return items[i].Sort < items[j].Sort })
-	home := []adView{}
+	home, marquee := []adView{}, []adView{}
 	var popup *adView
 	for _, ad := range items {
 		if !ad.Live(now) {
 			continue
 		}
-		v := adView{ID: ad.ID, Title: ad.Title, Text: ad.Text, Image: s.absURL(ad.Image), Link: ad.Link}
+		v := adView{ID: ad.ID, Title: ad.Title, Text: ad.Text, Image: s.absURL(ad.Image), Link: ad.Link, Open: ad.Open}
 		switch {
 		case ad.Slot == "home" && a.HomeEnabled:
 			home = append(home, v)
 		case ad.Slot == "popup" && a.PopupEnabled && popup == nil:
 			popup = &v
+		case ad.Slot == "marquee" && a.MarqueeEnabled:
+			marquee = append(marquee, v)
 		}
 	}
 	w.Header().Set("Cache-Control", "no-cache")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"home":  map[string]any{"interval": a.HomeInterval, "items": home},
 		"popup": map[string]any{"frequency": a.PopupFrequency, "item": popup},
+		// Old apps ignore this key; new ones scroll the lines on the home page.
+		"marquee": map[string]any{"items": marquee},
 	})
 }
 

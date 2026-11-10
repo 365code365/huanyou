@@ -98,7 +98,7 @@ class _ReferralPageState extends State<ReferralPage> {
       await app.refreshUser();
       _codeInput.clear();
       FocusManager.instance.primaryFocus?.unfocus();
-      _snack(days > 0 ? tr('已领取 {0} 天会员', [days]) : tr('邀请码已填写'));
+      _snack(days > 0 ? tr('已领取 {0} 天会员', [fmtDays(days)]) : tr('邀请码已填写'));
       await _load();
     } on ApiException catch (e) {
       _snack(e.message);
@@ -187,7 +187,7 @@ class _ReferralPageState extends State<ReferralPage> {
                           child: Padding(
                             padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
                             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                              Text(r.inviteeDays > 0 ? tr('有好友的邀请码？填写后领取 {0} 天会员', [r.inviteeDays]) : tr('填写好友的邀请码'),
+                              Text(r.inviteeDays > 0 ? tr('有好友的邀请码？填写后领取 {0} 天会员', [fmtDays(r.inviteeDays)]) : tr('填写好友的邀请码'),
                                   style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                               const SizedBox(height: 10),
                               Row(children: [
@@ -245,6 +245,9 @@ class _RewardBanner extends StatelessWidget {
             const SizedBox(height: 4),
             Text(ref.maxInvites > 0 ? tr('最多奖励 {0} 位好友', [ref.maxInvites]) : tr('邀请越多，时长越多'),
                 style: const TextStyle(color: Color(0xFF9A9CA3), fontSize: 13)),
+            if (ref.inviterPaidDays > 0)
+              Text(tr('好友付费，你再得 {0} 天', [fmtDays(ref.inviterPaidDays)]),
+                  style: const TextStyle(color: Color(0xFF6EE7A8), fontSize: 13, fontWeight: FontWeight.w600)),
           ]),
         ),
         _Reward(days: ref.inviterDays, label: tr('你得')),
@@ -257,13 +260,13 @@ class _RewardBanner extends StatelessWidget {
 
 class _Reward extends StatelessWidget {
   const _Reward({required this.days, required this.label});
-  final int days;
+  final double days;
   final String label;
 
   @override
   Widget build(BuildContext context) => Column(children: [
         Text.rich(TextSpan(children: [
-          TextSpan(text: '$days', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+          TextSpan(text: fmtDays(days), style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
           TextSpan(text: tr(' 天'), style: TextStyle(fontSize: 12)),
         ]), style: const TextStyle(color: Colors.white)),
         Text(label, style: const TextStyle(color: Color(0xFF9A9CA3), fontSize: 12)),
@@ -325,7 +328,7 @@ class _Poster extends StatelessWidget {
             style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w800, letterSpacing: 5)),
         const SizedBox(height: 8),
         Text(
-          ref.inviteeDays > 0 ? tr('扫码下载 · 自动领取 {0} 天会员', [ref.inviteeDays]) : tr('扫码下载 · 无需注册'),
+          ref.inviteeDays > 0 ? tr('扫码下载 · 自动领取 {0} 天会员', [fmtDays(ref.inviteeDays)]) : tr('扫码下载 · 无需注册'),
           style: const TextStyle(color: Color(0xFF7FD8A4), fontSize: 13, fontWeight: FontWeight.w600),
         ),
       ]),

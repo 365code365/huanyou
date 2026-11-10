@@ -113,17 +113,22 @@ type AdsConfig struct {
 	HomeInterval   int    `json:"home_interval"` // carousel seconds, default 5
 	PopupEnabled   bool   `json:"popup_enabled"`
 	PopupFrequency string `json:"popup_frequency"` // every_launch | daily | once (default daily)
+	MarqueeEnabled bool   `json:"marquee_enabled"` // scrolling announcement on the home page
 	Items          []Ad   `json:"items"`
 }
 
 // Ad is one banner / popup.
 type Ad struct {
-	ID      string     `json:"id"`
-	Slot    string     `json:"slot"` // home | popup
-	Title   string     `json:"title"`
-	Text    string     `json:"text"`  // popup body (notice without image)
-	Image   string     `json:"image"` // https URL or /dl/ads/... upload
-	Link    string     `json:"link"`  // opened in the browser on tap ("" = not clickable)
+	ID    string `json:"id"`
+	Slot  string `json:"slot"` // home | popup | marquee
+	Title string `json:"title"`
+	Text  string `json:"text"`  // popup body / marquee line
+	Image string `json:"image"` // https URL or /dl/ads/... upload
+	Link  string `json:"link"`  // opened on tap ("" = not clickable)
+	// Open: how Link opens — "browser" (system browser, default) or
+	// "webview" (in-app page). A popup with only a webview link opens it
+	// directly instead of showing a dialog.
+	Open    string     `json:"open,omitempty"`
 	Enabled bool       `json:"enabled"`
 	Sort    int        `json:"sort"`
 	StartAt *time.Time `json:"start_at,omitempty"`
@@ -317,11 +322,13 @@ func (p *Plan) GooglePlayProductID() string {
 
 // ReferralConfig grants subscription days for successful invitations.
 type ReferralConfig struct {
-	Enabled      bool   `json:"enabled"`
-	RewardPlanID string `json:"reward_plan_id"` // paid plan the bonus days apply to
-	InviterDays  int    `json:"inviter_days"`   // days to the inviter per accepted invite
-	InviteeDays  int    `json:"invitee_days"`   // days to the new user who entered a code
-	MaxInvites   int    `json:"max_invites"`    // cap rewarded invites per inviter (0 = unlimited)
+	Enabled      bool    `json:"enabled"`
+	RewardPlanID string  `json:"reward_plan_id"` // paid plan the bonus days apply to
+	InviterDays  float64 `json:"inviter_days"`   // days to the inviter when an invitee signs up (0.5 steps)
+	InviteeDays  float64 `json:"invitee_days"`   // days to the new user who entered a code
+	// InviterPaidDays: extra days to the inviter on the invitee's first payment.
+	InviterPaidDays float64 `json:"inviter_paid_days"`
+	MaxInvites      int     `json:"max_invites"` // cap rewarded invites per inviter (0 = unlimited)
 }
 
 // MonitorConfig controls node health checks and alerting.
@@ -559,12 +566,17 @@ func (c *Catalog) Normalize() error {
 		if p == nil || p.ID == c.FreePlan {
 			return errors.New("邀请奖励必须指定一个付费套餐")
 		}
-		if r.InviterDays <= 0 && r.InviteeDays <= 0 {
+		if r.InviterDays <= 0 && r.InviteeDays <= 0 && r.InviterPaidDays <= 0 {
 			return errors.New("邀请奖励天数至少设置一项")
 		}
 	}
-	if c.Referral.InviterDays < 0 || c.Referral.InviteeDays < 0 || c.Referral.MaxInvites < 0 {
+	if r := &c.Referral; r.InviterDays < 0 || r.InviteeDays < 0 || r.InviterPaidDays < 0 || r.MaxInvites < 0 {
 		return errors.New("邀请奖励数值不能为负")
+	}
+	for _, d := range []float64{c.Referral.InviterDays, c.Referral.InviteeDays, c.Referral.InviterPaidDays} {
+		if d*2 != float64(int(d*2)) || d > 3650 {
+			return errors.New("邀请奖励天数按 0.5 天递增，且不超过 3650 天")
+		}
 	}
 	return nil
 }
@@ -870,14 +882,23 @@ func (c *Catalog) normalizeExtras() error {
 			return fmt.Errorf("广告 ID 重复或为空：%q", ad.ID)
 		}
 		seen[ad.ID] = true
-		if ad.Slot != "home" && ad.Slot != "popup" {
-			return fmt.Errorf("广告「%s」位置只能是首页横幅或开屏弹窗", ad.Title)
+		if ad.Slot != "home" && ad.Slot != "popup" && ad.Slot != "marquee" {
+			return fmt.Errorf("广告「%s」位置只能是首页横幅、开屏弹窗或滚动公告", ad.Title)
+		}
+		if ad.Open != "webview" {
+			ad.Open = "browser"
+		}
+		if ad.Open == "webview" && ad.Link == "" {
+			return fmt.Errorf("「%s」选了 App 内打开，需要填写链接", ad.Title)
+		}
+		if ad.Slot == "marquee" && strings.TrimSpace(ad.Text) == "" {
+			return fmt.Errorf("滚动公告「%s」需要公告文字", ad.Title)
 		}
 		if ad.Slot == "home" && ad.Image == "" {
 			return fmt.Errorf("首页横幅「%s」需要图片", ad.Title)
 		}
-		if ad.Slot == "popup" && ad.Image == "" && strings.TrimSpace(ad.Text) == "" {
-			return fmt.Errorf("弹窗「%s」需要图片或文字", ad.Title)
+		if ad.Slot == "popup" && ad.Image == "" && strings.TrimSpace(ad.Text) == "" && ad.Open != "webview" {
+			return fmt.Errorf("弹窗「%s」需要图片、文字或 App 内打开的链接", ad.Title)
 		}
 		for _, u := range []string{ad.Image, ad.Link} {
 			if u != "" && !strings.HasPrefix(u, "https://") && !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "/dl/ads/") {

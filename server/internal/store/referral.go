@@ -73,8 +73,8 @@ func (s *Store) CountInvited(ctx context.Context, inviterID int64) (int, error) 
 // ReferralResult reports what rewards an invitation produced.
 type ReferralResult struct {
 	InviterID    int64
-	InviterDays  int // 0 if capped out
-	InviteeDays  int
+	InviterDays  float64 // 0 if capped out
+	InviteeDays  float64
 	RewardPlanID string
 }
 
@@ -82,7 +82,7 @@ type ReferralResult struct {
 // bonus days to both. inviterDays is skipped when the inviter has hit maxInvites
 // (0 = unlimited). It is a no-op if the user was already linked.
 func (s *Store) ApplyReferral(ctx context.Context, newUserID, inviterID int64,
-	planID string, inviterDays, inviteeDays, maxInvites int, now time.Time) (*ReferralResult, error) {
+	planID string, inviterDays, inviteeDays float64, maxInvites int, now time.Time) (*ReferralResult, error) {
 
 	if newUserID == inviterID {
 		return nil, errors.New("cannot invite yourself")
@@ -136,13 +136,54 @@ func (s *Store) ApplyReferral(ctx context.Context, newUserID, inviterID int64,
 // grantBonusTx gives reward days: a user with an active paid plan gets them
 // on that plan (a bonus must never swap a better plan for the reward plan);
 // otherwise the reward plan is granted.
-func grantBonusTx(ctx context.Context, tx *txx, userID int64, rewardPlan string, days int, now time.Time) error {
+func grantBonusTx(ctx context.Context, tx *txx, userID int64, rewardPlan string, days float64, now time.Time) error {
 	u, err := lockUser(ctx, tx, userID)
 	if err != nil {
 		return err
 	}
+	add := time.Duration(days * float64(24*time.Hour))
 	if u.PaidPlanActive(now) {
-		return grantPlanTx(ctx, tx, userID, u.PlanID, days, now)
+		return grantPlanForTx(ctx, tx, userID, u.PlanID, add, now)
 	}
-	return grantPlanTx(ctx, tx, userID, rewardPlan, days, now)
+	return grantPlanForTx(ctx, tx, userID, rewardPlan, add, now)
+}
+
+// PaidReferralRule is the "invitee paid" bonus (Days = 0: off).
+type PaidReferralRule struct {
+	PlanID     string
+	Days       float64
+	MaxInvites int // 0 = unlimited
+}
+
+// paidReferralTx gives the inviter of userID the paid bonus when this is the
+// user's first paid order. Runs inside MarkPaid, so a repeated notification
+// for the same order never gets here again.
+func paidReferralTx(ctx context.Context, tx *txx, userID int64, r PaidReferralRule, now time.Time) error {
+	if r.Days <= 0 || r.PlanID == "" {
+		return nil
+	}
+	var inviter int64
+	var paid int
+	if err := tx.QueryRowContext(ctx, `SELECT invited_by FROM users WHERE id = ?`, userID).Scan(&inviter); err != nil || inviter == 0 {
+		return err
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM orders WHERE user_id = ? AND status = 'paid'`, userID).Scan(&paid); err != nil || paid != 1 {
+		return err
+	}
+	if r.MaxInvites > 0 {
+		var n int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(DISTINCT o.user_id) FROM orders o JOIN users u ON u.id = o.user_id
+			WHERE u.invited_by = ? AND o.status = 'paid'`, inviter).Scan(&n); err != nil {
+			return err
+		}
+		if n > r.MaxInvites {
+			return nil
+		}
+	}
+	if _, err := lockUser(ctx, tx, inviter); errors.Is(err, ErrNotFound) {
+		return nil // inviter deleted
+	} else if err != nil {
+		return err
+	}
+	return grantBonusTx(ctx, tx, inviter, r.PlanID, r.Days, now)
 }

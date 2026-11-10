@@ -140,8 +140,10 @@ class AdItem {
         title = j['title'] as String? ?? '',
         text = j['text'] as String? ?? '',
         image = j['image'] as String? ?? '',
-        link = j['link'] as String? ?? '';
+        link = j['link'] as String? ?? '',
+        open = j['open'] as String? ?? 'browser';
   final String id, title, text, image, link;
+  final String open; // browser | webview (in-app page)
 }
 
 class Ads {
@@ -154,9 +156,14 @@ class Ads {
         popupFrequency = ((j['popup'] as Map?)?['frequency'] as String?) ?? 'daily',
         popup = ((j['popup'] as Map?)?['item'] is Map<String, dynamic>)
             ? AdItem.fromJson((j['popup'] as Map)['item'] as Map<String, dynamic>)
-            : null;
+            : null,
+        marquee = [
+          for (final e in ((j['marquee'] as Map?)?['items'] as List?) ?? const [])
+            AdItem.fromJson(e as Map<String, dynamic>)
+        ];
   final int interval;
   final List<AdItem> home;
+  final List<AdItem> marquee; // scrolling announcements on the home page
   final String popupFrequency;
   final AdItem? popup;
 }
@@ -329,6 +336,9 @@ class Contact {
 }
 
 /// Referral status: the user's own code, a shareable link and reward rules.
+/// Days as shown to users: 3 → "3", 0.5 → "0.5".
+String fmtDays(double d) => d == d.roundToDouble() ? d.toInt().toString() : d.toStringAsFixed(1);
+
 class Referral {
   Referral.fromJson(Map<String, dynamic> j)
       : enabled = j['enabled'] as bool? ?? false,
@@ -338,8 +348,9 @@ class Referral {
         shareText = j['share_text'] as String? ?? '',
         slogan = j['slogan'] as String? ?? '',
         invitedCount = (j['invited_count'] as num?)?.toInt() ?? 0,
-        inviterDays = (j['inviter_days'] as num?)?.toInt() ?? 0,
-        inviteeDays = (j['invitee_days'] as num?)?.toInt() ?? 0,
+        inviterDays = (j['inviter_days'] as num?)?.toDouble() ?? 0,
+        inviteeDays = (j['invitee_days'] as num?)?.toDouble() ?? 0,
+        inviterPaidDays = (j['inviter_paid_days'] as num?)?.toDouble() ?? 0,
         maxInvites = (j['max_invites'] as num?)?.toInt() ?? 0,
         invited = j['invited'] as bool? ?? false,
         canBind = j['can_bind'] as bool? ?? false;
@@ -350,8 +361,9 @@ class Referral {
   final String shareText; // ready-to-paste invite message
   final String slogan;
   final int invitedCount;
-  final int inviterDays;
-  final int inviteeDays;
+  final double inviterDays; // when the friend signs up (may be 0.5)
+  final double inviteeDays;
+  final double inviterPaidDays; // extra when the friend first pays
   final int maxInvites; // 0 = unlimited
   final bool invited; // this user already entered someone's code
   final bool canBind; // may still enter an inviter's code
@@ -479,9 +491,9 @@ class ApiClient {
   Future<Referral> referral() async => Referral.fromJson(await _send('GET', '/api/v1/referral'));
 
   /// Enters an inviter's code (new accounts only). Returns the days granted.
-  Future<int> bindReferral(String code) async {
+  Future<double> bindReferral(String code) async {
     final j = await _send('POST', '/api/v1/referral/bind', body: {'code': code.trim().toUpperCase()});
-    return (j['invitee_days'] as num?)?.toInt() ?? 0;
+    return (j['invitee_days'] as num?)?.toDouble() ?? 0;
   }
 
   Future<AppUpdate> appUpdate(String platform, int build, {String abi = ''}) async => AppUpdate.fromJson(

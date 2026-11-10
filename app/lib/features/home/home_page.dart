@@ -50,7 +50,8 @@ class _HomePageState extends State<HomePage> {
                 padding: EdgeInsets.fromLTRB(22, 10, 22, MediaQuery.paddingOf(context).bottom + 16),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
                   _TopBar(app: app),
-                  SizedBox(height: c.maxHeight * 0.045),
+                  // Admin announcements scroll here; just the gap when there are none.
+                  MarqueeBar(gap: c.maxHeight * 0.045),
                   _Headline(app: app),
                   SizedBox(height: c.maxHeight * 0.035),
                   Center(
