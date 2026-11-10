@@ -44,8 +44,14 @@ REV=$(git -C "$ROOT" rev-parse --short HEAD)
 
 command -v sshpass >/dev/null || die "需要 sshpass（brew install hudochenkov/sshpass/sshpass）"
 # Password only: offering every local key first trips the server's MaxAuthTries.
-SSH_OPTS=(-o ConnectTimeout=15 -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=accept-new)
+# One shared connection: the server refuses passwords after a few logins in a
+# row, so every step below reuses the first login.
+CTL="${TMPDIR:-/tmp}/pc-deploy-$$"
+SSH_OPTS=(-o ConnectTimeout=15 -o PreferredAuthentications=password -o PubkeyAuthentication=no -o StrictHostKeyChecking=accept-new
+  -o ControlMaster=auto -o "ControlPath=$CTL" -o ControlPersist=120)
 remote() { sshpass -e ssh "${SSH_OPTS[@]}" "$USER_@$HOST" "$@"; }
+trap 'ssh -o "ControlPath=$CTL" -O exit "$USER_@$HOST" >/dev/null 2>&1 || true' EXIT
+remote true || die "SSH 登录 $USER_@$HOST 失败（密码错误，或短时间内登录太多次被拒，过几分钟再试），线上未改动"
 
 echo "==> 构建 $REV"
 make -C "$PC" linux >/dev/null
@@ -77,7 +83,10 @@ remote "set -e
   journalctl -u paycenter --no-pager -n 20
   cp -a /opt/paycenter/bin/paycenter.bak-$TS /usr/local/bin/paycenter
   systemctl restart paycenter
-  exit 1" || die "部署失败，已回滚（数据库备份 /opt/paycenter/paycenter.db.bak-${TS}）"
+  exit 1" || {
+  [ $? = 255 ] && die "SSH 连接断开，程序可能没替换，请检查线上状态（备份 ${TS}）"
+  die "部署失败，已回滚（数据库备份 /opt/paycenter/paycenter.db.bak-${TS}）"
+}
 
 code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$PUBLIC_URL/healthz" || true)
 [ "$code" = 200 ] || die "服务已重启，但公网 $PUBLIC_URL/healthz 返回 $code"
