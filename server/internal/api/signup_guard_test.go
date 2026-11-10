@@ -45,3 +45,23 @@ func TestSignupGuard(t *testing.T) {
 		}
 	}
 }
+
+// Codes entered by hand share the per-IP daily invite cap with sign-ups.
+func TestSignupGuardManualInvite(t *testing.T) {
+	var g signupGuard
+	now := time.Unix(1_800_000_000, 0)
+	if ok, inv := g.allow("203.0.113.9", 30, true, now); !ok || !inv {
+		t.Fatal("first invited sign-up should be credited")
+	}
+	for i := 0; i < signupInvitesPerIPDay-1; i++ {
+		if !g.allowInvite("203.0.113.9", now) {
+			t.Fatalf("manual invite %d refused", i+1)
+		}
+	}
+	if g.allowInvite("203.0.113.9", now) {
+		t.Fatal("manual invite over the daily cap was allowed")
+	}
+	if !g.allowInvite("198.51.100.1", now) || !g.allowInvite("203.0.113.9", now.Add(24*time.Hour)) {
+		t.Fatal("other network / next day should be allowed")
+	}
+}

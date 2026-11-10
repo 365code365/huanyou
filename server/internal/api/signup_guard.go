@@ -56,16 +56,9 @@ func (g *signupGuard) allow(ip string, limit int, wantInvite bool, now time.Time
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if d := now.Unix() / 86400; d != g.day || g.nets == nil {
-		g.day, g.nets = d, map[netip.Prefix]*signupCount{}
-	}
-	c := g.nets[p]
+	c := g.entry(p, now)
 	if c == nil {
-		if len(g.nets) >= signupMaxNets {
-			return true, false // under a huge spread, keep serving but credit nothing
-		}
-		c = &signupCount{}
-		g.nets[p] = c
+		return true, false // under a huge spread, keep serving but credit nothing
 	}
 	if c.accounts >= limit {
 		return false, false
@@ -76,4 +69,39 @@ func (g *signupGuard) allow(ip string, limit int, wantInvite bool, now time.Time
 		return true, true
 	}
 	return true, false
+}
+
+// allowInvite records an invite code entered by hand (an existing account
+// binding a code later). It shares the per-IP daily invite cap with
+// sign-ups, so creating accounts without a code and entering it afterwards
+// can't get around the cap.
+func (g *signupGuard) allowInvite(ip string, now time.Time) bool {
+	p, valid := signupNet(ip)
+	if !valid || p.Addr().IsLoopback() {
+		return true
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	c := g.entry(p, now)
+	if c == nil || c.invites >= signupInvitesPerIPDay {
+		return false
+	}
+	c.invites++
+	return true
+}
+
+// entry returns today's counts for p (nil when the table is full). Caller holds mu.
+func (g *signupGuard) entry(p netip.Prefix, now time.Time) *signupCount {
+	if d := now.Unix() / 86400; d != g.day || g.nets == nil {
+		g.day, g.nets = d, map[netip.Prefix]*signupCount{}
+	}
+	c := g.nets[p]
+	if c == nil {
+		if len(g.nets) >= signupMaxNets {
+			return nil
+		}
+		c = &signupCount{}
+		g.nets[p] = c
+	}
+	return c
 }

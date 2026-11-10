@@ -195,9 +195,8 @@ class _ReferralPageState extends State<ReferralPage> {
                                   child: TextField(
                                     controller: _codeInput,
                                     textCapitalization: TextCapitalization.characters,
-                                    maxLength: 7,
-                                    inputFormatters: [FilteringTextInputFormatter.allow(RegExp('[a-zA-Z0-9]'))],
-                                    decoration: InputDecoration(hintText: tr('7 位邀请码'), counterText: '', isDense: true),
+                                    inputFormatters: [_InviteCodeFormatter()],
+                                    decoration: InputDecoration(hintText: tr('邀请码或邀请链接'), counterText: '', isDense: true),
                                     style: const TextStyle(letterSpacing: 3, fontWeight: FontWeight.w700),
                                   ),
                                 ),
@@ -371,5 +370,20 @@ class _ActionButton extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// Keeps the 7-character code. A pasted invite link (…/i/CODE) or the shared
+/// invite text ("环游邀请码 CODE …") is reduced to its code.
+class _InviteCodeFormatter extends TextInputFormatter {
+  static final _embedded = RegExp(r'(?:/i/|邀请码\s*)([A-Za-z0-9]{4,12})', caseSensitive: false);
+
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    final t = newValue.text;
+    var code = (_embedded.firstMatch(t)?.group(1) ?? t.replaceAll(RegExp('[^A-Za-z0-9]'), '')).toUpperCase();
+    if (code.length > 7) code = code.substring(0, 7);
+    if (code == t) return newValue;
+    return TextEditingValue(text: code, selection: TextSelection.collapsed(offset: code.length));
   }
 }

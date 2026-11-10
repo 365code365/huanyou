@@ -103,6 +103,11 @@ func (s *Server) handleReferralBind(w http.ResponseWriter, r *http.Request, u *s
 		s.internal(w, err)
 		return
 	}
+	// Same daily cap per network as codes picked up at sign-up.
+	if !s.signups.allowInvite(s.clientIP(r), time.Now()) {
+		writeErr(w, http.StatusTooManyRequests, "invite_limited", "这个网络今天填写邀请码的次数已达上限，请明天再试")
+		return
+	}
 	res, err := s.store.ApplyReferral(r.Context(), u.ID, inviter.ID,
 		ref.RewardPlanID, ref.InviterDays, ref.InviteeDays, ref.MaxInvites, time.Now())
 	if err != nil {
