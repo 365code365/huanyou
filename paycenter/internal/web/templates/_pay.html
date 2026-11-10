@@ -4,13 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <title>{{.Title}}</title>
-<link rel="stylesheet" href="/static/pay.css">
+<link rel="stylesheet" href="/static/pay.css?v=2">
 </head>
 <body>
 <div class="box">
 {{template "content" .}}
 </div>
-<script src="/static/pay.js"></script>
+<script src="/static/pay.js?v=2"></script>
 </body>
 </html>{{end}}
 
@@ -23,3 +23,4 @@
 {{end}}
 
 {{define "poll"}}<div id="poll" data-status="/pay/{{.Order.TradeNo}}/status?t={{.Token}}" data-done="/pay/{{.Order.TradeNo}}/return?t={{.Token}}"></div>{{end}}
+{{define "payIcon"}}{{$k := payKind .}}<svg class="pi" viewBox="0 0 40 40" aria-hidden="true">{{if eq $k "alipay"}}<rect width="40" height="40" rx="10" fill="#1677ff"/><text x="20" y="28.6" text-anchor="middle" font-size="24" font-weight="700" fill="#fff" font-family="PingFang SC,Microsoft YaHei,sans-serif">支</text>{{else if eq $k "wxpay"}}<rect width="40" height="40" rx="10" fill="#07c160"/><path d="M11.6 23.4 10 28l5-2.7z" fill="#fff"/><ellipse cx="17" cy="17" rx="10" ry="8.4" fill="#fff"/><circle cx="13.6" cy="15.6" r="1.4" fill="#07c160"/><circle cx="20.4" cy="15.6" r="1.4" fill="#07c160"/><path d="m29.6 28.8 1.9 3.5-5-1.9z" fill="#fff"/><ellipse cx="25.2" cy="24.2" rx="8.6" ry="7" fill="#fff" stroke="#07c160" stroke-width="1.6"/><circle cx="22.5" cy="23" r="1.2" fill="#07c160"/><circle cx="27.9" cy="23" r="1.2" fill="#07c160"/>{{else if eq $k "qqpay"}}<rect width="40" height="40" rx="10" fill="#12b7f5"/><text x="20" y="28" text-anchor="middle" font-size="22" font-weight="800" fill="#fff" font-family="-apple-system,Helvetica,Arial,sans-serif">Q</text>{{else}}<rect width="40" height="40" rx="10" fill="{{if eq $k "bank"}}#e4393c{{else}}#4e5969{{end}}"/><rect x="9" y="12" width="22" height="16" rx="3" fill="none" stroke="#fff" stroke-width="2"/><path d="M9 17.5h22M13 23.5h5" stroke="#fff" stroke-width="2" stroke-linecap="round"/>{{end}}</svg>{{end}}

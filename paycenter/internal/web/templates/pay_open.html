@@ -1,7 +1,7 @@
 {{define "content"}}
 {{template "summary" .}}
 <div class="msg">
-  <p>正在打开{{.PayName}}…</p>
+  <p class="via">{{template "payIcon" .PayCode}}正在打开{{.PayName}}…</p>
   <a class="btn wide" id="openapp" href="{{.Scheme}}">打开{{.PayName}}付款</a>
   <p class="c"><a href="/pay/{{.Order.TradeNo}}?t={{.Token}}" class="muted small">更换支付方式</a></p>
 </div>

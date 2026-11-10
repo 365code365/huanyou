@@ -30,6 +30,7 @@ type payPage struct {
 	QR      template.URL // data: URI of the PNG
 	QRLink  string
 	PayName string
+	PayCode string
 	// Form / scheme redirect page
 	FormURL string
 	Fields  map[string]string
@@ -137,7 +138,7 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	base := payPage{Title: "支付", Order: o, Token: tok, Status: "PENDING", PayName: name, Return: o.ReturnURL}
+	base := payPage{Title: "支付", Order: o, Token: tok, Status: "PENDING", PayName: name, PayCode: payType, Return: o.ReturnURL}
 	switch act.Kind {
 	case "redirect":
 		u, err := url.Parse(act.URL)

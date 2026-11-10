@@ -108,6 +108,7 @@ var funcs = template.FuncMap{
 			store.AttemptClosed: "b-muted", store.AttemptFailed: "b-bad"}[s]
 	},
 	"payName":      payName,
+	"payKind":      payKind,
 	"blankPayType": func() store.PayType { return store.PayType{} },
 	"logLabel": func(k string) string {
 		if v, ok := logKinds[k]; ok {
@@ -151,6 +152,24 @@ func payName(code string) string {
 		return v
 	}
 	return code
+}
+
+// payKind maps an upstream type code to the cashier icon. Codes are whatever
+// 信联pay opened for the merchant (alipay, alipay_h5, wxpay, wechat...), so
+// match by keyword.
+func payKind(code string) string {
+	c := strings.ToLower(code)
+	switch {
+	case strings.Contains(c, "ali"):
+		return "alipay"
+	case strings.Contains(c, "wx"), strings.Contains(c, "wechat"), strings.Contains(c, "weixin"):
+		return "wxpay"
+	case strings.Contains(c, "qq"):
+		return "qqpay"
+	case strings.Contains(c, "bank"), strings.Contains(c, "union"), strings.Contains(c, "ysf"):
+		return "bank"
+	}
+	return "other"
 }
 
 // logKinds: order log kind -> label, timeline tone.

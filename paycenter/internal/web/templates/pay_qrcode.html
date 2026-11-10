@@ -2,7 +2,7 @@
 {{template "summary" .}}
 <div class="qr">
   <img src="{{.QR}}" alt="支付二维码" width="240" height="240">
-  <p>请使用{{.PayName}}扫码付款</p>
+  <p class="via">{{template "payIcon" .PayCode}}请使用{{.PayName}}扫码付款</p>
   {{if .QRLink}}<p><a href="{{.QRLink}}" class="btn">在{{.PayName}}中打开</a></p>{{end}}
 </div>
 <p class="c"><a href="/pay/{{.Order.TradeNo}}?t={{.Token}}" class="muted small">更换支付方式</a></p>

@@ -6,11 +6,18 @@
   if (app) setTimeout(function () { window.location.href = app.getAttribute('href'); }, 300);
 
   var methods = document.getElementById('methods');
-  if (methods) methods.addEventListener('submit', function () {
-    setTimeout(function () {
-      methods.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
-    }, 0);
-  });
+  if (methods) {
+    methods.addEventListener('submit', function () {
+      setTimeout(function () {
+        methods.querySelectorAll('button').forEach(function (b) { b.disabled = true; });
+      }, 0);
+    });
+    // Back from the pay page restores this page from the bfcache with the
+    // buttons still disabled; re-enable them.
+    window.addEventListener('pageshow', function (e) {
+      if (e.persisted) methods.querySelectorAll('button').forEach(function (b) { b.disabled = false; });
+    });
+  }
 
   var poll = document.getElementById('poll');
   if (!poll) return;
