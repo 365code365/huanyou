@@ -1,6 +1,6 @@
 export GOTOOLCHAIN ?= go1.26.1
 
-.PHONY: build linux run vet
+.PHONY: build linux run vet deploy
 
 build:
 	go build -trimpath -o bin/paycenter ./cmd/paycenter
@@ -14,3 +14,7 @@ run:
 
 vet:
 	go vet ./...
+
+# Build, back up the live one, swap, restart, health-check (rolls back on failure)
+deploy:
+	./scripts/deploy.sh
