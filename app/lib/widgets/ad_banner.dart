@@ -16,16 +16,46 @@ class AdsStore extends ChangeNotifier {
 
   Ads? ads;
   DateTime? _loadedAt;
+  Future<void>? _loading;
+  String _sig = '';
 
-  Future<void> load(ApiClient api) async {
-    if (_loadedAt != null && DateTime.now().difference(_loadedAt!) < const Duration(minutes: 10)) return;
-    try {
-      ads = await api.ads();
-      _loadedAt = DateTime.now();
-      notifyListeners();
-    } catch (_) {
-      // Offline / old server: no ads.
-    }
+  /// Fetches the ads. Called at startup and again whenever the user comes
+  /// back to the home tab or the app returns to the foreground, so new
+  /// announcements / banners / popups show without restarting the app.
+  /// Calls within [minGap] of the last load reuse it; concurrent calls share
+  /// one request. Listeners are told only when something actually changed,
+  /// so a scrolling announcement doesn't restart on every tab switch.
+  Future<void> load(ApiClient api, {Duration minGap = const Duration(seconds: 10)}) {
+    if (_loading != null) return _loading!;
+    if (_loadedAt != null && DateTime.now().difference(_loadedAt!) < minGap) return Future.value();
+    return _loading = () async {
+      try {
+        final next = await api.ads();
+        _loadedAt = DateTime.now();
+        final sig = _signature(next);
+        if (sig != _sig) {
+          _sig = sig;
+          ads = next;
+          notifyListeners();
+        }
+      } catch (_) {
+        // Offline / old server: keep what we have.
+      } finally {
+        _loading = null;
+      }
+    }();
+  }
+
+  static String _signature(Ads a) {
+    String one(AdItem? i) => i == null ? '-' : [i.id, i.title, i.text, i.image, i.link, i.open].join('\u0001');
+    return [
+      a.interval,
+      a.popupFrequency,
+      one(a.popup),
+      ...a.home.map(one),
+      '|',
+      ...a.marquee.map(one),
+    ].join('\u0002');
   }
 }
 
@@ -259,10 +289,13 @@ class _AdBannerState extends State<AdBanner> {
 }
 
 /// Launch popup / notice, shown at most as often as the admin set.
+bool _popupOpen = false;
+final _popupsThisLaunch = <String>{}; // "every launch" = once per app start, not per tab switch
+
 Future<void> maybeShowAdPopup(BuildContext context) async {
   final ads = AdsStore.instance.ads;
   final a = ads?.popup;
-  if (a == null || !context.mounted) return;
+  if (a == null || !context.mounted || _popupOpen) return;
   final key = 'popup_${a.id}';
   final today = DateTime.now().toIso8601String().substring(0, 10);
   final last = Prefs.get(key);
@@ -271,10 +304,22 @@ Future<void> maybeShowAdPopup(BuildContext context) async {
       if (last != null) return;
     case 'daily':
       if (last == today) return;
+    default:
+      if (_popupsThisLaunch.contains(a.id)) return;
   }
+  _popupsThisLaunch.add(a.id);
   await Prefs.set(key, today);
   Analytics.track('ad_popup_shown');
   if (!context.mounted) return;
+  _popupOpen = true;
+  try {
+    await _showPopup(context, a);
+  } finally {
+    _popupOpen = false;
+  }
+}
+
+Future<void> _showPopup(BuildContext context, AdItem a) async {
   // A link-only popup set to open in the app: show the page itself.
   if (a.open == 'webview' && a.link.isNotEmpty && a.image.isEmpty && a.text.isEmpty) {
     _open(a);
