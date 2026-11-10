@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path"
 	"strings"
 )
@@ -17,10 +18,34 @@ const (
 	maxExe     = 64 << 20
 )
 
-// Windows reads a zipped Flutter release folder: Huanyou.exe (version from its
-// VS_FIXEDFILEINFO, which Flutter fills from pubspec "1.2.2+6" as 1.2.2.6) and
-// the VPN core next to it.
-func Windows(file string) (*Info, error) {
+// Windows reads a Windows package, told apart by its first bytes: the zipped
+// release folder (PK) or an Inno Setup installer .exe (MZ). name is the
+// uploaded file name, used by installers whose version resource lacks the
+// build number.
+func Windows(file, name string) (*Info, error) {
+	f, err := os.Open(file)
+	if err != nil {
+		return nil, err
+	}
+	head := make([]byte, 2)
+	_, err = io.ReadFull(f, head)
+	f.Close()
+	if err != nil {
+		return nil, errors.New("文件太小，不是安装包")
+	}
+	switch string(head) {
+	case "PK":
+		return windowsZip(file)
+	case "MZ":
+		return WindowsInstaller(file, name)
+	}
+	return nil, errors.New("不是 zip 也不是 exe 安装程序")
+}
+
+// windowsZip reads a zipped Flutter release folder: Huanyou.exe (version from
+// its VS_FIXEDFILEINFO, which Flutter fills from pubspec "1.2.2+6" as
+// 1.2.2.6) and the VPN core next to it.
+func windowsZip(file string) (*Info, error) {
 	zr, err := zip.OpenReader(file)
 	if err != nil {
 		return nil, errors.New("不是有效的 zip 文件")
@@ -65,6 +90,7 @@ func Windows(file string) (*Info, error) {
 		Version: fmt.Sprintf("%d.%d.%d", ms>>16, ms&0xffff, ls>>16),
 		Build:   int64(ls & 0xffff),
 		Archs:   []string{arch},
+		Ext:     ".zip",
 	}
 	if info.Build == 0 {
 		return nil, errors.New("Huanyou.exe 没有构建号：pubspec.yaml 的 version 要写成 1.2.0+5 的形式")

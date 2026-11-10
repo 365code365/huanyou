@@ -14,8 +14,8 @@ type Platform = Release['platform']
 interface PlatformSpec {
   label: string
   icon: ReactNode
-  /** Package uploaded for this platform. */
-  ext: string
+  /** Package types accepted for this platform (first = main). */
+  exts: string[]
   /** The server reads version, build and CPU from the uploaded package (server/internal/pkginfo). */
   auto: boolean
   /** CPU builds; value "" = universal. Must match `platforms` in server/internal/api/releases.go. */
@@ -30,7 +30,7 @@ const platforms: Record<Platform, PlatformSpec> = {
   android: {
     label: 'Android',
     icon: <AndroidFilled style={{ ...iconStyle, color: '#3ddc84' }} />,
-    ext: '.apk',
+    exts: ['.apk'],
     auto: false,
     abis: [
       { value: 'arm64-v8a', label: '64 位（arm64-v8a，绝大多数手机）', short: '64 位' },
@@ -43,7 +43,7 @@ const platforms: Record<Platform, PlatformSpec> = {
   ios: {
     label: 'iOS',
     icon: <AppleFilled style={iconStyle} />,
-    ext: '.ipa',
+    exts: ['.ipa'],
     auto: false,
     abis: [],
     defaultAbi: '',
@@ -52,19 +52,19 @@ const platforms: Record<Platform, PlatformSpec> = {
   windows: {
     label: 'Windows',
     icon: <WindowsFilled style={{ ...iconStyle, color: '#0078d4' }} />,
-    ext: '.zip',
+    exts: ['.exe', '.zip'],
     auto: true,
     abis: [
       { value: 'x86_64', label: 'x64（Intel / AMD）', short: 'x64' },
       { value: 'arm64', label: 'ARM64（骁龙等）', short: 'ARM64' },
     ],
     defaultAbi: 'x86_64',
-    hint: '上传 app/scripts/build_windows.ps1 打出的 zip（含 Huanyou.exe、huanyou-core.exe 和运行库）。用户在下载页下载后解压运行。',
+    hint: '安装程序 .exe：Inno Setup 打出的 setup.exe，用户下载后双击安装，App 内更新会静默安装。版本号和构建号读取 .iss 的 VersionInfoVersion（写成 1.2.7.12），没设置时按文件名识别，如 huanyou-windows-1.2.7-12-x64-setup.exe（arm64 写在文件名里）。\n压缩包 .zip：app/scripts/build_windows.ps1 打出的包（含 Huanyou.exe、huanyou-core.exe 和运行库），用户下载后解压运行。',
   },
   macos: {
     label: 'macOS',
     icon: <AppleOutlined style={iconStyle} />,
-    ext: '.dmg',
+    exts: ['.dmg'],
     auto: true,
     abis: [
       { value: '', label: '通用（Apple 芯片 + Intel）', short: '通用' },
@@ -246,6 +246,11 @@ export default function ReleasesPage() {
                     <div style={{ fontWeight: 600 }}>
                       {r.version} <span className="muted">build {r.build}</span>
                       {platforms[r.platform].abis.length > 0 && <Tag bordered={false} style={{ marginLeft: 6 }}>{abiShort(r)}</Tag>}
+                      {r.platform === 'windows' && (r.kind === 'exe' || r.kind === 'zip') && (
+                        <Tag bordered={false} color={r.kind === 'exe' ? 'blue' : undefined} style={{ marginLeft: 6 }}>
+                          {r.kind === 'exe' ? '安装程序' : '压缩包'}
+                        </Tag>
+                      )}
                       {latest(r.platform)?.id === r.id && r.published && <Tag color="success" bordered={false} style={{ marginLeft: 6 }}>最新</Tag>}
                     </div>
                     <div className="muted" style={{ maxWidth: 360, whiteSpace: 'pre-line' }}>{r.notes || '—'}</div>
@@ -302,7 +307,7 @@ export default function ReleasesPage() {
               value={source}
               onChange={(v) => setSource(v as 'file' | 'url')}
               options={[
-                { label: `上传 ${spec.ext.slice(1).toUpperCase()}`, value: 'file' },
+                { label: `上传 ${spec.exts.map((e) => e.slice(1).toUpperCase()).join(' / ')}`, value: 'file' },
                 { label: platform === 'ios' ? 'TestFlight / App Store 链接' : '外部链接', value: 'url' },
               ]}
             />
@@ -313,7 +318,11 @@ export default function ReleasesPage() {
               type="success"
               showIcon
               style={{ marginBottom: 16 }}
-              message="版本号、构建号和支持的芯片会从安装包里自动读取，上传时一并校验安装包是否完整（含 VPN 核心）。"
+              message={
+                platform === 'windows'
+                  ? '版本号、构建号和支持的芯片会从安装包里自动读取。zip 会一并校验是否包含 VPN 核心；exe 安装程序的内容是压缩的，无法检查，请确认打包时带上了 huanyou-core.exe。'
+                  : '版本号、构建号和支持的芯片会从安装包里自动读取，上传时一并校验安装包是否完整（含 VPN 核心）。'
+              }
             />
           ) : (
             <>
@@ -350,12 +359,12 @@ export default function ReleasesPage() {
             <>
               <Form.Item>
                 <Upload.Dragger
-                  accept={spec.ext}
+                  accept={spec.exts.join(',')}
                   maxCount={1}
                   fileList={file}
                   beforeUpload={(f) => {
-                    if (!f.name.toLowerCase().endsWith(spec.ext)) {
-                      message.error(`请选择 ${spec.ext} 文件`)
+                    if (!spec.exts.some((e) => f.name.toLowerCase().endsWith(e))) {
+                      message.error(`请选择 ${spec.exts.join(' 或 ')} 文件`)
                       return Upload.LIST_IGNORE
                     }
                     return false // upload on submit, with the form fields
@@ -368,7 +377,7 @@ export default function ReleasesPage() {
                   disabled={uploading}
                 >
                   <p className="ant-upload-drag-icon"><InboxOutlined /></p>
-                  <p className="ant-upload-text">{fileName ?? `点击或拖拽 ${spec.ext} 到这里`}</p>
+                  <p className="ant-upload-text">{fileName ?? `点击或拖拽 ${spec.exts.join(' / ')} 到这里`}</p>
                   <p className="ant-upload-hint">最大 600 MB，服务器会计算 SHA-256 供 App 校验</p>
                 </Upload.Dragger>
               </Form.Item>
@@ -377,7 +386,7 @@ export default function ReleasesPage() {
                   <Input className="mono" />
                 </Form.Item>
               )}
-              {spec.hint && <Alert type="info" showIcon style={{ marginBottom: 16 }} message={spec.hint} />}
+              {spec.hint && <Alert type="info" showIcon style={{ marginBottom: 16, whiteSpace: 'pre-line' }} message={spec.hint} />}
             </>
           ) : (
             <Form.Item

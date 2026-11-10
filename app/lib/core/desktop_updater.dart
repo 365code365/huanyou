@@ -20,7 +20,9 @@ import 'vpn.dart';
 ///   macOS: the DMG is mounted, its 环游.app copied out, and the script moves
 ///          it over the current bundle (e.g. /Applications/环游.app).
 ///   Windows: the zip is expanded and the script robocopies it over the folder
-///          Huanyou.exe runs from.
+///          Huanyou.exe runs from; an Inno Setup installer (.exe) is run
+///          silently into that folder instead (it asks for admin rights
+///          itself when the folder needs them).
 class DesktopUpdater {
   static bool get supported => Platform.isMacOS || Platform.isWindows;
 
@@ -49,6 +51,9 @@ class DesktopUpdater {
         return tr('请先把「环游」拖到「应用程序」文件夹，从那里打开后再更新');
       }
     }
+    // A Windows installer elevates through UAC when the folder (e.g. Program
+    // Files) needs it, so no write probe.
+    if (Platform.isWindows && u?.kind == 'exe') return '';
     // The swap writes next to the installed app (the bundle's parent on macOS).
     final target = Platform.isMacOS ? dir.parent : dir;
     try {
@@ -73,7 +78,8 @@ class DesktopUpdater {
     dir.createSync(recursive: true);
     // A fixed name with the right extension: the URL may have none (a signed
     // or query URL), and Expand-Archive refuses files not ending in .zip.
-    final file = File('${dir.path}${Platform.pathSeparator}${Platform.isMacOS ? 'update.dmg' : 'update.zip'}');
+    final name = Platform.isMacOS ? 'update.dmg' : (u.kind == 'exe' ? 'huanyou-setup.exe' : 'update.zip');
+    final file = File('${dir.path}${Platform.pathSeparator}$name');
     final sink = file.openSync(mode: FileMode.write);
     final client = http.Client();
     var got = 0;
@@ -142,8 +148,11 @@ class DesktopUpdater {
   /// Unpacks the new version next to [pkg] and writes the swap script, which
   /// waits for process [waitPid] (default: this app) to exit. Returns its path.
   @visibleForTesting
-  static Future<String> prepare(File pkg, {int? waitPid}) =>
-      Platform.isMacOS ? _prepareMac(pkg, waitPid ?? pid) : _prepareWindows(pkg, waitPid ?? pid);
+  static Future<String> prepare(File pkg, {int? waitPid}) => Platform.isMacOS
+      ? _prepareMac(pkg, waitPid ?? pid)
+      : pkg.path.toLowerCase().endsWith('.exe')
+          ? _prepareWindowsInstaller(pkg, waitPid ?? pid)
+          : _prepareWindows(pkg, waitPid ?? pid);
 
   // ---- macOS ----
 
@@ -216,6 +225,32 @@ Start-Process -FilePath ${ps('$dst\\Huanyou.exe')}
 Remove-Item -LiteralPath ${ps(work)} -Recurse -Force -ErrorAction SilentlyContinue
 ''';
     // UTF-8 with BOM so Windows PowerShell 5 reads non-ASCII paths (环游) correctly.
+    File(script).writeAsBytesSync([0xEF, 0xBB, 0xBF, ...utf8.encode(body)]);
+    return script;
+  }
+
+  /// Runs an Inno Setup installer silently into the current install folder
+  /// (keeps a zip install where it is, and an installed copy in place), then
+  /// relaunches. If the user declines the admin prompt or setup fails, the
+  /// old version still starts.
+  static Future<String> _prepareWindowsInstaller(File setup, int waitPid) async {
+    final work = setup.parent.path;
+    final dst = installDir.path;
+    final ps = _psQuote;
+    final args = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CLOSEAPPLICATIONS /DIR="$dst"';
+    final script = '$work\\install.ps1';
+    final body = '''
+\$ErrorActionPreference = 'Continue'
+try { Wait-Process -Id $waitPid -Timeout 60 -ErrorAction SilentlyContinue } catch {}
+Get-Process -Name huanyou-core -ErrorAction SilentlyContinue | Where-Object { \$_.Path -like ${ps('$dst\\*')} } | Wait-Process -Timeout 15 -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 500
+try { Start-Process -FilePath ${ps(setup.path)} -ArgumentList ${ps(args)} -Wait } catch {}
+if (-not (Get-Process -Name Huanyou -ErrorAction SilentlyContinue)) {
+  \$exe = ${ps('$dst\\Huanyou.exe')}
+  if (Test-Path -LiteralPath \$exe) { Start-Process -FilePath \$exe }
+}
+Remove-Item -LiteralPath ${ps(work)} -Recurse -Force -ErrorAction SilentlyContinue
+''';
     File(script).writeAsBytesSync([0xEF, 0xBB, 0xBF, ...utf8.encode(body)]);
     return script;
   }

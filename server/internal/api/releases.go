@@ -11,9 +11,11 @@ import (
 	"log/slog"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -39,7 +41,9 @@ type abiSpec struct {
 // platformSpec describes how a platform's packages are published.
 type platformSpec struct {
 	Ext string
-	Zip bool // the package is a ZIP archive (APK, IPA, Windows zip)
+	// Magic: accepted first bytes of an upload ("PK" ZIP, "MZ" Windows exe);
+	// none = checked by pkginfo once saved (DMG).
+	Magic []string
 	// Inspect: version, build and ABI are read from the package itself
 	// (internal/pkginfo) instead of being typed in.
 	Inspect bool
@@ -50,12 +54,13 @@ type platformSpec struct {
 
 var platforms = map[string]platformSpec{
 	// Flutter's --split-per-abi APKs, or one universal APK.
-	"android": {Ext: ".apk", Zip: true, ABIs: []abiSpec{
+	"android": {Ext: ".apk", Magic: []string{"PK"}, ABIs: []abiSpec{
 		{"", "通用版"}, {"arm64-v8a", "64 位版"}, {"armeabi-v7a", "32 位版（老款手机）"}, {"x86_64", "x86 版（模拟器 / 平板）"},
 	}},
-	"ios": {Ext: ".ipa", Zip: true, ABIs: []abiSpec{{"", ""}}},
-	// The zipped release folder from app/scripts/build_windows.ps1.
-	"windows": {Ext: ".zip", Zip: true, Inspect: true, ABIs: []abiSpec{
+	"ios": {Ext: ".ipa", Magic: []string{"PK"}, ABIs: []abiSpec{{"", ""}}},
+	// The zipped release folder from app/scripts/build_windows.ps1, or an
+	// Inno Setup installer .exe (pkginfo tells them apart).
+	"windows": {Ext: ".zip", Magic: []string{"PK", "MZ"}, Inspect: true, ABIs: []abiSpec{
 		{pkginfo.ArchX64, "x64 版（Intel / AMD）"}, {pkginfo.ArchARM64, "ARM 版（骁龙等）"},
 	}},
 	// The drag-to-Applications disk image from app/scripts/build_macos.sh.
@@ -109,9 +114,12 @@ func (s *Server) releaseURL(r *store.Release) string {
 type releaseView struct {
 	*store.Release
 	DownloadURL string `json:"download_url"`
+	Kind        string `json:"kind"` // apk | ipa | zip | dmg | exe | ""
 }
 
-func (s *Server) releaseView(r *store.Release) releaseView { return releaseView{r, s.releaseURL(r)} }
+func (s *Server) releaseView(r *store.Release) releaseView {
+	return releaseView{r, s.releaseURL(r), releaseKind(r)}
+}
 
 // ---- admin ----
 
@@ -144,7 +152,7 @@ func (s *Server) adminCreateRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rel := &store.Release{Published: true}
-	var tmp string
+	var tmp, upName string
 	defer func() {
 		if tmp != "" {
 			os.Remove(tmp)
@@ -174,7 +182,7 @@ func (s *Server) adminCreateRelease(w http.ResponseWriter, r *http.Request) {
 				writeErr(w, http.StatusBadRequest, "bad_package", err.Error())
 				return
 			}
-			tmp, rel.Size, rel.SHA256 = path, size, sum
+			tmp, rel.Size, rel.SHA256, upName = path, size, sum, part.FileName()
 			continue
 		}
 		b, _ := io.ReadAll(io.LimitReader(part, 8<<10))
@@ -205,8 +213,9 @@ func (s *Server) adminCreateRelease(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_platform", "平台只能是 android、ios、windows 或 macos")
 		return
 	}
+	ext := spec.Ext
 	if tmp != "" && spec.Inspect {
-		info, err := pkginfo.Inspect(rel.Platform, tmp)
+		info, err := pkginfo.Inspect(rel.Platform, tmp, upName)
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, "bad_package", "无法识别安装包："+err.Error())
 			return
@@ -221,6 +230,11 @@ func (s *Server) adminCreateRelease(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rel.Version, rel.Build, rel.ABI = info.Version, info.Build, info.ABI(rel.Platform)
+		if info.Installer {
+			ext = installerSuffix
+		} else if info.Ext != "" {
+			ext = info.Ext
+		}
 	}
 	if !spec.allows(rel.ABI) {
 		writeErr(w, http.StatusBadRequest, "bad_abi", spec.abiError())
@@ -244,7 +258,6 @@ func (s *Server) adminCreateRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if tmp != "" {
-		ext := spec.Ext
 		rel.File = fmt.Sprintf("huanyou-%s-%s-%d%s", rel.Platform, rel.Version, rel.Build, ext)
 		if rel.ABI != "" {
 			rel.File = fmt.Sprintf("huanyou-%s-%s-%d-%s%s", rel.Platform, rel.Version, rel.Build, rel.ABI, ext)
@@ -294,9 +307,12 @@ func (s *Server) saveUpload(part *multipart.Part, spec platformSpec) (path strin
 	h := sha256.New()
 	head := make([]byte, 4)
 	n, _ := io.ReadFull(part, head)
-	if spec.Zip && (n < 4 || string(head[:2]) != "PK") {
+	if len(spec.Magic) > 0 && (n < 4 || !slices.Contains(spec.Magic, string(head[:2]))) {
 		f.Close()
 		os.Remove(path)
+		if slices.Contains(spec.Magic, "MZ") {
+			return "", 0, "", errors.New("文件不是 zip 压缩包，也不是 exe 安装程序")
+		}
 		return "", 0, "", fmt.Errorf("文件不是有效的 %s 安装包（不是 ZIP 格式）", strings.ToUpper(strings.TrimPrefix(spec.Ext, ".")))
 	}
 	w := io.MultiWriter(f, h)
@@ -408,6 +424,13 @@ func (s *Server) handleAppUpdate(w http.ResponseWriter, r *http.Request) {
 		s.internal(w, err)
 		return
 	}
+	kind := releaseKind(latest)
+	sum := latest.SHA256
+	// Apps from before installer support would try to unzip a setup.exe:
+	// without a checksum they open the browser download instead.
+	if kind == "exe" && q.Get("installer") != "1" {
+		sum = ""
+	}
 	has := latest.Build > build
 	force := false
 	if has {
@@ -422,15 +445,34 @@ func (s *Server) handleAppUpdate(w http.ResponseWriter, r *http.Request) {
 		"force":      force,
 		"latest": map[string]any{
 			"version": latest.Version, "build": latest.Build, "notes": latest.Notes,
-			"url": s.releaseURL(latest), "size": latest.Size, "sha256": latest.SHA256,
-			"published_at": latest.CreatedAt,
+			"url": s.releaseURL(latest), "size": latest.Size, "sha256": sum,
+			"published_at": latest.CreatedAt, "kind": kind,
 		},
 	})
 }
 
 // ---- files ----
 
-var releaseFile = regexp.MustCompile(`^huanyou-(android|ios|windows|macos)-[0-9.]+-\d+(-(arm64-v8a|armeabi-v7a|x86_64|arm64))?\.(apk|ipa|zip|dmg)$`)
+var releaseFile = regexp.MustCompile(`^huanyou-(android|ios|windows|macos)-[0-9.]+-\d+(-(arm64-v8a|armeabi-v7a|x86_64|arm64))?(\.(apk|ipa|zip|dmg)|-setup\.exe)$`)
+
+// installerSuffix ends the stored name of a Windows installer .exe.
+const installerSuffix = "-setup.exe"
+
+// releaseKind is the package type by file name: apk, ipa, zip, dmg, exe, or
+// "" for an external link without a recognizable extension.
+func releaseKind(r *store.Release) string {
+	name := r.File
+	if name == "" {
+		if u, err := url.Parse(r.URL); err == nil {
+			name = u.Path
+		}
+	}
+	switch ext := strings.ToLower(filepath.Ext(name)); ext {
+	case ".apk", ".ipa", ".zip", ".dmg", ".exe":
+		return ext[1:]
+	}
+	return ""
+}
 
 // handleReleaseFile: GET /dl/releases/{name}
 func (s *Server) handleReleaseFile(w http.ResponseWriter, r *http.Request) {
@@ -451,6 +493,8 @@ func (s *Server) handleReleaseFile(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/zip")
 	} else if strings.HasSuffix(name, ".dmg") {
 		w.Header().Set("Content-Type", "application/x-apple-diskimage")
+	} else if strings.HasSuffix(name, ".exe") {
+		w.Header().Set("Content-Type", "application/vnd.microsoft.portable-executable")
 	} else {
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}

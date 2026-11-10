@@ -2,7 +2,8 @@
 // of the desktop app packages uploaded in the admin panel:
 //
 //   - Windows: the zip from app/scripts/build_windows.ps1 (Huanyou.exe's
-//     VERSIONINFO resource and PE machine type).
+//     VERSIONINFO resource and PE machine type), or an Inno Setup installer
+//     .exe (its version resource, or the file name).
 //   - macOS: the DMG from app/scripts/build_macos.sh (the app's Info.plist and
 //     Mach-O header, read straight from the disk image's HFS+ volume).
 //
@@ -28,6 +29,10 @@ type Info struct {
 	Build   int64    // 6 (the pubspec number after +)
 	Archs   []string // sorted, e.g. ["arm64", "x86_64"]
 	MinOS   string   // macOS LSMinimumSystemVersion; "" on Windows
+	// Ext is the package type found (".zip", ".exe", ".dmg").
+	Ext string
+	// Installer: a Windows setup program rather than the app folder.
+	Installer bool
 }
 
 // ABI is the release ABI for the package: "" when it runs natively on every
@@ -43,12 +48,12 @@ func (i *Info) ABI(platform string) string {
 	return strings.Join(i.Archs, "+")
 }
 
-// Inspect reads the package at path for platform ("windows" or "macos").
-// Other platforms return (nil, nil).
-func Inspect(platform, path string) (*Info, error) {
+// Inspect reads the package at path for platform ("windows" or "macos");
+// name is the uploaded file name. Other platforms return (nil, nil).
+func Inspect(platform, path, name string) (*Info, error) {
 	switch platform {
 	case "windows":
-		return Windows(path)
+		return Windows(path, name)
 	case "macos":
 		return MacDMG(path)
 	}

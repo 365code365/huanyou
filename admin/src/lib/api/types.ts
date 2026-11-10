@@ -303,6 +303,7 @@ export interface Release {
   abi: string // CPU build: Android arm64-v8a | armeabi-v7a | x86_64, desktop arm64 | x86_64; "" = universal
   created_at: string
   download_url: string
+  kind?: 'apk' | 'ipa' | 'zip' | 'dmg' | 'exe' | '' // package type by file name
 }
 
 export interface BackupInfo {

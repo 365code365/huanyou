@@ -314,7 +314,7 @@ footer .wrap{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
    <h3>Windows{{if .Version}}<span dir="ltr">v{{.Version}} ({{.Build}})</span>{{end}}</h3>
    <div class="meta">{{if .Date}}{{$t.T "更新于 {0}" .Date}}{{end}}{{if .Size}} · {{.Size}}{{end}}</div>
    {{if .Notes}}<ul>{{range .Notes}}<li>{{.}}</li>{{end}}</ul>{{end}}
-   <div class="tip">{{$t.T "支持 Windows 10 / 11（64 位）。下载后解压，打开文件夹里的 Huanyou.exe；请勿只单独拷出 exe。连接后通过系统代理生效，浏览器和大多数软件无需设置。"}}</div>
+   <div class="tip">{{if .Installer}}{{$t.T "支持 Windows 10 / 11（64 位）。下载后双击运行安装程序，安装完成后从桌面或开始菜单打开「环游」。连接后通过系统代理生效，浏览器和大多数软件无需设置。"}}{{else}}{{$t.T "支持 Windows 10 / 11（64 位）。下载后解压，打开文件夹里的 Huanyou.exe；请勿只单独拷出 exe。连接后通过系统代理生效，浏览器和大多数软件无需设置。"}}{{end}}</div>
    <div class="sp"></div><a class="btn sec" href="{{.Href}}" onclick="cp()">{{if .Label}}{{$t.T "下载 Windows {0}" ($t.T .Label)}}{{else}}{{$t.T "下载 Windows 版"}}{{end}}</a>
    {{range .Others}}<a class="alt" href="{{.Href}}" onclick="cp()">{{$t.T "下载 {0}" ($t.T .Label)}}{{if .Size}} · {{.Size}}{{end}}</a>{{end}}
   </div>{{end}}

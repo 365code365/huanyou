@@ -28,6 +28,8 @@ type siteBuild struct {
 	URL     string
 	Label   string        // CPU build of URL when there are several, e.g. "x64 版（Intel / AMD）"
 	Others  []siteVariant // other CPU builds of the same version
+	// Installer: the Windows download is a setup .exe, not a zip to extract.
+	Installer bool
 }
 
 type siteVariant struct {
@@ -61,7 +63,8 @@ func (s *Server) latestBuild(ctx context.Context, platform string) *siteBuild {
 	if all, err := s.store.LatestBuilds(ctx, platform); err == nil && len(all) > 0 {
 		sort.SliceStable(all, func(i, j int) bool { return spec.abiIndex(all[i].ABI) < spec.abiIndex(all[j].ABI) })
 		r := all[0]
-		b := &siteBuild{Version: r.Version, Build: r.Build, Date: r.CreatedAt.Format("2006-01-02"), URL: s.releaseURL(r), Size: sizeLabel(r.Size)}
+		b := &siteBuild{Version: r.Version, Build: r.Build, Date: r.CreatedAt.Format("2006-01-02"), URL: s.releaseURL(r), Size: sizeLabel(r.Size),
+			Installer: releaseKind(r) == "exe"}
 		if len(all) > 1 { // name the main download too when there is a choice
 			b.Label = spec.ABIs[max(0, spec.abiIndex(r.ABI))].Label
 		}

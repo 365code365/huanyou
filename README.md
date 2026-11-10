@@ -375,6 +375,13 @@ SIGN_IDENTITY="Developer ID Application: 名称 (TEAMID)" NOTARY_PROFILE=<公证
 
 然后在后台「版本发布」选「发布 Windows 版本」上传 zip，或「发布 macOS 版本」上传 dmg。不用填版本号：服务端（`server/internal/pkginfo`）会从安装包里读出版本号、构建号和支持的芯片（Windows 读 Huanyou.exe 的版本信息和 CPU 类型；macOS 直接解析 DMG 里的 Info.plist 和程序头），并检查 VPN 核心是否打包进去。macOS 通用包（Apple 芯片 + Intel）记为「通用」，也可以另外发布只含 Apple 芯片或 Intel 的包，App 会按电脑的芯片拿到对应的包；ARM 电脑没有专用包时使用 x64 / Intel 包。下载页会多出对应的下载入口，App 内检查更新会在浏览器里打开下载链接。
 
+Windows 也可以上传 **Inno Setup 安装程序**（`.exe`），按开头字节和 zip 区分：
+
+- 版本号和构建号：先读安装程序的版本信息，`.iss` 里要写 `VersionInfoVersion=1.2.7.12`（版本号.构建号；Inno 默认是 0.0.0.0）；没写时按文件名识别，如 `huanyou-windows-1.2.7-12-x64-setup.exe`，并和 `AppVersion` 核对。CPU 看文件名里的 `x64` / `arm64`，都没有时按 x64。安装程序内容是压缩的，服务端检查不了里面有没有 `huanyou-core.exe`，打包时要自己带上。
+- 存为 `huanyou-windows-<版本>-<构建号>-<CPU>-setup.exe`，下载页的提示改成「双击运行安装程序」。
+- App 内更新：支持安装程序的 App（检查更新时带 `installer=1`）下载后用 `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CLOSEAPPLICATIONS /DIR="<当前安装目录>"` 静默安装再重新打开；装在 Program Files 时安装程序会自己弹 UAC。更早的 App 拿不到校验值，会改为在浏览器里下载安装程序。
+- 同一个构建号、同一 CPU 只能发布一个包（zip 或 exe 二选一），要换类型先删掉旧的。
+
 ---
 
 ### 测试

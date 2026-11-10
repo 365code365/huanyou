@@ -229,7 +229,18 @@ class AppUpdate {
         notes = (j['latest'] as Map?)?['notes'] as String? ?? '',
         url = (j['latest'] as Map?)?['url'] as String? ?? '',
         size = ((j['latest'] as Map?)?['size'] as num?)?.toInt() ?? 0,
-        sha256 = (j['latest'] as Map?)?['sha256'] as String? ?? '';
+        sha256 = (j['latest'] as Map?)?['sha256'] as String? ?? '',
+        kind = _kindOf((j['latest'] as Map?)?['kind'] as String? ?? '', (j['latest'] as Map?)?['url'] as String? ?? '');
+
+  /// The server's package type, or the URL's extension for older servers.
+  static String _kindOf(String kind, String url) {
+    if (kind.isNotEmpty) return kind;
+    final path = Uri.tryParse(url)?.path.toLowerCase() ?? '';
+    for (final k in ['exe', 'zip', 'dmg', 'apk', 'ipa']) {
+      if (path.endsWith('.$k')) return k;
+    }
+    return '';
+  }
   final bool hasUpdate;
   final bool force; // the installed build is below a forced release
   final String version;
@@ -238,6 +249,7 @@ class AppUpdate {
   final String url; // APK file (Android) or install / store link (iOS)
   final int size;
   final String sha256; // "" for external links
+  final String kind; // package type: exe (Windows installer), zip, dmg, apk, ipa, "" unknown
 }
 
 /// One device on a shared subscription.
@@ -473,7 +485,10 @@ class ApiClient {
   }
 
   Future<AppUpdate> appUpdate(String platform, int build, {String abi = ''}) async => AppUpdate.fromJson(
-      await _send('GET', '/api/v1/app/update', query: {'platform': platform, 'build': '$build', if (abi.isNotEmpty) 'abi': abi}));
+      // installer=1: this app can install a Windows setup.exe in place (older
+      // ones get no checksum for it and download it in the browser instead).
+      await _send('GET', '/api/v1/app/update',
+          query: {'platform': platform, 'build': '$build', if (abi.isNotEmpty) 'abi': abi, 'installer': '1'}));
 
   // ---- multi-device ----
   Future<DeviceShare> devices() async => DeviceShare.fromJson(await _send('GET', '/api/v1/devices'));
