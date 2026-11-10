@@ -368,7 +368,8 @@ func (s *Server) channelForm(w http.ResponseWriter, r *http.Request, c adminCtx)
 		return
 	}
 	ch := store.Channel{Name: "信联pay", Provider: "xinlian", APIBase: "https://c02.z-cn.top", SignType: "MD5",
-		PayTypes: "alipay=支付宝\nwxpay=微信支付", Device: "auto", Enabled: true}
+		PayTypes: store.EncodePayTypes([]store.PayType{{Code: "alipay", Name: "支付宝"}, {Code: "wxpay", Name: "微信支付"}}),
+		Device:   "auto", Enabled: true}
 	if id != 0 {
 		if err := s.Svc.DB.Take(&ch, id).Error; err != nil {
 			http.NotFound(w, r)
@@ -378,22 +379,26 @@ func (s *Server) channelForm(w http.ResponseWriter, r *http.Request, c adminCtx)
 	s.render(w, http.StatusOK, "channel", map[string]any{"C": c, "Ch": ch})
 }
 
-// payTypesFrom reads the pay type rows (pt_code / pt_name) of the form.
+// payTypesFrom reads the pay type rows of the form (parallel arrays
+// pt_code / pt_name / pt_state / pt_remark, one entry per row).
 func payTypesFrom(r *http.Request) string {
-	codes, names := r.PostForm["pt_code"], r.PostForm["pt_name"]
-	var lines []string
+	codes, names, states, remarks := r.PostForm["pt_code"], r.PostForm["pt_name"], r.PostForm["pt_state"], r.PostForm["pt_remark"]
+	at := func(a []string, i int) string {
+		if i < len(a) {
+			return strings.Join(strings.Fields(a[i]), " ")
+		}
+		return ""
+	}
+	var list []store.PayType
 	for i, code := range codes {
 		code = strings.TrimSpace(code)
-		if code == "" || strings.ContainsAny(code, "=\n") {
+		if code == "" || strings.ContainsAny(code, "=\n\t ") {
 			continue
 		}
-		name := ""
-		if i < len(names) {
-			name = strings.ReplaceAll(strings.TrimSpace(names[i]), "\n", " ")
-		}
-		lines = append(lines, code+"="+name)
+		list = append(list, store.PayType{Code: code, Name: at(names, i), Hidden: at(states, i) == "hidden",
+			Remark: store.Trunc(at(remarks, i), 200)})
 	}
-	return strings.Join(lines, "\n")
+	return store.EncodePayTypes(list)
 }
 
 func (s *Server) channelSave(w http.ResponseWriter, r *http.Request, c adminCtx) {
@@ -442,7 +447,11 @@ func (s *Server) channelSave(w http.ResponseWriter, r *http.Request, c adminCtx)
 		fail("保存失败：" + err.Error())
 		return
 	}
-	back(w, r, fmt.Sprintf("/admin/channels/%d", ch.ID), "ok", "通道已保存")
+	msg := "通道已保存"
+	if len(ch.VisiblePayTypes()) == 0 {
+		msg += "。注意：所有支付方式都已隐藏，使用这个通道的收银台暂时无法付款"
+	}
+	back(w, r, fmt.Sprintf("/admin/channels/%d", ch.ID), "ok", msg)
 }
 
 func (s *Server) channelTest(w http.ResponseWriter, r *http.Request, _ adminCtx) {
@@ -468,7 +477,11 @@ func (s *Server) channelTest(w http.ResponseWriter, r *http.Request, _ adminCtx)
 	info := store.Trunc(compactJSON(data), 200)
 	// merchant/info passes even when ordering is refused (e.g. 4484 domain
 	// not authorized), so also place and immediately close a 0.01 order.
-	types := ch.PayTypeList()
+	// Prefer a shown method; if all are hidden, still test the first one.
+	types := ch.VisiblePayTypes()
+	if len(types) == 0 {
+		types = ch.PayTypeList()
+	}
 	pub := s.Svc.PublicURL()
 	if len(types) == 0 || pub == "" {
 		back(w, r, path, "ok", "密钥正确（商户信息："+info+"）。未测试下单：需要先配置支付方式和对外地址")

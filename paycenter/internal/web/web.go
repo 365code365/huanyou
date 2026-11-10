@@ -107,7 +107,8 @@ var funcs = template.FuncMap{
 		return map[string]string{store.AttemptPending: "b-warn", store.AttemptPaid: "b-ok",
 			store.AttemptClosed: "b-muted", store.AttemptFailed: "b-bad"}[s]
 	},
-	"payName": payName,
+	"payName":      payName,
+	"blankPayType": func() store.PayType { return store.PayType{} },
 	"logLabel": func(k string) string {
 		if v, ok := logKinds[k]; ok {
 			return v[0]

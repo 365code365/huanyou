@@ -3,6 +3,7 @@
 package store
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -56,20 +57,54 @@ type Channel struct {
 	MD5Key        string `gorm:"size:255"`
 	RSAPrivateKey string `gorm:"type:text"`
 	SignWithType  bool   `gorm:"not null;default:false"`
-	PayTypes      string `gorm:"type:text"` // one per line: code=显示名
+	PayTypes      string `gorm:"type:text"` // JSON []PayType; legacy: one "code=显示名" per line
 	Device        string `gorm:"size:16"`
 	Enabled       bool   `gorm:"not null;default:true"`
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 }
 
-// PayType is a payment method offered on the cashier.
-type PayType struct{ Code, Name string }
+// PayType is a payment method of a channel. Hidden ones (e.g. under
+// maintenance) stay configured but are not offered on the cashier.
+type PayType struct {
+	Code   string `json:"code"`
+	Name   string `json:"name"`
+	Hidden bool   `json:"hidden,omitempty"`
+	Remark string `json:"remark,omitempty"`
+}
 
-// PayTypeList parses PayTypes ("alipay=支付宝" per line).
+// EncodePayTypes serializes pay types for Channel.PayTypes.
+func EncodePayTypes(list []PayType) string {
+	if len(list) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(list)
+	return string(b)
+}
+
+// PayTypeList returns every configured pay type, hidden ones included.
 func (c Channel) PayTypeList() []PayType {
+	s := strings.TrimSpace(c.PayTypes)
+	if strings.HasPrefix(s, "[") {
+		var list []PayType
+		if json.Unmarshal([]byte(s), &list) != nil {
+			return nil
+		}
+		out := list[:0]
+		for _, p := range list {
+			p.Code, p.Name, p.Remark = strings.TrimSpace(p.Code), strings.TrimSpace(p.Name), strings.TrimSpace(p.Remark)
+			if p.Code == "" {
+				continue
+			}
+			if p.Name == "" {
+				p.Name = p.Code
+			}
+			out = append(out, p)
+		}
+		return out
+	}
 	var out []PayType
-	for _, line := range strings.Split(c.PayTypes, "\n") {
+	for _, line := range strings.Split(s, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -83,6 +118,17 @@ func (c Channel) PayTypeList() []PayType {
 			name = code
 		}
 		out = append(out, PayType{Code: code, Name: name})
+	}
+	return out
+}
+
+// VisiblePayTypes returns the pay types offered on the cashier.
+func (c Channel) VisiblePayTypes() []PayType {
+	var out []PayType
+	for _, p := range c.PayTypeList() {
+		if !p.Hidden {
+			out = append(out, p)
+		}
 	}
 	return out
 }

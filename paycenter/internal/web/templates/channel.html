@@ -39,13 +39,12 @@
       </div>
     </div>
     <div class="form-sec">
-      <h4>支付方式</h4><p class="desc">收银台展示的支付方式。通道编码以信联pay 后台开通的为准，如 alipay、wxpay</p>
-      <div class="pt-head"><span>通道编码 type</span><span>收银台显示名称</span><span></span></div>
+      <h4>支付方式</h4><p class="desc">收银台展示的支付方式。通道编码以信联pay 后台开通的为准，如 alipay、wxpay。维护中的支付方式可以设为「隐藏」，收银台不再展示，配置保留，恢复时改回「展示」即可</p>
+      <div class="pt-head"><span>通道编码 type</span><span>收银台显示名称</span><span>状态</span><span></span></div>
       <div id="ptList">
-        {{range .Ch.PayTypeList}}<div class="pt-row"><input name="pt_code" value="{{.Code}}" class="mono" placeholder="alipay"><input name="pt_name" value="{{.Name}}" placeholder="支付宝"><button class="btn btn-ghost icon-btn" type="button" data-pt-del title="删除">{{template "icon" "trash"}}</button></div>
-        {{else}}<div class="pt-row"><input name="pt_code" class="mono" placeholder="alipay"><input name="pt_name" placeholder="支付宝"><button class="btn btn-ghost icon-btn" type="button" data-pt-del title="删除">{{template "icon" "trash"}}</button></div>{{end}}
+        {{range .Ch.PayTypeList}}{{template "ptRow" .}}{{else}}{{template "ptRow" blankPayType}}{{end}}
       </div>
-      <template id="ptTpl"><div class="pt-row"><input name="pt_code" class="mono" placeholder="wxpay"><input name="pt_name" placeholder="微信支付"><button class="btn btn-ghost icon-btn" type="button" data-pt-del title="删除">{{template "icon" "trash"}}</button></div></template>
+      <template id="ptTpl">{{template "ptRow" blankPayType}}</template>
       <button class="btn btn-sm" type="button" id="ptAdd">{{template "icon" "plus"}}添加支付方式</button>
       <div class="fields mt">
         <div class="field"><label>终端类型 device</label>
@@ -95,3 +94,10 @@
   </div>
 </div>
 {{end}}
+{{define "ptRow"}}<div class="pt-row{{if .Hidden}} is-hidden{{end}}">
+  <input name="pt_code" value="{{.Code}}" class="mono" placeholder="alipay">
+  <input name="pt_name" value="{{.Name}}" placeholder="支付宝">
+  <select name="pt_state" data-pt-state><option value="shown"{{if not .Hidden}} selected{{end}}>展示</option><option value="hidden"{{if .Hidden}} selected{{end}}>隐藏</option></select>
+  <button class="btn btn-ghost icon-btn" type="button" data-pt-del title="删除">{{template "icon" "trash"}}</button>
+  <input name="pt_remark" value="{{.Remark}}" class="pt-remark" maxlength="200" placeholder="备注（选填），如：通道维护中，预计 11-12 恢复">
+</div>{{end}}

@@ -156,7 +156,15 @@
       if (!d) return;
       var rows = $$('.pt-row', ptList);
       if (rows.length > 1) d.closest('.pt-row').remove();
-      else $$('input', rows[0]).forEach(function (i) { i.value = ''; });
+      else {
+        $$('input', rows[0]).forEach(function (i) { i.value = ''; });
+        var sel = rows[0].querySelector('[data-pt-state]');
+        if (sel) { sel.value = 'shown'; rows[0].classList.remove('is-hidden'); }
+      }
+    });
+    ptList.addEventListener('change', function (e) {
+      var sel = e.target.closest('[data-pt-state]');
+      if (sel) sel.closest('.pt-row').classList.toggle('is-hidden', sel.value === 'hidden');
     });
   }
 

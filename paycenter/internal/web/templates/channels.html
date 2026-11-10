@@ -14,7 +14,8 @@
         <div><h3>{{.Name}}</h3><div class="sub">信联pay · pid <span class="mono">{{.PID}}</span></div></div>
         {{if .Enabled}}<span class="badge b-ok">启用</span>{{else}}<span class="badge b-muted">停用</span>{{end}}
       </div>
-      <div class="chips">{{range .PayTypeList}}<span class="chip">{{.Name}} <span class="hint mono">{{.Code}}</span></span>{{end}}</div>
+      <div class="chips">{{range .PayTypeList}}<span class="chip{{if .Hidden}} off{{end}}"{{if .Remark}} title="{{.Remark}}"{{end}}>{{.Name}} <span class="hint mono">{{.Code}}</span>{{if .Hidden}} · 已隐藏{{end}}</span>{{end}}</div>
+      {{range .PayTypeList}}{{if .Remark}}<div class="hint">{{.Name}}：{{.Remark}}</div>{{end}}{{end}}
       <div>
         <div class="dl-row"><span>接口地址</span><span class="mono">{{host .APIBase}}</span></div>
         <div class="dl-row"><span>签名方式</span><span>{{.SignType}}</span></div>

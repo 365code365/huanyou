@@ -119,13 +119,18 @@ func (s *Service) OrderByTradeNo(no string) (*store.Order, error) {
 	return &o, nil
 }
 
-// PayTypes lists the methods offered for an order (its merchant's channel).
+// PayTypes lists the methods offered for an order (its merchant's channel),
+// without the hidden ones.
 func (s *Service) PayTypes(o *store.Order) ([]store.PayType, error) {
 	ch, err := s.orderChannel(o)
 	if err != nil {
 		return nil, err
 	}
-	return ch.PayTypeList(), nil
+	types := ch.VisiblePayTypes()
+	if len(types) == 0 {
+		return nil, userErr(http.StatusServiceUnavailable, "支付方式维护中，请稍后再试或联系客服")
+	}
+	return types, nil
 }
 
 func (s *Service) orderChannel(o *store.Order) (*store.Channel, error) {
@@ -163,8 +168,13 @@ func (s *Service) StartPay(ctx context.Context, o *store.Order, payType, device 
 	if err != nil {
 		return nil, none, err
 	}
-	if !slices.ContainsFunc(ch.PayTypeList(), func(p store.PayType) bool { return p.Code == payType }) {
+	all := ch.PayTypeList()
+	i := slices.IndexFunc(all, func(p store.PayType) bool { return p.Code == payType })
+	if i < 0 {
 		return nil, none, userErr(http.StatusBadRequest, "不支持的支付方式")
+	}
+	if all[i].Hidden {
+		return nil, none, userErr(http.StatusServiceUnavailable, "该支付方式维护中，请换一种支付方式")
 	}
 	if ch.Device != "" && ch.Device != "auto" {
 		device = ch.Device
