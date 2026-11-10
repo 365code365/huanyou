@@ -53,7 +53,7 @@ BIN="$PC/bin/linux-amd64/paycenter"
 SUM=$(shasum -a 256 "$BIN" | cut -c1-64)
 
 TS=$(date +%Y%m%d%H%M%S)
-echo "==> 备份线上程序和数据库（$TS）"
+echo "==> 备份线上程序和数据库（${TS}）"
 remote "set -e
   cp -a /usr/local/bin/paycenter /opt/paycenter/bin/paycenter.bak-$TS
   sqlite3 /var/lib/paycenter/paycenter.db '.backup /opt/paycenter/paycenter.db.bak-$TS'
@@ -77,8 +77,8 @@ remote "set -e
   journalctl -u paycenter --no-pager -n 20
   cp -a /opt/paycenter/bin/paycenter.bak-$TS /usr/local/bin/paycenter
   systemctl restart paycenter
-  exit 1" || die "部署失败，已回滚（数据库备份 /opt/paycenter/paycenter.db.bak-$TS）"
+  exit 1" || die "部署失败，已回滚（数据库备份 /opt/paycenter/paycenter.db.bak-${TS}）"
 
 code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$PUBLIC_URL/healthz" || true)
 [ "$code" = 200 ] || die "服务已重启，但公网 $PUBLIC_URL/healthz 返回 $code"
-echo "==> 完成：$REV 已部署到 $HOST（公网 healthz 200，备份 $TS）"
+echo "==> 完成：$REV 已部署到 ${HOST}（公网 healthz 200，备份 ${TS}）"
