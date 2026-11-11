@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -475,9 +476,9 @@ func (s *Server) channelTest(w http.ResponseWriter, r *http.Request, _ adminCtx)
 		return
 	}
 	info := store.Trunc(compactJSON(data), 200)
-	// merchant/info passes even when ordering is refused (e.g. 4484 domain
-	// not authorized), so also place and immediately close a 0.01 order.
-	// Prefer a shown method; if all are hidden, still test the first one.
+	// merchant/info passes even when ordering is refused (domain not
+	// authorized, method not opened...), so place and immediately close a
+	// small order with every method the cashier offers.
 	types := ch.VisiblePayTypes()
 	if len(types) == 0 {
 		types = ch.PayTypeList()
@@ -487,19 +488,61 @@ func (s *Server) channelTest(w http.ResponseWriter, r *http.Request, _ adminCtx)
 		back(w, r, path, "ok", "密钥正确（商户信息："+info+"）。未测试下单：需要先配置支付方式和对外地址")
 		return
 	}
-	out := "PACHK" + time.Now().Format("20060102150405")
-	res, err := cl.Submit(ctx, xinlian.SubmitRequest{Type: types[0].Code, OutTradeNo: out, Money: "0.01", Name: "通道连接测试",
-		NotifyURL: fmt.Sprintf("%s/notify/xinlian/%d", pub, ch.ID), ReturnURL: pub + "/", Device: "pc"})
-	if err != nil {
-		back(w, r, path, "err", "密钥正确，但下单被拒绝："+err.Error())
-		return
+	var lines []string
+	failed := 0
+	for i, t := range types {
+		out := fmt.Sprintf("PACHK%s%d", time.Now().Format("20060102150405"), i)
+		money := "0.01"
+		res, err := cl.Submit(ctx, xinlian.SubmitRequest{Type: t.Code, OutTradeNo: out, Money: money, Name: "通道连接测试",
+			NotifyURL: fmt.Sprintf("%s/notify/xinlian/%d", pub, ch.ID), ReturnURL: pub + "/", Device: "pc"})
+		// Below the merchant's minimum: retry once at the minimum it named.
+		if min := minAmount(err); min > 0 && min <= 1000 {
+			out += "M"
+			money = xinlian.CentsToYuan(min)
+			res, err = cl.Submit(ctx, xinlian.SubmitRequest{Type: t.Code, OutTradeNo: out, Money: money, Name: "通道连接测试",
+				NotifyURL: fmt.Sprintf("%s/notify/xinlian/%d", pub, ch.ID), ReturnURL: pub + "/", Device: "pc"})
+			if err == nil {
+				money += " 元（商户最低限额）"
+			}
+		} else if err == nil {
+			money += " 元"
+		}
+		if err != nil {
+			failed++
+			lines = append(lines, fmt.Sprintf("%s：%v", t.Name, err))
+			continue
+		}
+		note := "已关闭"
+		if err := cl.Close(ctx, out); err != nil {
+			note = "关闭失败，未付款会自动过期"
+		}
+		lines = append(lines, fmt.Sprintf("%s：下单 %s成功（%s，%s）", t.Name, money, res.Type, note))
 	}
-	closeNote := "已立即关闭"
-	if err := cl.Close(ctx, out); err != nil {
-		closeNote = "关闭失败（" + err.Error() + "），未付款的订单会自动过期"
+	msg := strings.Join(lines, "；")
+	switch {
+	case failed == 0:
+		back(w, r, path, "ok", "连接成功，密钥正确。"+msg)
+	case failed == len(types):
+		back(w, r, path, "err", "密钥正确，但下单全部被拒绝。"+msg)
+	default:
+		back(w, r, path, "err", fmt.Sprintf("密钥正确，%d 种支付方式不可用。%s", failed, msg))
 	}
-	back(w, r, path, "ok", fmt.Sprintf("连接成功：密钥正确，%s 下单 0.01 元成功（受理类型 %s，上游单号 %s，%s）",
-		types[0].Name, res.Type, res.PlatformTradeNo(), closeNote))
+}
+
+var minAmountRe = regexp.MustCompile(`(\d+)\s*分`)
+
+// minAmount returns the minimum (cents) named by a 4002 "below the minimum" reply, else 0.
+func minAmount(err error) int64 {
+	var e *xinlian.APIError
+	if !errors.As(err, &e) || e.Code != xinlian.CodeBelowMinimum {
+		return 0
+	}
+	m := minAmountRe.FindStringSubmatch(e.Msg)
+	if m == nil {
+		return 100 // the platform's usual minimum, 1 元
+	}
+	n, _ := strconv.ParseInt(m[1], 10, 64)
+	return n
 }
 
 func compactJSON(b []byte) string {

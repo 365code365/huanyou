@@ -64,7 +64,7 @@
     <div class="card">
       <div class="card-head"><h3>{{template "icon" "zap"}}测试连接</h3></div>
       <div class="card-body">
-        <p class="hint" style="margin-top:0">先调用 <code class="mono">/api/merchant/info</code> 验证密钥，再用第一种支付方式下一笔 0.01 元订单并立即关闭，确认真的能下单（例如域名已授权）。不需要付款。</p>
+        <p class="hint" style="margin-top:0">先调用 <code class="mono">/api/merchant/info</code> 验证密钥，再用每种展示中的支付方式各下一笔 0.01 元订单（低于商户最低限额时按最低限额）并立即关闭，确认每种都能下单（域名已授权、通道已开通）。不需要付款。</p>
         <form method="post" action="/admin/channels/{{.Ch.ID}}/test"><input type="hidden" name="_csrf" value="{{$c.CSRF}}"><button class="btn btn-pri btn-block" type="submit" data-busy="连接中…">{{template "icon" "zap"}}测试连接</button></form>
       </div>
     </div>

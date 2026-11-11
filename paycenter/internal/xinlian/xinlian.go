@@ -186,14 +186,23 @@ type APIError struct {
 
 func (e *APIError) Error() string {
 	s := fmt.Sprintf("信联pay %d %s", e.Code, e.Msg)
-	if e.Code == CodeRefererDenied {
+	switch e.Code {
+	case CodeRefererDenied:
 		s += "（请在信联pay 商户后台把本支付中心的域名加入授权域名）"
+	case CodeChannelMissing:
+		s += "（这种支付方式在信联pay 未开通或已停用：请在商户后台开通，或核对通道编码）"
 	}
 	return s
 }
 
 // CodeRefererDenied: the request's domain is not authorized for the merchant.
 const CodeRefererDenied = 4484
+
+// CodeChannelMissing: no active upstream channel for this pay type.
+const CodeChannelMissing = 4040
+
+// CodeBelowMinimum: amount under the merchant's minimum ("订单金额低于最低限额 100 分").
+const CodeBelowMinimum = 4002
 
 // IsCode reports whether err is an APIError with this code.
 func IsCode(err error, code int) bool {
